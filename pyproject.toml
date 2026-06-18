@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-devops"
+version = "0.1.0"
+description = "An open-source bootstrap for a practical DevOps & SRE co-pilot: one capable agent behind a centralized proxy, on-demand tool discovery, and thin front-end surfaces."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Darrell Westbury" }]
+keywords = ["devops", "sre", "agent", "llm", "mcp", "copilot"]
+
+# Runtime deps are the PROXY's only — the `ask` TUI is a separate Go binary
+# (see tui/) that talks to the proxy over HTTP/SSE and shares no code with it.
+dependencies = [
+    "litellm>=1.40",          # provider-agnostic model layer (OpenAI/Anthropic/Google/Ollama/...)
+    "mcp>=1.2",               # MCP client (mount external tool servers) + server SDK
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sse-starlette>=2.0",     # SSE streaming for /v1/chat
+    "python-multipart>=0.0.9",  # multipart form parsing for document upload (control plane)
+    "typer>=0.12",            # `agentic-devops serve`
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",     # load provider keys into os.environ for LiteLLM
+    "pyyaml>=6.0",
+    "psycopg[binary]>=3.1",   # Postgres driver (sessions + pgvector knowledge store)
+    "psycopg-pool>=3.2",      # connection pooling
+    "bcrypt>=4.1",            # admin password hashing (control plane)
+    "pyjwt>=2.8",             # signed admin session tokens (HS256; SSO seam)
+    "cryptography>=42.0",     # Fernet encryption for per-host MCP tokens at rest
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",            # required by FastAPI's TestClient
+    "ruff>=0.4",
+]
+langsmith = ["langsmith>=0.1"]
+
+[project.scripts]
+agentic-devops = "agentic_devops.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_devops"]
+
+# The bootstrap DDL is read at runtime via importlib.resources — make sure it
+# lands in the wheel (so `db init` / app startup work in the container image).
+[tool.hatch.build.targets.wheel.force-include]
+"src/agentic_devops/db/schema.sql" = "agentic_devops/db/schema.sql"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Resolve the src-layout packages directly, so tests don't depend on the editable
+# install being honored (the repo path contains a space, which can trip the
+# editable .pth finder). host-mcp/src is included so `pytest host-mcp/tests` works
+# from the repo root.
+pythonpath = ["src", "host-mcp/src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,185 @@
+"""Pydantic request/response models for the proxy API."""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    tier: Optional[str] = None
+    context: Optional[str] = None  # piped stdin / page context
+    user_id: Optional[str] = None  # honor-system identity (X-User-Id header also accepted)
+
+
+class CompleteRequest(BaseModel):
+    prompt: str
+    system: Optional[str] = None
+    context: Optional[str] = None
+    tier: Optional[str] = None
+    max_chars: Optional[int] = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+class CompleteResponse(BaseModel):
+    markdown: str
+    tools_used: list[str] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+
+
+class TierInfo(BaseModel):
+    name: str
+    label: str
+
+
+class ToolInfo(BaseModel):
+    name: str
+    category: str
+    when_to_use: str
+    safety_tier: str
+
+
+class SessionInfo(BaseModel):
+    """A past conversation, for recall via GET /v1/sessions."""
+
+    id: str
+    user_id: Optional[str] = None
+    title: Optional[str] = None
+    updated_at: str
+    turns: int
+    preview: str
+
+
+class SessionRename(BaseModel):
+    title: str
+
+
+class SessionDetail(BaseModel):
+    """The faithful display transcript of one conversation (GET /v1/sessions/{id})."""
+
+    id: str
+    user_id: Optional[str] = None
+    title: Optional[str] = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AdminLogin(BaseModel):
+    password: str
+
+
+class AdminToken(BaseModel):
+    token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class HostBase(BaseModel):
+    fqdn: str
+    private_ip: Optional[str] = None
+    public_ip: Optional[str] = None
+    instance_id: Optional[str] = None
+    aws_account: Optional[str] = None
+    aws_region: Optional[str] = None
+    mcp_port: int = 8780
+    mcp_scheme: str = "https"
+    address_preference: str = "private_ip"  # private_ip | public_ip | fqdn
+    profile: Optional[str] = None
+    active: bool = True
+    labels: dict[str, Any] = Field(default_factory=dict)
+
+
+class HostCreate(HostBase):
+    token: Optional[str] = None  # per-host MCP bearer token (write-only; stored encrypted)
+
+
+class HostUpdate(BaseModel):
+    fqdn: Optional[str] = None
+    private_ip: Optional[str] = None
+    public_ip: Optional[str] = None
+    instance_id: Optional[str] = None
+    aws_account: Optional[str] = None
+    aws_region: Optional[str] = None
+    mcp_port: Optional[int] = None
+    mcp_scheme: Optional[str] = None
+    address_preference: Optional[str] = None
+    profile: Optional[str] = None
+    active: Optional[bool] = None
+    labels: Optional[dict[str, Any]] = None
+    token: Optional[str] = None  # only changed if the field is present in the request
+
+
+class HostInfo(BaseModel):
+    """A registered host — never includes the token (only ``has_token``)."""
+
+    id: str
+    fqdn: str
+    private_ip: Optional[str] = None
+    public_ip: Optional[str] = None
+    instance_id: Optional[str] = None
+    aws_account: Optional[str] = None
+    aws_region: Optional[str] = None
+    mcp_port: int
+    mcp_scheme: str
+    address_preference: str
+    profile: Optional[str] = None
+    active: bool
+    labels: dict[str, Any] = Field(default_factory=dict)
+    last_seen_at: Optional[str] = None
+    last_status: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    has_token: bool = False
+
+
+# -- Document import (Phase 9c-2) -------------------------------------------
+
+class DocumentInfo(BaseModel):
+    """A registered document — never includes the raw content."""
+
+    id: str
+    corpus: str
+    source_path: str
+    title: str = ""
+    doc_type: str = "doc"
+    bytes: int = 0
+    version: int = 1
+    status: str = "pending"
+    chunk_count: int = 0
+    error: str = ""
+    uploaded_by: str = ""
+    job_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class JobInfo(BaseModel):
+    id: str
+    corpus: str = ""
+    status: str = "queued"
+    total: int = 0
+    done: int = 0
+    error: str = ""
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class UploadResult(BaseModel):
+    job: JobInfo
+    documents: list[DocumentInfo] = Field(default_factory=list)
+
+
+class CorpusInfo(BaseModel):
+    name: str
+    documents: int = 0
+    chunks: int = 0
+
+
+class HealthInfo(BaseModel):
+    status: str
+    version: str
+    default_tier: str

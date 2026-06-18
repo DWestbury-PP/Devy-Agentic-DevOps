@@ -1,0 +1,76 @@
+"""On-demand MCP client for the host registry (Phase 9b).
+
+Unlike ``MCPManager`` (which holds long-lived sessions to *configured* servers),
+this dials a host's MCP endpoint **per call** — the endpoint + token come from the
+registry at call time. Each call opens, initializes, calls, and closes a session
+inside a single coroutine (one task), avoiding anyio's cancel-scope pitfalls, all
+on one dedicated background event loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from typing import Any, Optional
+
+from agentic_devops.proxy.mcp_client import _render_result
+
+_CALL_TIMEOUT = 45
+_LIST_TIMEOUT = 20
+
+
+class HostMCPClient:
+    def __init__(self) -> None:
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is None:
+                loop = asyncio.new_event_loop()
+                threading.Thread(target=loop.run_forever, name="host-mcp", daemon=True).start()
+                self._loop = loop
+            return self._loop
+
+    def _run(self, coro: Any, timeout: float) -> Any:
+        loop = self._ensure_loop()
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+
+    # -- public (sync) API --------------------------------------------------
+    def call_tool(self, url: str, token: Optional[str], name: str, args: dict[str, Any]) -> str:
+        try:
+            return self._run(self._call(url, token, name, args or {}), _CALL_TIMEOUT + 10)
+        except Exception as exc:  # noqa: BLE001 — connection/timeout failures → readable error
+            return f"ERROR: host check {name!r} could not run ({exc})"
+
+    def list_tools(self, url: str, token: Optional[str]) -> list[str]:
+        try:
+            return self._run(self._list(url, token), _LIST_TIMEOUT + 5)
+        except Exception:  # noqa: BLE001
+            return []
+
+    # -- async internals ----------------------------------------------------
+    # The session is opened AND closed inline within one coroutine (one task) —
+    # a generator + early-return would close the anyio cancel scope in a
+    # different task ("Attempted to exit cancel scope in a different task").
+    async def _call(self, url: str, token: Optional[str], name: str, args: dict[str, Any]) -> str:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        async with streamablehttp_client(url, headers=headers) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await asyncio.wait_for(session.call_tool(name, args), _CALL_TIMEOUT)
+                return _render_result(result)
+
+    async def _list(self, url: str, token: Optional[str]) -> list[str]:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        async with streamablehttp_client(url, headers=headers) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await asyncio.wait_for(session.list_tools(), _LIST_TIMEOUT)
+                return [t.name for t in tools.tools]

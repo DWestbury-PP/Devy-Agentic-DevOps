@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+tui
+tests
+docs
+assets
+config.example.yaml
+.env
+.env.example
+*.md
+!README.md

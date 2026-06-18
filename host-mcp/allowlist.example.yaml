@@ -1,0 +1,37 @@
+# Example host MCP allow-list. Copy, adapt, and point HOST_MCP_ALLOWLIST at it.
+# (The packaged default_allowlist.yaml has a fuller set — this is a minimal template.)
+#
+# profile gates exposure: read-only < diagnostic < elevated.
+
+profile: read-only
+
+checks:
+  disk:
+    profile: read-only
+    description: "Disk usage per filesystem (df -h)."
+    argv: ["df", "-h"]
+
+  memory:
+    profile: read-only
+    description: "Memory usage."
+    platform:
+      Linux: ["free", "-h"]
+      Darwin: ["vm_stat"]
+
+  # A check that takes a constrained argument. The {placeholder} is filled only
+  # after the value passes its pattern — no shell, so injection is impossible.
+  tail_log:
+    profile: diagnostic
+    description: "Tail an allow-listed log file."
+    argv: ["tail", "-n", "{lines}", "{path}"]
+    args:
+      path:
+        type: string
+        required: true
+        enum: ["/var/log/syslog", "/var/log/messages"]
+        description: "Which log to tail (enum-restricted)."
+      lines:
+        type: int
+        default: 100
+        min: 1
+        max: 1000

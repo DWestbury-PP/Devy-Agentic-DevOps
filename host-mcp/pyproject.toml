@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-devops-host-mcp"
+version = "0.1.0"
+description = "Safe-allowlist diagnostics MCP server for target hosts, for the Agentic DevOps co-pilot."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Darrell Westbury" }]
+
+# Deliberately lightweight — this is deployed onto target hosts. No litellm/fastapi.
+dependencies = [
+    "mcp>=1.2",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Only needed for the streamable-HTTP (remote) transport; stdio needs neither.
+http = ["starlette>=0.37", "uvicorn>=0.29"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+agentic-devops-host-mcp = "host_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/host_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Resolve host_mcp from src/ directly (the repo path has a space, which can trip
+# the editable .pth finder), so tests don't depend on the editable install.
+pythonpath = ["src"]

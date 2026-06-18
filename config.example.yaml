@@ -1,0 +1,122 @@
+# Agentic DevOps — operator configuration (example)
+#
+# Copy to ~/.config/agentic-devops/config.yaml (or point AGENTIC_DEVOPS_CONFIG
+# at it). This is the authoritative place to define the model TIERS.
+#
+# Design principle: end users select a *tier* (fast / balanced / deep) at
+# runtime via `/model <tier>`; they never pick the underlying model. The mapping
+# below is YOUR decision as the operator — based on cost, latency, security
+# posture, and quality. The concrete model stays hidden behind the friendly
+# label. See docs/JOURNEY.md.
+
+default_tier: balanced
+
+# --- Database (Postgres + pgvector) ---
+# The single persistence knob: conversation history (sessions) AND the knowledge
+# base (chunks + embeddings) live here. Point `url` at the bundled compose
+# container or a managed instance (RDS/Aurora). The pgvector extension + tables
+# are provisioned by the bootstrap schema — run `agentic-devops db init` once
+# against an existing DB (the bundled compose Postgres self-bootstraps).
+# Prefer ${DATABASE_URL} from .env over inlining credentials here.
+database:
+  url: ${DATABASE_URL}   # e.g. postgresql://agentic:agentic@localhost:5432/agentic
+
+tiers:
+  fast:
+    model: ollama/llama3.1          # a local model via Ollama — cheap, private, quick
+    label: Fast (local)
+    api_base: http://localhost:11434
+    max_tokens: 2048
+
+  balanced:
+    model: anthropic/claude-3-5-haiku-latest
+    label: Balanced
+    max_tokens: 4096
+
+  deep:
+    model: anthropic/claude-3-5-sonnet-latest
+    label: Deep
+    max_tokens: 8192
+    # temperature: 0.2
+    # context_window: 200000   # total input budget; conversation compaction
+    #                          # triggers at compaction_ratio of this (see below).
+
+# Example of mixing providers across tiers (uncomment / adapt):
+#   fast:     { model: openai/gpt-4o-mini,  label: Fast }
+#   balanced: { model: gemini/gemini-1.5-pro, label: Balanced }
+#   deep:     { model: anthropic/claude-3-5-sonnet-latest, label: Deep }
+
+# --- External MCP servers to mount (optional) ---
+# The proxy connects to each at startup and registers its tools into the
+# tools-router. `name` becomes the tool category and name prefix.
+# mcp_servers:
+#   # The containerized host MCP from docker-compose (host + docker diagnostics).
+#   # Reachable on the compose network; ${HOST_MCP_TOKEN} is expanded from the
+#   # environment (set it in a .env next to docker-compose.yml). Uncomment to wire:
+#   - name: host
+#     transport: http
+#     url: http://host-mcp:8780/mcp
+#     token: ${HOST_MCP_TOKEN}
+#
+#   # A host MCP spawned locally over stdio (proxy and host on the same machine):
+#   - name: localhost
+#     transport: stdio
+#     command: agentic-devops-host-mcp
+#
+#   # A host MCP deployed on a REMOTE target host, over authenticated HTTP:
+#   - name: trading-host-1
+#     transport: http
+#     url: https://trading-host-1.internal:8780/mcp   # front with TLS in production
+#     token: ${TRADING_HOST_1_TOKEN}                   # bearer token
+#
+#   # Any third-party MCP server works too:
+#   - name: filesystem
+#     transport: stdio
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+
+# --- Knowledge / retrieval (optional; defaults shown) ---
+# Sweep docs → chunk → embed → vector store; the agent retrieves via the
+# `search_knowledge` tool (discovered through find_tools). The search tool only
+# registers once you've ingested something: `agentic-devops ingest <path>`.
+#
+# NOTE: embeddings are configured SEPARATELY from the chat tiers — Anthropic has
+# no embeddings endpoint. Default is OpenAI; needs OPENAI_API_KEY in .env.
+# knowledge:
+#   enabled: true
+#   history_enabled: true   # embed each exchange so the recall_history tool can
+#                           # search past conversations; set false to store none.
+#   contextual_enabled: false   # opt-in fast-tier per-chunk synopsis; off by default
+#                               # (the deterministic title>heading lineage is free either way)
+#   contextual_max_doc_chars: 8000   # cap on doc text fed to the synopsis step
+#   embedding:
+#     model: openai/text-embedding-3-small   # default (needs OPENAI_API_KEY)
+#     # Local, zero-cost alternative (run Ollama, `ollama pull nomic-embed-text`):
+#     #   model: ollama/nomic-embed-text
+#     #   api_base: http://localhost:11434    # host.docker.internal from a container
+#     # Or Anthropic's recommended partner:
+#     #   model: voyage/voyage-3              # needs VOYAGE_API_KEY
+#     batch_size: 64
+#   chunk:
+#     max_chars: 8000                          # ~2000 tokens (safety cap)
+#     overlap: 200
+#     split_level: 2                           # heading depth to split on (2 → #/##)
+#   # Chunks are stored in Postgres/pgvector (the `database.url` above) — no
+#   # separate store config. The embedding column is dimension-agnostic, so you
+#   # can swap embedders without a migration.
+
+# --- Optional service / harness overrides (defaults shown) ---
+# host: 127.0.0.1
+# port: 8765
+# max_iterations: 16
+# tracing: jsonl            # jsonl | langsmith | none
+
+# --- Conversation memory / compaction (Phase 7; defaults shown) ---
+# Sessions are two-channel: the user-facing transcript is stored losslessly, while
+# Devy's working context (a structured rolling summary + distilled tool findings)
+# is kept small. Compaction folds older turns into the summary when the assembled
+# context exceeds compaction_ratio of the active tier's context window.
+# default_context_window: 200000   # used when a tier has no context_window set
+# compaction_ratio: 0.78           # trigger at ~78% of the window
+# keep_recent_exchanges: 4         # always kept verbatim (not summarized)
+# tool_finding_max_chars: 800      # cap on each stored raw tool finding

@@ -1,0 +1,194 @@
+# Default safe-allowlist for the Agentic DevOps host MCP.
+#
+# Each check is a fixed argv (or per-platform argv). Arguments can only fill a
+# whole {placeholder} token, after passing their constraints — there is NO shell
+# and NO arbitrary execution. `profile` is the MINIMUM profile required to expose
+# the check; the server runs at one active profile (read-only < diagnostic <
+# elevated) and exposes only the checks at or below it.
+#
+# This is the SecOps boundary: the agent can read host + Docker health, sweep
+# logs, and run common diagnostics — but it can never get a shell, and the
+# Docker checks are read-only (no run/exec/rm/stop). Mutating or shell-granting
+# commands are deliberately absent.
+
+profile: diagnostic
+
+checks:
+  # ---- Host: read-only --------------------------------------------------
+  disk:
+    profile: read-only
+    description: "Disk usage per filesystem (df -h)."
+    argv: ["df", "-h"]
+
+  memory:
+    profile: read-only
+    description: "Memory usage."
+    platform:
+      Linux: ["free", "-h"]
+      Darwin: ["vm_stat"]
+
+  cpu_load:
+    profile: read-only
+    description: "System load averages and uptime."
+    argv: ["uptime"]
+
+  os_info:
+    profile: read-only
+    description: "OS / kernel identification."
+    platform:
+      Linux: ["uname", "-a"]
+      Darwin: ["sw_vers"]
+
+  network:
+    profile: read-only
+    description: "Listening TCP/UDP sockets (no process names; no root needed)."
+    platform:
+      Linux: ["ss", "-tuln"]
+      Darwin: ["netstat", "-an", "-p", "tcp"]
+
+  # ---- Host: diagnostic -------------------------------------------------
+  processes:
+    profile: diagnostic
+    description: "Processes sorted by CPU usage."
+    platform:
+      Linux: ["ps", "-eo", "pid,ppid,%cpu,%mem,comm", "--sort=-%cpu"]
+      Darwin: ["ps", "-Ao", "pid,ppid,%cpu,%mem,comm", "-r"]
+
+  top_snapshot:
+    profile: diagnostic
+    description: "One-shot snapshot of top processes (not streaming)."
+    platform:
+      Linux: ["top", "-bn1"]
+      Darwin: ["top", "-l", "1", "-n", "20"]
+
+  journal:
+    profile: diagnostic
+    description: "Recent systemd journal entries (Linux/systemd hosts)."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-n", "{lines}"]
+    args:
+      lines:
+        type: int
+        default: 100
+        min: 1
+        max: 1000
+        description: "Number of recent journal lines."
+
+  journal_unit:
+    profile: diagnostic
+    description: "Recent journal entries for one systemd unit (log sweep)."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-n", "{lines}", "-u", "{unit}"]
+    args:
+      unit:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "systemd unit, e.g. nginx.service."
+      lines:
+        type: int
+        default: 200
+        min: 1
+        max: 2000
+        description: "Number of recent lines."
+
+  journal_grep:
+    profile: diagnostic
+    description: "Search the journal for a pattern (log sweep). Pattern is passed as a single argument, never a shell."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-n", "{lines}", "--grep", "{pattern}"]
+    args:
+      pattern:
+        type: string
+        required: true
+        pattern: "^[^\\n]{1,120}$"
+        description: "Text/regex to grep for (max 120 chars, single line)."
+      lines:
+        type: int
+        default: 200
+        min: 1
+        max: 2000
+        description: "Max matching lines to return."
+
+  # ---- Docker: diagnostic (read-only; requires docker.sock access) ------
+  docker_ps:
+    profile: diagnostic
+    description: "Running containers (name, status, image)."
+    argv: ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"]
+
+  docker_ps_all:
+    profile: diagnostic
+    description: "All containers including stopped (name, status, image)."
+    argv: ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"]
+
+  docker_logs:
+    profile: diagnostic
+    description: "Recent logs for a named container."
+    argv: ["docker", "logs", "--tail", "{tail}", "--since", "{since}", "{container}"]
+    args:
+      container:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        description: "Container name or id."
+      since:
+        type: string
+        default: "15m"
+        pattern: "^(\\d+[smhdw]|\\d{4}-\\d{2}-\\d{2}.*)$"
+        description: "Time window, e.g. 15m, 1h, 2d."
+      tail:
+        type: int
+        default: 200
+        min: 1
+        max: 1000
+        description: "Max log lines."
+
+  docker_inspect:
+    profile: diagnostic
+    description: "Inspect a container's configuration and state (JSON)."
+    argv: ["docker", "inspect", "{container}"]
+    args:
+      container:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        description: "Container name or id."
+
+  docker_stats:
+    profile: diagnostic
+    description: "One-shot resource usage snapshot per running container."
+    argv: ["docker", "stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"]
+
+  docker_top:
+    profile: diagnostic
+    description: "Processes running inside a container."
+    argv: ["docker", "top", "{container}"]
+    args:
+      container:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        description: "Container name or id."
+
+  docker_images:
+    profile: diagnostic
+    description: "Locally available images (repo:tag, size, id)."
+    argv: ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.ID}}"]
+
+  docker_system_df:
+    profile: diagnostic
+    description: "Docker disk usage (images, containers, volumes)."
+    argv: ["docker", "system", "df"]
+
+  # ---- Elevated examples — NOT exposed at the default 'diagnostic' profile.
+  systemctl_status:
+    profile: elevated
+    description: "Status of a systemd service (Linux)."
+    platform:
+      Linux: ["systemctl", "status", "--no-pager", "{unit}"]
+    args:
+      unit:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "systemd unit name, e.g. nginx.service."

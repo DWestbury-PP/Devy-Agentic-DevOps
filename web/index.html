@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Devy · DevOps &amp; SRE co-pilot</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./vendor/hljs-theme.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="logo" aria-hidden="true">◉</span>
+      <span class="brand">Devy</span>
+      <span class="brand-sub">DevOps &amp; SRE co-pilot</span>
+    </div>
+    <div class="bar-right">
+      <span class="conn" id="conn" title="proxy connection"><span class="dot" id="status-dot"></span><span id="conn-label">connecting</span></span>
+      <label class="tier">
+        <span class="tier-label">tier</span>
+        <select id="tier-select" title="model tier (operator-mapped; the concrete model stays hidden)">
+          <option value="">…</option>
+        </select>
+      </label>
+      <button id="copy-btn" class="ghost" title="copy this conversation as Markdown">⧉ copy</button>
+      <button id="hist-btn" class="ghost" title="conversation history">☰ history</button>
+      <button id="new-btn" class="ghost" title="start a new conversation">+ new</button>
+    </div>
+  </header>
+
+  <!-- History slide-out (Phase 7b). Lists a user's past conversations; load /
+       rename / delete. Identity is honor-system for now (a name in localStorage
+       sent as X-User-Id) — see app.js authHeaders() for the auth seam. -->
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <span class="drawer-title">Conversations</span>
+      <button id="drawer-close" class="ghost" title="close">✕</button>
+    </div>
+    <div class="ident">
+      <span class="ident-label">you</span>
+      <input id="ident-input" class="ident-input" spellcheck="false" autocomplete="off"
+        placeholder="set a name to save history" />
+    </div>
+    <div id="hist-list" class="hist-list"></div>
+  </aside>
+  <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+
+  <main id="screen" class="screen" aria-live="polite"></main>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <div class="composer-box">
+      <textarea id="input" class="input" rows="1" spellcheck="false"
+        placeholder="ask Devy about your systems…"></textarea>
+      <button id="send-btn" class="send" type="submit" aria-label="send" title="send (Enter)">↵</button>
+    </div>
+    <div class="composer-hint">
+      <span><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
+      <span class="hint-cmds"><code>/help</code> for commands</span>
+    </div>
+  </form>
+
+  <!-- vendored at image-build time; no runtime external calls -->
+  <script src="./vendor/marked.min.js"></script>
+  <script src="./vendor/purify.min.js"></script>
+  <script src="./vendor/highlight.min.js"></script>
+  <script src="./vendor/mermaid.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

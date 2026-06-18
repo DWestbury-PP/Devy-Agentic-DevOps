@@ -1,0 +1,127 @@
+# LLM-PROXY service.
+#
+#   docker compose up -d --build      # build + start
+#   docker compose down               # stop
+#   docker compose logs -f            # follow logs
+#
+# Config and secrets are read from a mounted config directory (defaults to your
+# ~/.config/agentic-devops). Put config.yaml and .env there — the same files the
+# native install uses. Override the location with AGENTIC_DEVOPS_CONFIG_DIR.
+#
+# HOST_MCP_TOKEN (bearer token shared by the proxy and host-mcp) is read from a
+# .env file in THIS directory (compose's default env file). Generate one with:
+#   echo "HOST_MCP_TOKEN=$(openssl rand -hex 24)" >> .env
+
+services:
+  proxy:
+    build: .
+    image: agentic-devops-proxy
+    container_name: agentic-devops-proxy
+    # Bind to host loopback only — not exposed on the network.
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      # Lets config.yaml reference the host MCP token as ${HOST_MCP_TOKEN}.
+      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
+      # Postgres DSN. Defaults to the bundled `postgres` service below; point it
+      # at a managed instance (RDS/Aurora) to bind an existing DB instead — then
+      # you can skip the bundled service (see its note).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://agentic:agentic@postgres:5432/agentic}
+    volumes:
+      - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"
+    depends_on:
+      host-mcp:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8765/healthz').getcode()==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Postgres + pgvector — persistence for both subsystems: conversation history
+  # (sessions) and the knowledge base (chunks + embeddings). The bootstrap schema
+  # is applied automatically on first init (mounted into the init dir); it creates
+  # the `vector` extension and the tables. Data persists in a named volume.
+  #
+  # BIND AN EXISTING / MANAGED DB INSTEAD: set DATABASE_URL to your endpoint, run
+  # `agentic-devops db init` once against it, and start only the other services
+  # (e.g. `docker compose up -d proxy host-mcp chat-ui`). This bundled service is
+  # the zero-setup default; a managed DB is the clean production upgrade.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentic-devops-postgres
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+      POSTGRES_DB: agentic
+    volumes:
+      - "agentic-pgdata:/var/lib/postgresql/data"
+      - "./src/agentic_devops/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # The deployable host MCP, containerized for the local demo. The host's Docker
+  # socket is mounted in (read-only), so the allow-listed docker_* checks see the
+  # host's real containers. Served over authenticated streamable-HTTP on the
+  # compose network only (no host port). The proxy mounts it via `mcp_servers`
+  # in config.yaml (see config.example.yaml).
+  #
+  # SECURITY: the boundary is the ALLOWLIST, not the socket mode — only read-only
+  # docker checks are exposed (no run/exec/rm), and there is no shell. host-level
+  # checks (df/ps) reflect THIS container; deploy natively for true host view.
+  host-mcp:
+    build: ./host-mcp
+    image: agentic-devops-host-mcp
+    container_name: agentic-devops-host-mcp
+    environment:
+      HOST_MCP_TRANSPORT: http
+      HOST_MCP_PROFILE: diagnostic
+      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',8780)))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Phase 5 RCA showcase (opt-in): a "faulty" worker that exhausts its DB pool
+  # and OOM crash-loops, so Devy can investigate a real running container live
+  # (host MCP docker_ps/logs/inspect/stats) and cross-reference the platform
+  # runbook. Start it with:  docker compose --profile demo up -d demo-faulty
+  demo-faulty:
+    image: busybox:1.36
+    container_name: agentic-devops-demo-faulty
+    profiles: ["demo"]
+    volumes:
+      - "./demo/faulty-worker.sh:/faulty-worker.sh:ro"
+    command: ["sh", "/faulty-worker.sh"]
+    restart: on-failure
+
+  # The web `ask` surface: static terminal-themed UI on nginx, which also
+  # reverse-proxies /v1 + /healthz to the proxy (same origin → no CORS).
+  # Open http://127.0.0.1:8080 once both are up.
+  chat-ui:
+    build: ./web
+    image: agentic-devops-chat-ui
+    container_name: agentic-devops-chat-ui
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  agentic-pgdata:

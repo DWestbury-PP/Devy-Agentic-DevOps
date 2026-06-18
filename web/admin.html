@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Devy · Admin</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <style>
+    /* Admin control plane (Phase 9). Reuses the terminal theme. */
+    .admin-wrap { width: min(960px, 94%); margin: 36px auto; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--green-deep);
+            border-radius: var(--radius); padding: 22px; }
+    .card h1 { color: var(--green); text-shadow: var(--glow); margin: 0 0 4px; font-size: 18px; }
+    .sub { color: var(--fg-faint); font-size: 12px; }
+    .field { display: flex; gap: 8px; margin-top: 12px; }
+    input, select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+            padding: 8px 10px; color: var(--fg); font-family: var(--mono); font-size: 13px; }
+    input:focus, select:focus { outline: none; border-color: var(--green-deep); }
+    .btn { background: var(--green-deep); color: #04140c; border: none; border-radius: 8px;
+            padding: 8px 15px; cursor: pointer; font-family: var(--mono); font-weight: 700; font-size: 13px; }
+    .btn:hover { background: var(--green); box-shadow: var(--glow); }
+    .btn.ghost-btn { background: none; color: var(--fg-dim); border: 1px solid var(--line); font-weight: 400; }
+    .btn.ghost-btn:hover { color: var(--green); border-color: var(--green-deep); box-shadow: none; background: none; }
+    .msg { margin-top: 12px; font-size: 12px; color: var(--fg-dim); }
+    .msg.err { color: var(--red); }
+    .nav { display: flex; gap: 8px; margin: 14px 0 18px; }
+    .tab { color: var(--fg-dim); border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px;
+            font-size: 13px; background: none; cursor: pointer; font-family: var(--mono); }
+    .tab.active { color: var(--green); border-color: var(--green-deep); }
+    .tab.soon { opacity: 0.5; cursor: default; }
+    .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 14px 0; }
+    .grid input, .grid select { width: 100%; }
+    table.tbl { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+    table.tbl th { text-align: left; color: var(--fg-faint); font-weight: 400; text-transform: uppercase;
+            font-size: 10.5px; letter-spacing: 1px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    table.tbl td { padding: 8px; border-bottom: 1px solid var(--line-soft); color: var(--fg); }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--fg-faint); }
+    .pill.reachable { color: var(--green); border-color: var(--green-deep); }
+    .pill.unreachable { color: var(--red); border-color: var(--red); }
+    .pill.inactive { color: var(--amber); border-color: var(--amber); }
+    .acts { display: flex; gap: 6px; }
+    .acts .btn { padding: 4px 9px; font-size: 12px; }
+    .hidden { display: none; }
+    .pill.ready { color: var(--green); border-color: var(--green-deep); }
+    .pill.pending, .pill.processing { color: var(--amber); border-color: var(--amber); }
+    .pill.failed { color: var(--red); border-color: var(--red); }
+    .corpora { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .corpus-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+            border-radius: 14px; padding: 4px 11px; font-size: 12px; color: var(--fg-dim); cursor: pointer; }
+    .corpus-pill.active { color: var(--green); border-color: var(--green-deep); }
+    .corpus-pill .x { color: var(--fg-faint); }
+    .corpus-pill .x:hover { color: var(--red); }
+    .corpus-empty { color: var(--fg-faint); font-size: 12px; }
+    input[type=file] { color: var(--fg-dim); padding: 6px 8px; }
+    input[type=file]::file-selector-button { background: var(--panel-2); color: var(--fg);
+            border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; margin-right: 9px;
+            font-family: var(--mono); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="logo" aria-hidden="true">◉</span>
+      <span class="brand">Devy</span>
+      <span class="brand-sub">Admin · control plane</span>
+    </div>
+    <div class="bar-right">
+      <a class="ghost" href="./index.html" title="back to chat">← chat</a>
+      <button id="logout" class="ghost hidden" title="sign out">sign out</button>
+    </div>
+  </header>
+
+  <main class="admin-wrap">
+    <section id="login" class="card hidden">
+      <h1>Admin sign-in</h1>
+      <div class="sub">Enter the admin password to manage hosts and the knowledge base.</div>
+      <form id="login-form" class="field" autocomplete="off">
+        <input id="password" type="password" placeholder="admin password" autocomplete="current-password" style="flex:1" />
+        <button class="btn" type="submit">Sign in</button>
+      </form>
+      <div id="login-msg" class="msg"></div>
+    </section>
+
+    <section id="shell" class="card hidden">
+      <h1>Control plane</h1>
+      <div class="nav">
+        <button id="tab-hosts" class="tab active">Hosts</button>
+        <button id="tab-knowledge" class="tab">Knowledge</button>
+      </div>
+
+      <!-- ===== Hosts page ===== -->
+      <div id="hosts-page">
+      <div class="row-between">
+        <div class="sub">Hosts Devy can run diagnostics against (via each host's MCP).</div>
+        <button id="add-toggle" class="btn">+ Add host</button>
+      </div>
+
+      <form id="host-form" class="hidden" autocomplete="off">
+        <div class="grid">
+          <input name="fqdn" placeholder="FQDN (required)" />
+          <input name="private_ip" placeholder="Private IP" />
+          <input name="public_ip" placeholder="Public IP (optional)" />
+          <input name="instance_id" placeholder="Instance ID" />
+          <input name="aws_account" placeholder="AWS Account" />
+          <input name="aws_region" placeholder="AWS Region" />
+          <input name="mcp_port" placeholder="MCP Port (8780)" />
+          <select name="mcp_scheme" title="how to reach the host MCP (https for real hosts; http for a local/compose MCP)">
+            <option value="https">scheme: https</option>
+            <option value="http">scheme: http</option>
+          </select>
+          <select name="address_preference" title="which address to dial">
+            <option value="private_ip">dial: private IP</option>
+            <option value="public_ip">dial: public IP</option>
+            <option value="fqdn">dial: FQDN</option>
+          </select>
+          <select name="profile" title="expected host-MCP profile">
+            <option value="">profile…</option>
+            <option value="read-only">read-only</option>
+            <option value="diagnostic">diagnostic</option>
+            <option value="elevated">elevated</option>
+          </select>
+          <input name="token" type="password" placeholder="MCP token (stored encrypted)" />
+        </div>
+        <div class="field">
+          <button class="btn" type="submit">Save host</button>
+          <button id="cancel-add" class="btn ghost-btn" type="button">Cancel</button>
+        </div>
+      </form>
+
+      <table class="tbl">
+        <thead>
+          <tr><th>Host</th><th>Address</th><th>Region</th><th>Status</th><th>Active</th><th></th></tr>
+        </thead>
+        <tbody id="hosts-body"></tbody>
+      </table>
+      <div id="hosts-msg" class="msg"></div>
+      </div><!-- /hosts-page -->
+
+      <!-- ===== Knowledge page ===== -->
+      <div id="knowledge-page" class="hidden">
+        <div class="row-between">
+          <div class="sub">Markdown documents Devy can search (chunked, embedded, hybrid retrieval).</div>
+          <button id="kb-add-toggle" class="btn">+ Upload</button>
+        </div>
+
+        <form id="kb-form" class="hidden" autocomplete="off">
+          <div class="grid">
+            <input id="kb-corpus" name="corpus" placeholder="Corpus (e.g. acme-sre)" />
+            <input id="kb-files" name="files" type="file" accept=".md,.markdown" multiple />
+          </div>
+          <div class="field">
+            <button class="btn" type="submit">Upload &amp; ingest</button>
+            <button id="kb-cancel" class="btn ghost-btn" type="button">Cancel</button>
+          </div>
+          <div class="sub" style="margin-top:6px">Markdown only (.md / .markdown). Multiple files allowed.</div>
+        </form>
+
+        <div id="kb-progress" class="msg hidden"></div>
+
+        <div class="row-between" style="margin-top:6px">
+          <div class="sub">Corpora</div>
+        </div>
+        <div id="kb-corpora" class="corpora"></div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Document</th><th>Corpus</th><th>Type</th><th>Status</th><th>Chunks</th><th>Ver</th><th></th></tr>
+          </thead>
+          <tbody id="kb-body"></tbody>
+        </table>
+        <div id="kb-msg" class="msg"></div>
+      </div><!-- /knowledge-page -->
+    </section>
+
+    <section id="disabled" class="card hidden">
+      <h1>Admin plane not configured</h1>
+      <div class="sub">Set the control-plane secrets to enable it.</div>
+      <div class="msg">Run <code>agentic-devops admin set-password</code> (and <code>admin gen-key</code> for
+        host tokens), add the printed values to your <code>.env</code>, then restart the proxy.</div>
+    </section>
+  </main>
+
+  <script src="./admin.js"></script>
+</body>
+</html>

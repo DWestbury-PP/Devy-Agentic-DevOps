@@ -37,11 +37,16 @@ from agentic_devops.proxy.schemas import (
     CompleteResponse,
     CorpusInfo,
     DocumentInfo,
+    GitHubAccountCreate,
+    GitHubAccountInfo,
+    GitHubAccountUpdate,
     HealthInfo,
     HostCreate,
     HostInfo,
     HostUpdate,
     JobInfo,
+    RepoCrawlRequest,
+    RepoCrawlResult,
     SessionDetail,
     SessionInfo,
     SessionRename,
@@ -52,12 +57,15 @@ from agentic_devops.proxy.schemas import (
 from agentic_devops.proxy.auth import admin_auth_from_env
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.encryption import cipher_from_env
+from agentic_devops.proxy.github import GitHubAccountStore
+from agentic_devops.proxy.github_client import GitHubClient, GitHubError
 from agentic_devops.proxy.host_mcp_client import HostMCPClient
 from agentic_devops.proxy.hosts import HostStore
 from agentic_devops.proxy.ingest_worker import IngestWorker
 from agentic_devops.proxy.mcp_client import MCPManager
 from agentic_devops.proxy.sessions import PgSessionStore, generate_title
 from agentic_devops.tools.builtin.hosts import build_host_tools
+from agentic_devops.tools.builtin.repos import build_repo_tools
 from agentic_devops.proxy.tracing import get_tracer
 from agentic_devops.tools.builtin import register_builtin_tools
 from agentic_devops.tools.router import ToolsRouter
@@ -188,6 +196,10 @@ def create_app(
     host_store = HostStore(pool, cipher)
     host_mcp = HostMCPClient()
 
+    # GitHub connector (Phase D-1): encrypted-PAT account registry + read-only client.
+    github_store = GitHubAccountStore(pool, cipher)
+    github_client = GitHubClient()
+
     # Document import (control plane): registry + jobs + the in-process ingest
     # worker. Built from the shared pool; the worker shares the knowledge store /
     # embedder / (optional) enricher with the search path.
@@ -230,6 +242,11 @@ def create_app(
                 router.register(spec)
             except ValueError:
                 logger.warning("host tool name clash, skipping: %s", spec.name)
+        for spec in build_repo_tools(github_store, github_client):
+            try:
+                router.register(spec)
+            except ValueError:
+                logger.warning("repo tool name clash, skipping: %s", spec.name)
     else:
         mem_store = None
 
@@ -367,6 +384,107 @@ def create_app(
         status = "reachable" if checks else "unreachable"
         await run_in_threadpool(host_store.set_status, host_id, status)
         return {"status": status, "checks": checks}
+
+    # ---- GitHub connector (admin, Phase D-1) ----
+    @app.get("/v1/admin/github/accounts", response_model=list[GitHubAccountInfo])
+    def list_github_accounts(_: dict = Depends(require_admin)) -> list[GitHubAccountInfo]:
+        return [GitHubAccountInfo(**asdict(a)) for a in github_store.list()]
+
+    @app.post("/v1/admin/github/accounts", response_model=GitHubAccountInfo, status_code=201)
+    def create_github_account(body: GitHubAccountCreate, _: dict = Depends(require_admin)) -> GitHubAccountInfo:
+        if body.token and not cipher.enabled:
+            raise HTTPException(
+                status_code=400, detail="DEVY_ENCRYPTION_KEY is not set; cannot store a PAT"
+            )
+        try:
+            account = github_store.create(body.model_dump(exclude={"token"}), token=body.token)
+        except Exception as exc:  # noqa: BLE001 — most likely a duplicate label
+            raise HTTPException(status_code=409, detail=f"could not create account: {exc}") from exc
+        return GitHubAccountInfo(**asdict(account))
+
+    @app.patch("/v1/admin/github/accounts/{account_id}", response_model=GitHubAccountInfo)
+    def update_github_account(
+        account_id: str, body: GitHubAccountUpdate, _: dict = Depends(require_admin)
+    ) -> GitHubAccountInfo:
+        set_token = "token" in body.model_fields_set
+        if set_token and body.token and not cipher.enabled:
+            raise HTTPException(status_code=400, detail="DEVY_ENCRYPTION_KEY is not set")
+        data = body.model_dump(exclude={"token"}, exclude_unset=True)
+        account = github_store.update(account_id, data, token=body.token, set_token=set_token)
+        if account is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        return GitHubAccountInfo(**asdict(account))
+
+    @app.delete("/v1/admin/github/accounts/{account_id}")
+    def delete_github_account(account_id: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        github_store.delete(account_id)
+        return {"id": account_id, "deleted": True}
+
+    @app.post("/v1/admin/github/accounts/{account_id}/test")
+    async def test_github_account(account_id: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        resolved = await run_in_threadpool(github_store.resolve, account_id, False)
+        if resolved is None or not resolved.token:
+            raise HTTPException(status_code=404, detail="account not found or has no token")
+        try:
+            user = await run_in_threadpool(github_client.whoami, resolved.token)
+        except GitHubError as exc:
+            await run_in_threadpool(github_store.touch, account_id, "unauthorized")
+            return {"ok": False, "error": str(exc)}
+        login = user.get("login")
+        await run_in_threadpool(github_store.touch, account_id, "ok")
+        if login:
+            await run_in_threadpool(
+                github_store.update, account_id, {"login": login}, None, False
+            )
+        return {"ok": True, "login": login}
+
+    @app.get("/v1/admin/github/repos")
+    async def list_github_repos(
+        account: Optional[str] = None, _: dict = Depends(require_admin)
+    ) -> list[dict[str, Any]]:
+        resolved = await run_in_threadpool(github_store.resolve, account, True)
+        if resolved is None or not resolved.token:
+            raise HTTPException(status_code=404, detail="no matching account (name one if several)")
+        try:
+            repos = await run_in_threadpool(github_client.list_repos, resolved.token)
+        except GitHubError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return [
+            {"full_name": r.get("full_name"), "private": r.get("private"),
+             "language": r.get("language"), "description": r.get("description"),
+             "pushed_at": r.get("pushed_at")}
+            for r in repos
+        ]
+
+    @app.post("/v1/admin/github/crawl", response_model=RepoCrawlResult)
+    async def crawl_github_repo(body: RepoCrawlRequest, _: dict = Depends(require_admin)) -> RepoCrawlResult:
+        from agentic_devops.proxy.github_crawl import crawl_repo_markdown
+
+        resolved = await run_in_threadpool(
+            github_store.resolve_for_repo, body.repo
+        ) if not body.account else await run_in_threadpool(github_store.resolve, body.account, True)
+        if resolved is None or not resolved.token:
+            raise HTTPException(status_code=404, detail="no matching GitHub account for this repo")
+        corpus = body.corpus or resolved.account.default_corpus or body.repo
+        try:
+            stats = await run_in_threadpool(
+                lambda: crawl_repo_markdown(
+                    github_client, resolved.token, body.repo,
+                    store=kb_store, embedder=build_embedder(settings.knowledge),
+                    corpus=corpus, redactor=redactor, enricher=build_enricher(settings),
+                    document_store=document_store, max_chars=kcfg.max_chars,
+                    overlap=kcfg.overlap, split_level=kcfg.split_level,
+                )
+            )
+        except GitHubError as exc:
+            await run_in_threadpool(github_store.touch, resolved.account.id, "error")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        await run_in_threadpool(github_store.touch, resolved.account.id, "ok")
+        return RepoCrawlResult(
+            corpus=stats.corpus, files_ingested=stats.files_ingested,
+            files_skipped=stats.files_skipped, files_quarantined=stats.files_quarantined,
+            chunks_written=stats.chunks_written, secrets_redacted=stats.secrets_redacted,
+        )
 
     # -- Documents / knowledge import (Phase 9c-2) --------------------------
     def _doc_info(doc: Any) -> DocumentInfo:

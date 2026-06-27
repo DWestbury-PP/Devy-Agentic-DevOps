@@ -116,6 +116,63 @@ def ingest(
     typer.echo(f"Knowledge base now holds: {store.corpora()}")
 
 
+@app.command("crawl-repo")
+def crawl_repo(
+    repo: str = typer.Argument(..., help="Repository as owner/name."),
+    corpus: Optional[str] = typer.Option(None, "--corpus", "-c", help="Target corpus (default: the repo full name)."),
+    token: Optional[str] = typer.Option(None, "--token", help="Read-only GitHub PAT (or set GITHUB_TOKEN)."),
+    context: bool = typer.Option(False, "--context", help="Add a fast-tier LLM synopsis per chunk."),
+) -> None:
+    """Crawl a repo's existing markdown into the knowledge base (Phase D-1).
+
+    Fetches markdown via the GitHub API, runs it through the same OKF + redaction
+    ingest pipeline, and registers it so it shows in the Knowledge UI. Uses a
+    read-only PAT from --token or the GITHUB_TOKEN env var.
+    """
+    import os
+
+    from agentic_devops.config import load_settings
+    from agentic_devops.db import apply_schema, get_pool
+    from agentic_devops.knowledge.factory import (
+        build_embedder, build_enricher, build_redactor, build_store,
+    )
+    from agentic_devops.proxy.documents import DocumentStore
+    from agentic_devops.proxy.github_client import GitHubClient, GitHubError
+    from agentic_devops.proxy.github_crawl import crawl_repo_markdown
+
+    settings = load_settings()
+    if not settings.knowledge.enabled:
+        typer.echo("Knowledge is disabled in config (knowledge.enabled: false).")
+        raise typer.Exit(code=1)
+    pat = token or os.environ.get("GITHUB_TOKEN")
+    if not pat:
+        typer.echo("A read-only GitHub PAT is required (--token or GITHUB_TOKEN).")
+        raise typer.Exit(code=1)
+
+    apply_schema(settings.database.url)
+    kcfg = settings.knowledge.chunk
+    typer.echo(f"Crawling {repo} markdown (embedding: {settings.knowledge.embedding.model}) …")
+    try:
+        stats = crawl_repo_markdown(
+            GitHubClient(), pat, repo,
+            store=build_store(settings.database), embedder=build_embedder(settings.knowledge),
+            corpus=corpus, redactor=build_redactor(settings.knowledge),
+            enricher=build_enricher(settings, force=context),
+            document_store=DocumentStore(get_pool(settings.database.url)),
+            max_chars=kcfg.max_chars, overlap=kcfg.overlap, split_level=kcfg.split_level,
+        )
+    except GitHubError as exc:
+        typer.echo(f"GitHub error: {exc}")
+        raise typer.Exit(code=1)
+    note = f", {stats.secrets_redacted} secrets redacted" if stats.secrets_redacted else ""
+    if stats.files_quarantined:
+        note += f", {stats.files_quarantined} QUARANTINED"
+    typer.echo(
+        f"Corpus '{stats.corpus}': {stats.files_ingested} ingested, "
+        f"{stats.files_skipped} unchanged, {stats.chunks_written} chunks{note}."
+    )
+
+
 db_app = typer.Typer(add_completion=False, help="Database bootstrap (Postgres + pgvector).")
 app.add_typer(db_app, name="db")
 

@@ -46,11 +46,14 @@ network — so the browser talks to a single origin (no CORS, no proxy changes).
 A separate **privileged** page — [`admin.html`](admin.html) +
 [`admin.js`](admin.js), served by the same nginx at
 `http://127.0.0.1:8080/admin.html`. Password sign-in (`POST /v1/admin/login`)
-unlocks two tabs:
+unlocks three tabs:
 
 - **Hosts** — the host-MCP registry: add / edit / remove the hosts Devy can run
   diagnostics against, and test reachability. Per-host MCP tokens are stored
   encrypted and never shown back.
+- **Repos** — the GitHub connector: register a read-only PAT (stored encrypted),
+  test it, and crawl a repo's Markdown into the knowledge base on demand. Devy
+  reads repos for triage/RCA via the read-only `repo_*` tools.
 - **Knowledge** — document import: upload Markdown into a corpus (chunked,
   enriched, embedded), watch ingest jobs, and list / delete documents and corpora.
 

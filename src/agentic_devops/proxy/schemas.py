@@ -168,6 +168,56 @@ class JobInfo(BaseModel):
     updated_at: Optional[str] = None
 
 
+# -- GitHub connector (Phase D-1) -------------------------------------------
+class GitHubAccountCreate(BaseModel):
+    label: str
+    login: Optional[str] = None
+    default_corpus: Optional[str] = None
+    active: bool = True
+    labels: dict[str, Any] = Field(default_factory=dict)
+    token: Optional[str] = None  # read-only PAT (write-only; stored encrypted)
+
+
+class GitHubAccountUpdate(BaseModel):
+    label: Optional[str] = None
+    login: Optional[str] = None
+    default_corpus: Optional[str] = None
+    active: Optional[bool] = None
+    labels: Optional[dict[str, Any]] = None
+    token: Optional[str] = None  # only changed if present in the request
+
+
+class GitHubAccountInfo(BaseModel):
+    """A registered GitHub account — never includes the token (only ``has_token``)."""
+
+    id: str
+    label: str
+    login: Optional[str] = None
+    default_corpus: Optional[str] = None
+    active: bool
+    labels: dict[str, Any] = Field(default_factory=dict)
+    last_used_at: Optional[str] = None
+    last_status: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    has_token: bool = False
+
+
+class RepoCrawlRequest(BaseModel):
+    repo: str  # owner/name
+    corpus: Optional[str] = None
+    account: Optional[str] = None  # account id/label/login (optional when only one)
+
+
+class RepoCrawlResult(BaseModel):
+    corpus: str
+    files_ingested: int
+    files_skipped: int
+    files_quarantined: int
+    chunks_written: int
+    secrets_redacted: int
+
+
 class UploadResult(BaseModel):
     job: JobInfo
     documents: list[DocumentInfo] = Field(default_factory=list)

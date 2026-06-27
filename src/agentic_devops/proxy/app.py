@@ -129,6 +129,23 @@ def _register_fact_tools(router: ToolsRouter, settings: Settings) -> None:
         logger.warning("Fact tools not registered: %s", exc)
 
 
+def _register_memory_index(router: ToolsRouter, settings: Settings) -> None:
+    """Register ``memory_index`` — the orientation map over the KB + fact tier.
+    Reads coverage live, so it stays accurate as documents/facts come and go."""
+    if not settings.knowledge.enabled:
+        return
+    try:
+        from agentic_devops.knowledge.factory import build_fact_store, build_store
+        from agentic_devops.tools.builtin.memory_index import build_memory_index_tool
+
+        store = build_store(settings.database)
+        fact_store = build_fact_store(settings) if settings.knowledge.facts_enabled else None
+        router.register(build_memory_index_tool(store, fact_store))
+        logger.info("Knowledge orientation enabled (memory_index).")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_index not registered: %s", exc)
+
+
 def _remember(mem_store, session, user_id, prompt, answer, findings) -> None:
     """Embed one exchange into conversation memory (best-effort)."""
     if mem_store is None:
@@ -204,6 +221,7 @@ def create_app(
 
         _register_knowledge_tool(router, settings)
         _register_fact_tools(router, settings)
+        _register_memory_index(router, settings)
         mem_store = _register_recall_tool(router, settings, pool)
         for spec in build_host_tools(host_store, host_mcp):
             try:

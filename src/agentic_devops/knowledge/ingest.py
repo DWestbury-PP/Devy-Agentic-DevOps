@@ -9,6 +9,7 @@ only pay for what changed.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -16,6 +17,11 @@ from typing import Any, Iterable, Optional
 from agentic_devops.knowledge.chunking import chunk_markdown
 from agentic_devops.knowledge.embeddings import Embedder
 from agentic_devops.knowledge.enrich import Enricher, doc_title, doc_type, lineage_context
+from agentic_devops.knowledge.frontmatter import (
+    RESERVED_FILENAMES,
+    frontmatter_metadata,
+    parse_frontmatter,
+)
 from agentic_devops.knowledge.store import StoredChunk, VectorStore
 
 DEFAULT_EXTENSIONS = (".md", ".markdown", ".txt", ".rst")
@@ -92,18 +98,35 @@ def ingest_markdown(
     chunk. Idempotent — returns ``skipped`` when the source + recipe are unchanged.
     The documents-table lifecycle is the caller's (CLI / worker).
     """
-    chunks = chunk_markdown(raw, max_chars=max_chars, overlap=overlap, split_level=split_level)
+    # OKF frontmatter → queryable metadata; chunk the BODY so the YAML block
+    # isn't embedded as prose. Non-OKF markdown yields ({}, raw) and behaves as
+    # before. The body (not raw) drives chunking, titling, typing, and context.
+    fm, body = parse_frontmatter(raw)
+    fm_meta = frontmatter_metadata(fm, body)
+
+    chunks = chunk_markdown(body, max_chars=max_chars, overlap=overlap, split_level=split_level)
     if not chunks:
         return IngestResult()
 
     enrich_on = enricher is not None and enricher.active
-    marker = f"\x00{_EMBED_RECIPE}" + ("\x00haiku" if enrich_on else "")
+    # Fold a frontmatter fingerprint into the idempotency marker so a
+    # frontmatter-only edit (e.g. a new tag) re-ingests even though the body text
+    # is unchanged. Empty for non-OKF docs, so they're unaffected.
+    fm_fp = _hash(json.dumps(fm_meta, sort_keys=True)) if fm_meta else ""
+    marker = (
+        f"\x00{_EMBED_RECIPE}"
+        + ("\x00haiku" if enrich_on else "")
+        + (f"\x00fm:{fm_fp}" if fm_fp else "")
+    )
     new_hashes = {_hash(c.text + marker) for c in chunks}
     if new_hashes == store.hashes_for_source(corpus, source_path):
         return IngestResult(skipped=True)
 
-    title = doc_title(raw, fallback=Path(source_path).stem)
-    dtype = doc_type(source_path, raw)
+    # Frontmatter wins for title/type when present; otherwise fall back to the
+    # H1 / path+content heuristics (permissive OKF: `type` is recommended, not
+    # enforced — a missing type just gets the heuristic doc_type).
+    title = fm.get("title") or doc_title(body, fallback=Path(source_path).stem)
+    dtype = fm.get("type") or doc_type(source_path, body)
 
     # Context prepended before embedding: a deterministic `title > heading_path`
     # lineage (always, free) + an optional LLM synopsis on top (when enabled).
@@ -112,7 +135,7 @@ def ingest_markdown(
     for c in chunks:
         parts = [lineage_context(title, c.heading_path)]
         if enrich_on:
-            blurb = enricher.contextualize(raw, c.text)
+            blurb = enricher.contextualize(body, c.text)
             if blurb:
                 parts.append(blurb)
                 contextualized += 1
@@ -130,7 +153,9 @@ def ingest_markdown(
             text=c.text,
             content_hash=_hash(c.text + marker),
             context_prefix=prefix,
-            metadata=Enricher.metadata_for(title, dtype, c.heading_path),
+            # Frontmatter (preserved verbatim, incl. cross-links) with the
+            # pipeline's derived keys layered on top (title/doc_type/headings).
+            metadata={**fm_meta, **Enricher.metadata_for(title, dtype, c.heading_path)},
             document_id=document_id,
         )
         for c, prefix in zip(chunks, prefixes)
@@ -169,6 +194,10 @@ def ingest_path(
     base = root if root.is_dir() else root.parent
 
     for path in files:
+        # OKF reserved files (index.md / log.md) are not concept documents — skip
+        # them as chunk sources at any level (they feed memory_index, not search).
+        if path.name.lower() in RESERVED_FILENAMES:
+            continue
         stats.files_seen += 1
         try:
             raw = path.read_text(encoding="utf-8")
@@ -178,9 +207,12 @@ def ingest_path(
 
         document_id = None
         if document_store is not None:
+            fm, body = parse_frontmatter(raw)
             doc = document_store.register(
-                corpus, rel, title=doc_title(raw, fallback=Path(rel).stem),
-                doc_type=doc_type(rel, raw), content=raw, content_hash=content_hash(raw),
+                corpus, rel,
+                title=fm.get("title") or doc_title(body, fallback=Path(rel).stem),
+                doc_type=fm.get("type") or doc_type(rel, body),
+                content=raw, content_hash=content_hash(raw),
                 bytes_=len(raw.encode("utf-8")), status="ready",
             )
             document_id = doc.id

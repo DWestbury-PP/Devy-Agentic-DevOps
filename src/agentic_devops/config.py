@@ -120,6 +120,11 @@ class KnowledgeConfig(BaseModel):
     # tool can retrieve relevant past context (this + prior conversations). Set
     # false to store no conversation content for retrieval (privacy).
     history_enabled: bool = True
+    # Evolving fact tier (Knowledge Memory, Phase A): the durable, bi-temporal
+    # structured-fact store behind the `recall_facts` / `memory_add` tools. Shared
+    # cross-conversation knowledge, distinct from per-user conversation history.
+    # Set false to disable both tools (no fact storage/retrieval).
+    facts_enabled: bool = True
 
 
 def _default_tiers() -> dict[str, ModelTier]:

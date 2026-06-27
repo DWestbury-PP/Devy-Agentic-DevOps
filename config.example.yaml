@@ -86,6 +86,9 @@ tiers:
 #   enabled: true
 #   history_enabled: true   # embed each exchange so the recall_history tool can
 #                           # search past conversations; set false to store none.
+#   facts_enabled: true     # the evolving fact tier (recall_facts / memory_add):
+#                           # durable, bi-temporal structured facts shared across
+#                           # conversations; set false to disable both tools.
 #   contextual_enabled: false   # opt-in fast-tier per-chunk synopsis; off by default
 #                               # (the deterministic title>heading lineage is free either way)
 #   contextual_max_doc_chars: 8000   # cap on doc text fed to the synopsis step

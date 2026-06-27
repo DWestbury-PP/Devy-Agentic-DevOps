@@ -78,6 +78,45 @@ CREATE TABLE IF NOT EXISTS conversation_memories (
 CREATE INDEX IF NOT EXISTS idx_cmem_user ON conversation_memories (user_id);
 CREATE INDEX IF NOT EXISTS idx_cmem_session ON conversation_memories (session_id);
 
+-- Evolving fact tier (Knowledge Memory, Phase A): durable, cross-conversation
+-- structured facts that CHANGE over time, with history preserved. Distinct from
+-- the `chunks` prose tier (how/why docs) and from working memory (`sessions`,
+-- `conversation_memories`, which this build does not touch).
+--
+-- A fact's contradiction slot is (subject, attribute) — e.g. (svc:pricing, port).
+-- Supersession is bi-temporal: a new fact for an occupied slot closes the prior
+-- one (`valid_to`) and links it (`superseded_by`) rather than overwriting, so
+-- `as_of` queries can reconstruct what was believed at any point. The partial
+-- unique index enforces <=1 currently-true fact per slot at the DB level; the
+-- write path serializes same-subject writers with pg_advisory_xact_lock. The
+-- `superseded_by` FK is DEFERRABLE INITIALLY DEFERRED because the close-then-
+-- insert order would trip a non-deferred FK (the new row doesn't exist yet when
+-- the old row is linked to it within the same transaction). `embedding` is the
+-- same dimension-agnostic vector type as `chunks`; `tsv` mirrors it for hybrid.
+CREATE TABLE IF NOT EXISTS memories (
+    memory_id     TEXT PRIMARY KEY,
+    content       TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('episodic','semantic')),
+    source        TEXT NOT NULL,
+    subject       TEXT,
+    attribute     TEXT,
+    valid_from    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    valid_to      TIMESTAMPTZ,
+    recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    superseded_by TEXT REFERENCES memories(memory_id) DEFERRABLE INITIALLY DEFERRED,
+    importance    REAL NOT NULL DEFAULT 0.5,
+    access_count  INTEGER NOT NULL DEFAULT 0,
+    last_access   TIMESTAMPTZ,
+    metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tsv           tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+    embedding     vector
+);
+CREATE INDEX IF NOT EXISTS memories_current_idx  ON memories (valid_from) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS memories_tsv_idx       ON memories USING gin (tsv);
+CREATE INDEX IF NOT EXISTS memories_metadata_idx  ON memories USING gin (metadata);
+CREATE UNIQUE INDEX IF NOT EXISTS memories_slot_current_uniq ON memories (subject, attribute)
+    WHERE valid_to IS NULL AND subject IS NOT NULL AND attribute IS NOT NULL;
+
 -- Host registry (Phase 9b, admin control plane): the fleet Devy can run
 -- diagnostics against via each host's MCP. Devy targets a host by identifier;
 -- the proxy resolves it to an endpoint + (decrypted) token. `token_encrypted` is

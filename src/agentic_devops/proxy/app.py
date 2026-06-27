@@ -108,6 +108,27 @@ def _register_recall_tool(router: ToolsRouter, settings: Settings, pool) -> Any:
         return None
 
 
+def _register_fact_tools(router: ToolsRouter, settings: Settings) -> None:
+    """Register the evolving fact tier's tools — ``recall_facts`` (read) and
+    ``memory_add`` (write-back). Always registered when enabled; facts accrue via
+    memory_add and are searchable immediately, so no chunks-at-boot gate."""
+    if not (settings.knowledge.enabled and settings.knowledge.facts_enabled):
+        return
+    try:
+        from agentic_devops.knowledge.factory import build_fact_store
+        from agentic_devops.tools.builtin.facts import (
+            build_memory_add_tool,
+            build_recall_facts_tool,
+        )
+
+        store = build_fact_store(settings)
+        router.register(build_recall_facts_tool(store))
+        router.register(build_memory_add_tool(store))
+        logger.info("Knowledge fact tier enabled (recall_facts, memory_add).")
+    except Exception as exc:  # noqa: BLE001 — never let fact wiring crash the proxy
+        logger.warning("Fact tools not registered: %s", exc)
+
+
 def _remember(mem_store, session, user_id, prompt, answer, findings) -> None:
     """Embed one exchange into conversation memory (best-effort)."""
     if mem_store is None:
@@ -182,6 +203,7 @@ def create_app(
                 logger.warning("MCP mount issue: %s", err)
 
         _register_knowledge_tool(router, settings)
+        _register_fact_tools(router, settings)
         mem_store = _register_recall_tool(router, settings, pool)
         for spec in build_host_tools(host_store, host_mcp):
             try:

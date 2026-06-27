@@ -48,5 +48,7 @@ def pool(pg_url):
 
     p = get_pool(pg_url)
     with p.connection() as conn:
-        conn.execute("TRUNCATE chunks, sessions, conversation_memories, hosts, documents, ingest_jobs")
+        conn.execute(
+            "TRUNCATE chunks, sessions, conversation_memories, memories, hosts, documents, ingest_jobs"
+        )
     return p

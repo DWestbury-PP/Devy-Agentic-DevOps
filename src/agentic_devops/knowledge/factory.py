@@ -21,6 +21,14 @@ def build_store(database: DatabaseConfig) -> PgVectorStore:
     return PgVectorStore(get_pool(database.url))
 
 
+def build_fact_store(settings: Settings) -> "FactStore":
+    """The evolving fact tier (Knowledge Memory, Phase A), sharing the pool +
+    embedder with the rest of the knowledge subsystem."""
+    from agentic_devops.knowledge.facts import FactStore
+
+    return FactStore(get_pool(settings.database.url), build_embedder(settings.knowledge))
+
+
 def build_embedder(cfg: KnowledgeConfig) -> Embedder:
     return Embedder(
         model=cfg.embedding.model,

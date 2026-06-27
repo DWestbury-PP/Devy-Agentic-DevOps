@@ -142,6 +142,23 @@ encrypted at rest** (`DEVY_ENCRYPTION_KEY`) and **never returned** (only `has_to
 | `DELETE /v1/admin/hosts/{id}` | Remove. |
 | `POST /v1/admin/hosts/{id}/check` | Test reachability → `{ "status": "reachable"\|"unreachable", "checks": [...] }`; updates `last_status`. |
 
+### GitHub connector — `/v1/admin/github/*`
+
+Credential-centric: register a read-only **PAT** once (stored Fernet-encrypted,
+never returned); repos are discovered live via the API. Devy reads repos through
+the read-only `repo_*` tools; an operator can crawl a repo's markdown into the
+knowledge base on demand.
+
+| Method / path | Purpose |
+|---|---|
+| `GET /v1/admin/github/accounts` | List accounts (token never included; `has_token` only). |
+| `POST /v1/admin/github/accounts` | Create (**`201`**; **`409`** on duplicate `label`). Body: `label` (required), `login`, `default_corpus`, `active`, `labels`, `token` (write-only PAT). |
+| `PATCH /v1/admin/github/accounts/{id}` | Update (token changed only if the `token` field is present). |
+| `DELETE /v1/admin/github/accounts/{id}` | Remove. |
+| `POST /v1/admin/github/accounts/{id}/test` | Verify the PAT → `{ "ok": true, "login": "…" }` (auto-fills `login`) or `{ "ok": false, "error": "…" }`. |
+| `GET /v1/admin/github/repos[?account=…]` | Live-list accessible repos (name it when several accounts). |
+| `POST /v1/admin/github/crawl` | Body: `repo` (`owner/name`), optional `corpus`/`account`. Fetches the repo's markdown via the API → OKF + redaction ingest → `{ "corpus", "files_ingested", "files_skipped", "files_quarantined", "chunks_written", "secrets_redacted" }`. |
+
 ### Document import — `/v1/admin/documents`, `/jobs`, `/corpora`
 
 UI-driven markdown ingest into the hybrid knowledge base (chunk → context →

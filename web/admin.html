@@ -86,6 +86,7 @@
       <h1>Control plane</h1>
       <div class="nav">
         <button id="tab-hosts" class="tab active">Hosts</button>
+        <button id="tab-repos" class="tab">Repos</button>
         <button id="tab-knowledge" class="tab">Knowledge</button>
       </div>
 
@@ -136,6 +137,47 @@
       </table>
       <div id="hosts-msg" class="msg"></div>
       </div><!-- /hosts-page -->
+
+      <!-- ===== Repos page ===== -->
+      <div id="repos-page" class="hidden">
+        <div class="row-between">
+          <div class="sub">GitHub accounts (read-only PAT) Devy reads repos with — discovery, diffs, code crawl.</div>
+          <button id="gh-add-toggle" class="btn">+ Add account</button>
+        </div>
+
+        <form id="gh-form" class="hidden" autocomplete="off">
+          <div class="grid">
+            <input name="label" placeholder="Label e.g. home / work (required)" />
+            <input name="login" placeholder="GitHub login (optional; auto-filled on Test)" />
+            <input name="default_corpus" placeholder="Default corpus (optional)" />
+            <input name="token" type="password" placeholder="Read-only PAT (stored encrypted)" />
+          </div>
+          <div class="field">
+            <button class="btn" type="submit">Save account</button>
+            <button id="gh-cancel" class="btn ghost-btn" type="button">Cancel</button>
+          </div>
+        </form>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Label</th><th>Login</th><th>Default corpus</th><th>Status</th><th>Active</th><th></th></tr>
+          </thead>
+          <tbody id="gh-body"></tbody>
+        </table>
+        <div id="gh-msg" class="msg"></div>
+
+        <div class="row-between" style="margin-top:16px">
+          <div class="sub">Crawl a repo's existing markdown into the knowledge base (OKF metadata + secret redaction).</div>
+        </div>
+        <form id="crawl-form" autocomplete="off">
+          <div class="grid">
+            <input id="crawl-repo" name="repo" placeholder="owner/name (required)" />
+            <input id="crawl-corpus" name="corpus" placeholder="Corpus (default: repo name)" />
+          </div>
+          <div class="field"><button class="btn" type="submit">Crawl markdown</button></div>
+        </form>
+        <div id="crawl-msg" class="msg"></div>
+      </div><!-- /repos-page -->
 
       <!-- ===== Knowledge page ===== -->
       <div id="knowledge-page" class="hidden">

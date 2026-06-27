@@ -29,13 +29,17 @@ function view(name) {
 function showPage(name) {
   currentPage = name;
   $("hosts-page").classList.toggle("hidden", name !== "hosts");
+  $("repos-page").classList.toggle("hidden", name !== "repos");
   $("knowledge-page").classList.toggle("hidden", name !== "knowledge");
   $("tab-hosts").classList.toggle("active", name === "hosts");
+  $("tab-repos").classList.toggle("active", name === "repos");
   $("tab-knowledge").classList.toggle("active", name === "knowledge");
   if (name === "hosts") renderHosts();
+  else if (name === "repos") renderRepos();
   else renderKnowledge();
 }
 $("tab-hosts").addEventListener("click", () => showPage("hosts"));
+$("tab-repos").addEventListener("click", () => showPage("repos"));
 $("tab-knowledge").addEventListener("click", () => showPage("knowledge"));
 
 async function checkSession() {
@@ -208,6 +212,158 @@ $("host-form").addEventListener("submit", async (e) => {
     renderHosts();
   } catch (_) {
     hostsMsg("Couldn't reach the proxy.", true);
+  }
+});
+
+/* ---------- GitHub accounts (repo connector) ---------- */
+const ghMsg = (text, err) => {
+  const m = $("gh-msg");
+  m.className = "msg" + (err ? " err" : "");
+  m.textContent = text || "";
+};
+
+async function renderRepos() {
+  const body = $("gh-body");
+  body.innerHTML = "";
+  let accounts = [];
+  try {
+    const r = await fetch("/v1/admin/github/accounts", { headers: authHeaders() });
+    if (!r.ok) return ghMsg(`Couldn't load accounts (${r.status}).`, true);
+    accounts = await r.json();
+  } catch (_) {
+    return ghMsg("Couldn't reach the proxy.", true);
+  }
+  if (!accounts.length) return ghMsg("No GitHub accounts yet — add a read-only PAT above.");
+  ghMsg("");
+  accounts.forEach((a) => body.appendChild(accountRow(a)));
+}
+
+function accountRow(a) {
+  const tr = el("tr");
+  tr.appendChild(el("td", null, a.label));
+  tr.appendChild(el("td", null, a.login || "—"));
+  tr.appendChild(el("td", null, a.default_corpus || "—"));
+  const st = el("td");
+  st.appendChild(el("span", "pill " + (a.last_status || ""), a.last_status || "unknown"));
+  tr.appendChild(st);
+  const act = el("td");
+  const toggle = el("span", "pill " + (a.active ? "" : "inactive"), a.active ? "active" : "inactive");
+  toggle.style.cursor = "pointer";
+  toggle.title = "toggle active";
+  toggle.addEventListener("click", () => patchAccount(a.id, { active: !a.active }));
+  act.appendChild(toggle);
+  tr.appendChild(act);
+  const actions = el("td");
+  const wrap = el("div", "acts");
+  const test = el("button", "btn ghost-btn", "Test");
+  test.addEventListener("click", () => testAccount(a.id));
+  const del = el("button", "btn ghost-btn", "Delete");
+  del.addEventListener("click", () => confirmDeleteAccount(wrap, a.id));
+  wrap.append(test, del);
+  actions.appendChild(wrap);
+  tr.appendChild(actions);
+  return tr;
+}
+
+async function patchAccount(id, body) {
+  await fetch(`/v1/admin/github/accounts/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  renderRepos();
+}
+
+function confirmDeleteAccount(wrap, id) {
+  wrap.innerHTML = "";
+  const yes = el("button", "btn", "Confirm");
+  yes.addEventListener("click", async () => {
+    await fetch(`/v1/admin/github/accounts/${id}`, { method: "DELETE", headers: authHeaders() });
+    renderRepos();
+  });
+  const no = el("button", "btn ghost-btn", "Cancel");
+  no.addEventListener("click", renderRepos);
+  wrap.append(yes, no);
+}
+
+async function testAccount(id) {
+  ghMsg("Verifying PAT…");
+  try {
+    const r = await fetch(`/v1/admin/github/accounts/${id}/test`, { method: "POST", headers: authHeaders() });
+    const data = await r.json();
+    ghMsg(data.ok ? `Valid — authenticated as ${data.login}.` : `Invalid: ${data.error || "check the PAT"}`, !data.ok);
+  } catch (_) {
+    ghMsg("Verification failed.", true);
+  }
+  renderRepos();
+}
+
+$("gh-add-toggle").addEventListener("click", () => $("gh-form").classList.toggle("hidden"));
+$("gh-cancel").addEventListener("click", () => {
+  $("gh-form").reset();
+  hide("gh-form");
+});
+
+$("gh-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = {};
+  for (const [k, v] of fd.entries()) {
+    const val = String(v).trim();
+    if (val) body[k] = val;
+  }
+  if (!body.label) return ghMsg("Label is required.", true);
+  try {
+    const r = await fetch("/v1/admin/github/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      return ghMsg(`Couldn't add account: ${d.detail || r.status}`, true);
+    }
+    e.target.reset();
+    hide("gh-form");
+    renderRepos();
+  } catch (_) {
+    ghMsg("Couldn't reach the proxy.", true);
+  }
+});
+
+$("crawl-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const repo = $("crawl-repo").value.trim();
+  const corpus = $("crawl-corpus").value.trim();
+  const msg = $("crawl-msg");
+  if (!repo) {
+    msg.className = "msg err";
+    msg.textContent = "Repo (owner/name) is required.";
+    return;
+  }
+  msg.className = "msg";
+  msg.textContent = `Crawling ${repo}…`;
+  try {
+    const r = await fetch("/v1/admin/github/crawl", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(corpus ? { repo, corpus } : { repo }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msg.className = "msg err";
+      msg.textContent = `Crawl failed: ${d.detail || r.status}`;
+      return;
+    }
+    let note = `Crawled into '${d.corpus}': ${d.files_ingested} ingested, ${d.chunks_written} chunks`;
+    if (d.secrets_redacted) note += `, ${d.secrets_redacted} secrets redacted`;
+    if (d.files_quarantined) note += `, ${d.files_quarantined} quarantined`;
+    msg.className = "msg";
+    msg.textContent = note + ".";
+    $("crawl-form").reset();
+  } catch (_) {
+    msg.className = "msg err";
+    msg.textContent = "Couldn't reach the proxy.";
   }
 });
 

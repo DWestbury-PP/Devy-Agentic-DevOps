@@ -144,6 +144,27 @@ CREATE TABLE IF NOT EXISTS hosts (
 );
 CREATE INDEX IF NOT EXISTS idx_hosts_active ON hosts (active);
 
+-- GitHub connector (Phase D-1): registered GitHub credentials Devy can use to
+-- discover + read repos (read-only). Credential-centric: one read-only PAT sees
+-- all of an account's repos (repos are discovered live via the API, not pre-
+-- registered). `token_encrypted` is the Fernet-encrypted PAT (same TokenCipher as
+-- hosts), never returned by the API. Crawled docs land in the `documents`/`chunks`
+-- registries like any other corpus.
+CREATE TABLE IF NOT EXISTS github_accounts (
+    id              TEXT PRIMARY KEY,
+    label           TEXT NOT NULL UNIQUE,        -- friendly name (e.g. "home", "work")
+    login           TEXT,                          -- the GitHub user/org the PAT belongs to
+    token_encrypted BYTEA,                         -- Fernet read-only PAT, never API-returned
+    default_corpus  TEXT,                          -- corpus crawled docs land in (default: repo name)
+    active          BOOLEAN NOT NULL DEFAULT TRUE,
+    labels          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_used_at    TIMESTAMPTZ,
+    last_status     TEXT,                          -- ok | unauthorized | error | unknown
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_github_accounts_active ON github_accounts (active);
+
 -- Document import (Phase 9c-2): one row per imported source document. Both the
 -- `ingest` CLI and the UI upload register documents (one unified registry), so
 -- the Knowledge admin page shows every corpus. Chunks link back via

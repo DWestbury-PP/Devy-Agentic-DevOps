@@ -103,6 +103,35 @@ _SEG_RE = re.compile(r"[-_/=+.:]+")
 _WORD_RE = re.compile(r"^[A-Za-z][a-z]{2,}$")
 
 
+# Values that a key=value / Bearer match captures but which carry NO secret: a
+# variable/command reference, a doc placeholder, or a code expression. An opaque
+# credential never starts with $/<{%/[ and never contains brackets or parens, so
+# skipping these removes the bulk of secret_assignment false positives (var refs
+# like ``$RAILWAY_TOKEN``, placeholders like ``<token>``, code like
+# ``process.argv[1]``) without weakening detection of real literal values.
+_NONSECRET_BRACKETS = set("()[]{}")
+_NONSECRET_WORDS = {
+    "null", "none", "nil", "true", "false", "changeme", "change_me", "example",
+    "placeholder", "your-token", "your_token", "yourtoken", "redacted", "secret",
+    "todo", "tbd", "xxx", "xxxx", "xxxxxx",
+}
+
+
+def _looks_nonsecret_value(v: str) -> bool:
+    s = v.strip().strip("`\"'.,;:)]}")
+    if len(s) < 6:
+        return True
+    if s[0] in "$<%{":  # $VAR, $(cmd), <placeholder>, %(name)s, {{template}}
+        return True
+    if any(c in _NONSECRET_BRACKETS for c in v):  # code/structure, never in a token
+        return True
+    if s.startswith(("process.", "os.environ", "import.meta", "argv")):
+        return True
+    if s.lower().strip("<>") in _NONSECRET_WORDS:
+        return True
+    return False
+
+
 def _shannon(s: str) -> float:
     n = len(s)
     if n == 0:
@@ -137,6 +166,10 @@ class Redactor:
 
         for det in _TIER1:
             def repl(m: re.Match, _kind=det.kind, _grp=det.group) -> str:
+                # A value-capturing detector (key=value, Bearer) that captured a
+                # variable ref / placeholder / code expression carries no secret.
+                if _grp != 0 and _looks_nonsecret_value(m.group(_grp)):
+                    return m.group(0)
                 findings[_kind] = findings.get(_kind, 0) + 1
                 ph = _PLACEHOLDER.format(kind=_kind)
                 if _grp == 0:

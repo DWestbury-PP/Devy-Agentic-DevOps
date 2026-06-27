@@ -231,6 +231,9 @@ class RepoCrawlInfo(BaseModel):
     files_quarantined: int = 0
     secrets_redacted: int = 0
     crawled_at: Optional[str] = None
+    # Live KB footprint for the corpus (current totals, not last-run deltas).
+    doc_count: int = 0
+    chunk_count: int = 0
 
 
 class UploadResult(BaseModel):

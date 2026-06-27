@@ -209,3 +209,5 @@ def test_crawls_endpoint_lists_history(admin_client, pool):
     assert len(rows) == 1
     assert rows[0]["full_name"] == "me/api" and rows[0]["commit_sha"] == "cafe1234567"
     assert rows[0]["files_ingested"] == 7 and rows[0]["chunks_written"] == 88
+    # Live KB-footprint counts are present (0 here — no docs ingested into the corpus).
+    assert rows[0]["doc_count"] == 0 and rows[0]["chunk_count"] == 0

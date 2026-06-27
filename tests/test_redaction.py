@@ -70,6 +70,41 @@ def test_plain_prose_untouched():
     assert out.total == 0 and out.quarantine is False
 
 
+# -- structured identifiers are not secrets (real-corpus false positives) ----
+# These are verbatim shapes that fail-closed quarantined real markdown docs: a
+# readable-word segment plus a short SHA/alnum tail, file paths, URL fragments,
+# epoch/run labels, thread IDs. None should trip the entropy gate.
+@pytest.mark.parametrize("ident", [
+    "sentiment_v2-paper-3bb9aacb4629",                       # strategy + short git SHA
+    "momentum_v1-paper-39c5a2d9d72b",
+    "mean_reversion_v1-paper-f4364bc5c18c",
+    "epoch-2026-06-17-momentum-v1-trailingstoppct-extend-l0",  # run label
+    "epoch-2026-05-24-btc-momentum-lookback-1h-33afa3-l0",
+    "packages/db/migrations/0050",                           # repo path
+    "docs/retirements/mean-reversion-v1-btc-paper-2026-05-03",
+    "dydxprotocol/v4-client-js",                             # path-ish slug
+    "/v1/orderbook/BTC-USD-PERP",                            # API route
+    "published_after=2024-01-01",                            # query param
+    "closing-trades-vs-L2=30",
+    "thr_7TjMma20HLxbWP34",                                  # chat thread id
+])
+def test_structured_identifiers_not_flagged(ident):
+    out = Redactor(mode="fail_closed").scan(f"see {ident} for context")
+    assert out.total == 0 and out.quarantine is False
+    assert ident in out.text
+
+
+# -- but an opaque secret carrying a readable-word prefix is STILL caught -----
+@pytest.mark.parametrize("secret", [
+    "prod_sk_live_4eC39HqLyjWDarjtT1zdp7dcXYZ123abc",       # readable prefix + long random tail
+    "dGhpc2lzYV9zZWNyZXQtdmVyeS1sb25nX3Rva2VuMTIzNDU2Nzg5MA",  # base64url-ish blob
+])
+def test_secretlike_segment_still_quarantines(secret):
+    out = Redactor(mode="fail_closed").scan(f"token {secret} end")
+    assert out.quarantine is True
+    assert out.findings.get("high_entropy") == 1
+
+
 # -- Tier 2 posture ---------------------------------------------------------
 def test_high_entropy_quarantines_fail_closed():
     out = Redactor(mode="fail_closed").scan(f"the artifact token is {HE} apparently")

@@ -500,7 +500,19 @@ def create_app(
 
     @app.get("/v1/admin/github/crawls", response_model=list[RepoCrawlInfo])
     def list_repo_crawls(_: dict = Depends(require_admin)) -> list[RepoCrawlInfo]:
-        return [RepoCrawlInfo(**asdict(c)) for c in repo_crawl_store.list()]
+        # Show the current KB footprint per corpus (live counts), not last-run
+        # deltas — a re-crawl re-ingests only changed files, so files_ingested
+        # would otherwise read as a shrunken total.
+        doc_counts = document_store.corpora()
+        chunk_counts = kb_store.corpora()
+        return [
+            RepoCrawlInfo(
+                **asdict(c),
+                doc_count=doc_counts.get(c.corpus, 0),
+                chunk_count=chunk_counts.get(c.corpus, 0),
+            )
+            for c in repo_crawl_store.list()
+        ]
 
     # -- Documents / knowledge import (Phase 9c-2) --------------------------
     def _doc_info(doc: Any) -> DocumentInfo:

@@ -287,8 +287,8 @@ function crawlRow(c) {
     sha.textContent = "—";
   }
   tr.appendChild(sha);
-  tr.appendChild(el("td", null, String(c.files_ingested)));
-  tr.appendChild(el("td", null, String(c.chunks_written)));
+  tr.appendChild(el("td", null, String(c.doc_count)));
+  tr.appendChild(el("td", null, String(c.chunk_count)));
   const actions = el("td");
   const rescan = el("button", "btn ghost-btn", "Rescan");
   rescan.addEventListener("click", () => doCrawl(c.full_name, c.corpus));
@@ -398,7 +398,7 @@ async function doCrawl(repo, corpus) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Crawling…';
   msg.className = "msg";
-  msg.innerHTML = `<span class="spinner"></span>Crawling ${repo} — fetching markdown, redacting, embedding…`;
+  msg.textContent = `Crawling ${repo} — fetching markdown, redacting, embedding…`;
   try {
     const r = await fetch("/v1/admin/github/crawl", {
       method: "POST",

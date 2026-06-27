@@ -92,6 +92,16 @@ _SAFE_SHAPES = [
     re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),  # UUID
 ]
 
+# Structural delimiters that split a token into segments, and a "readable word"
+# (a lowercase dictionary-ish run). A token containing a readable-word segment is a
+# *structured identifier* (e.g. ``sentiment_v2-paper-3bb9aacb4629``, ``packages/db/
+# migrations/0050``, a URL path) rather than an opaque secret — so we score its
+# segments individually instead of the whole string. An opaque secret (incl.
+# base64/base64url) has no readable-word segment, or a long delimiter-free run that
+# still trips the per-segment check, so detection is preserved. See _entropy_hits.
+_SEG_RE = re.compile(r"[-_/=+.:]+")
+_WORD_RE = re.compile(r"^[A-Za-z][a-z]{2,}$")
+
 
 def _shannon(s: str) -> float:
     n = len(s)
@@ -150,20 +160,31 @@ class Redactor:
 
         return RedactionResult(text=out, findings=findings, quarantine=quarantine)
 
+    def _is_secret_like(self, s: str) -> bool:
+        """A single contiguous string scores as secret-like: mixed character classes
+        (a digit AND a letter), within the length window, not a known-safe shape, and
+        high Shannon entropy. Hashes, UUIDs, dates, and prose don't qualify."""
+        if not (self.entropy_min_len <= len(s) <= self.entropy_max_len):
+            return False
+        if not (any(c.isdigit() for c in s) and any(c.isalpha() for c in s)):
+            return False
+        if any(p.match(s) for p in _SAFE_SHAPES):
+            return False
+        return _shannon(s) >= self.entropy_threshold
+
     def _entropy_hits(self, text: str) -> list[str]:
         """Distinct high-entropy tokens that aren't known-safe shapes. Conservative:
-        requires mixed character classes (a digit AND a letter) and a length window,
-        so hashes, UUIDs, long identifiers, and prose don't trip it."""
+        a *structured identifier* (delimited, with a readable-word segment — e.g.
+        ``sentiment_v2-paper-3bb9aacb4629`` or a ``a/b/c`` path) is scored per-segment
+        so its short SHA/alnum tails don't trip the gate, while an opaque secret (no
+        readable-word segment) is scored whole as before."""
         seen: dict[str, None] = {}
         for m in _TOKEN_RE.finditer(text):
             tok = m.group(0)
-            if not (self.entropy_min_len <= len(tok) <= self.entropy_max_len):
-                continue
-            if not (any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok)):
-                continue
-            if any(p.match(tok) for p in _SAFE_SHAPES):
-                continue
-            if _shannon(tok) >= self.entropy_threshold:
+            segments = [s for s in _SEG_RE.split(tok) if s]
+            structured = len(segments) >= 2 and any(_WORD_RE.match(s) for s in segments)
+            candidates = segments if structured else [tok]
+            if any(self._is_secret_like(c) for c in candidates):
                 seen.setdefault(tok, None)
         return list(seen)
 

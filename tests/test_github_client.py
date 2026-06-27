@@ -94,6 +94,9 @@ class _CrawlClient:
     def get_file(self, token, full_name, path, ref=None):
         return self._files[path]
 
+    def list_commits(self, token, full_name, path=None, per_page=20):
+        return [{"sha": "headcommit123456"}]
+
 
 def test_crawl_ingests_markdown_through_pipeline(pool):
     store = PgVectorStore(pool)
@@ -103,13 +106,15 @@ def test_crawl_ingests_markdown_through_pipeline(pool):
         "docs/ops.md": "# Ops\n\nThe access key AKIAIOSFODNN7EXAMPLE is used by the job.\n",
         "src/main.py": "print('not markdown, skipped')\n",
     })
-    stats = crawl_repo_markdown(
+    outcome = crawl_repo_markdown(
         client, "tok", "me/proj", store=store, embedder=embedder,
         corpus="me/proj", redactor=Redactor(),
     )
+    stats = outcome.stats
     assert stats.files_ingested == 2  # two markdown files; .py skipped
     assert stats.corpus == "me/proj"
     assert stats.secrets_redacted >= 1  # the AWS key in ops.md
+    assert outcome.commit_sha == "headcommit123456" and outcome.ref == "main"
 
     # Frontmatter (Phase B) flowed through.
     hits = store.hybrid_search("checkout deploy", embedder.embed_query("checkout deploy"), k=3)
@@ -123,5 +128,5 @@ def test_crawl_no_markdown_is_noop(pool):
     store = PgVectorStore(pool)
     embedder = Embedder(model="fake", embed_fn=_fake_embed)
     client = _CrawlClient({"src/main.py": "code", "Makefile": "all:"})
-    stats = crawl_repo_markdown(client, "tok", "me/code", store=store, embedder=embedder)
-    assert stats.files_ingested == 0 and stats.chunks_written == 0
+    outcome = crawl_repo_markdown(client, "tok", "me/code", store=store, embedder=embedder)
+    assert outcome.stats.files_ingested == 0 and outcome.stats.chunks_written == 0

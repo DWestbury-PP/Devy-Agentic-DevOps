@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from agentic_devops.config import DatabaseConfig, Settings
 from agentic_devops.proxy.app import create_app
 from agentic_devops.proxy.encryption import TokenCipher
-from agentic_devops.proxy.github import GitHubAccountStore
+from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.tools.builtin.repos import build_repo_tools
 from agentic_devops.tools.router import ToolsRouter
 
@@ -60,6 +60,39 @@ def test_update_and_delete(store):
     assert store.resolve("x").token == "new"
     store.delete(a.id)
     assert store.get(a.id) is None
+
+
+# -- repo crawl history -----------------------------------------------------
+@pytest.fixture()
+def crawls(pool):
+    return RepoCrawlStore(pool)
+
+
+def test_record_and_list_crawl(crawls):
+    crawls.record(
+        "me/api", "me/api", account_id="acct1", commit_sha="deadbeef1234",
+        default_branch="main", files_ingested=12, chunks_written=200,
+    )
+    rows = crawls.list()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.full_name == "me/api" and r.commit_sha == "deadbeef1234"
+    assert r.files_ingested == 12 and r.chunks_written == 200
+    assert r.crawled_at is not None
+
+
+def test_record_upserts_on_rescan(crawls):
+    crawls.record("me/api", "me/api", commit_sha="aaa111", files_ingested=5)
+    crawls.record("me/api", "me/api", commit_sha="bbb222", files_ingested=9)
+    rows = crawls.list()
+    assert len(rows) == 1  # one row per repo
+    assert rows[0].commit_sha == "bbb222" and rows[0].files_ingested == 9
+
+
+def test_crawl_delete(crawls):
+    crawls.record("me/api", "me/api")
+    crawls.delete("me/api")
+    assert crawls.get("me/api") is None
 
 
 # -- tools ------------------------------------------------------------------
@@ -164,3 +197,15 @@ def test_duplicate_label_conflicts(admin_client):
     admin_client.post("/v1/admin/github/accounts", json={"label": "dup", "token": "a"})
     second = admin_client.post("/v1/admin/github/accounts", json={"label": "dup", "token": "b"})
     assert second.status_code == 409
+
+
+def test_crawls_endpoint_lists_history(admin_client, pool):
+    assert TestClient(admin_client.app).get("/v1/admin/github/crawls").status_code == 401
+    RepoCrawlStore(pool).record(
+        "me/api", "me/api", commit_sha="cafe1234567", default_branch="main",
+        files_ingested=7, chunks_written=88,
+    )
+    rows = admin_client.get("/v1/admin/github/crawls").json()
+    assert len(rows) == 1
+    assert rows[0]["full_name"] == "me/api" and rows[0]["commit_sha"] == "cafe1234567"
+    assert rows[0]["files_ingested"] == 7 and rows[0]["chunks_written"] == 88

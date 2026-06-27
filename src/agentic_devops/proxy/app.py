@@ -45,6 +45,7 @@ from agentic_devops.proxy.schemas import (
     HostInfo,
     HostUpdate,
     JobInfo,
+    RepoCrawlInfo,
     RepoCrawlRequest,
     RepoCrawlResult,
     SessionDetail,
@@ -57,7 +58,7 @@ from agentic_devops.proxy.schemas import (
 from agentic_devops.proxy.auth import admin_auth_from_env
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.encryption import cipher_from_env
-from agentic_devops.proxy.github import GitHubAccountStore
+from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.proxy.github_client import GitHubClient, GitHubError
 from agentic_devops.proxy.host_mcp_client import HostMCPClient
 from agentic_devops.proxy.hosts import HostStore
@@ -198,6 +199,7 @@ def create_app(
 
     # GitHub connector (Phase D-1): encrypted-PAT account registry + read-only client.
     github_store = GitHubAccountStore(pool, cipher)
+    repo_crawl_store = RepoCrawlStore(pool)
     github_client = GitHubClient()
 
     # Document import (control plane): registry + jobs + the in-process ingest
@@ -467,7 +469,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no matching GitHub account for this repo")
         corpus = body.corpus or resolved.account.default_corpus or body.repo
         try:
-            stats = await run_in_threadpool(
+            outcome = await run_in_threadpool(
                 lambda: crawl_repo_markdown(
                     github_client, resolved.token, body.repo,
                     store=kb_store, embedder=build_embedder(settings.knowledge),
@@ -480,11 +482,25 @@ def create_app(
             await run_in_threadpool(github_store.touch, resolved.account.id, "error")
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         await run_in_threadpool(github_store.touch, resolved.account.id, "ok")
+        stats = outcome.stats
+        await run_in_threadpool(
+            lambda: repo_crawl_store.record(
+                body.repo, stats.corpus, account_id=resolved.account.id,
+                commit_sha=outcome.commit_sha, default_branch=outcome.ref,
+                files_ingested=stats.files_ingested, chunks_written=stats.chunks_written,
+                files_quarantined=stats.files_quarantined, secrets_redacted=stats.secrets_redacted,
+            )
+        )
         return RepoCrawlResult(
             corpus=stats.corpus, files_ingested=stats.files_ingested,
             files_skipped=stats.files_skipped, files_quarantined=stats.files_quarantined,
             chunks_written=stats.chunks_written, secrets_redacted=stats.secrets_redacted,
+            commit_sha=outcome.commit_sha, default_branch=outcome.ref,
         )
+
+    @app.get("/v1/admin/github/crawls", response_model=list[RepoCrawlInfo])
+    def list_repo_crawls(_: dict = Depends(require_admin)) -> list[RepoCrawlInfo]:
+        return [RepoCrawlInfo(**asdict(c)) for c in repo_crawl_store.list()]
 
     # -- Documents / knowledge import (Phase 9c-2) --------------------------
     def _doc_info(doc: Any) -> DocumentInfo:

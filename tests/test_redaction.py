@@ -94,6 +94,37 @@ def test_structured_identifiers_not_flagged(ident):
     assert ident in out.text
 
 
+# -- key=value whose value isn't an opaque secret (var ref / placeholder / code) -
+# These tripped secret_assignment on a real repo (a runbook describing how to
+# *use* a token), redacting non-secrets. The key still names a token/secret, but
+# the value carries nothing to hide.
+@pytest.mark.parametrize("text", [
+    "Project-Access-Token: $RAILWAY_TOKEN",       # shell var reference
+    'export AUTH="${RAILWAY_TOKEN}"',             # braced var reference
+    "RAILWAY_TOKEN=<token>",                       # placeholder
+    "set RAILWAY_TOKEN=<new>",                     # placeholder
+    "AGENT_DB_TOKEN=$(openssl rand -hex 32)",      # command substitution
+    "password: process.argv[1]",                  # code expression
+    "tokens: [baseIdx, quoteIdx]",                # code/array
+    "api_key = changeme",                          # placeholder word
+])
+def test_nonsecret_assignment_values_kept(text):
+    out = Redactor().scan(text)
+    assert out.total == 0 and out.quarantine is False
+    assert "«REDACTED" not in out.text
+
+
+@pytest.mark.parametrize("text", [
+    'aws_secret_access_key = "wJalrXUtnFEMI1234K7MDENGbPxRfiCYEXAMPLEKEY"',
+    "api_key=sk-proj-Ab3Kf9aB3xQ7zL2mN8pR4tV6wY1cD5e",
+    'password: "Sup3rS3cretP@sswordValue123"',
+])
+def test_real_assignment_values_still_redacted(text):
+    out = Redactor().scan(text)
+    assert out.findings.get("secret_assignment") == 1
+    assert "«REDACTED:secret_assignment»" in out.text
+
+
 # -- but an opaque secret carrying a readable-word prefix is STILL caught -----
 @pytest.mark.parametrize("secret", [
     "prod_sk_live_4eC39HqLyjWDarjtT1zdp7dcXYZ123abc",       # readable prefix + long random tail

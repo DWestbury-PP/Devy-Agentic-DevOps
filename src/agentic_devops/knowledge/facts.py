@@ -271,3 +271,13 @@ class FactStore:
             sql += " WHERE valid_to IS NULL"
         with self._pool.connection() as conn:
             return conn.execute(sql).fetchone()[0]
+
+    def subjects(self, limit: int = 50) -> list[str]:
+        """Distinct subjects with at least one currently-true fact (for orientation)."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT subject FROM memories "
+                "WHERE valid_to IS NULL AND subject IS NOT NULL ORDER BY subject LIMIT %s",
+                (limit,),
+            ).fetchall()
+        return [r[0] for r in rows]

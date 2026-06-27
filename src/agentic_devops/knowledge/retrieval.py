@@ -29,8 +29,11 @@ def _format_hits(hits: list, query: str) -> str:
         if c.heading_path:
             cite += f" # {c.heading_path}"
         meta = getattr(c, "metadata", None) or {}
-        if meta.get("doc_type") and meta["doc_type"] != "doc":
-            cite += f"  ({meta['doc_type']})"
+        dtype = meta.get("type") or meta.get("doc_type")
+        if dtype and dtype != "doc":
+            cite += f"  ({dtype})"
+        if meta.get("resource"):
+            cite += f"  → {meta['resource']}"
         matched = "+".join(getattr(hit, "sources", ()) or ("vector",))
         snippet = c.text if len(c.text) <= _SNIPPET_CHARS else c.text[:_SNIPPET_CHARS] + " …"
         blocks.append(f"[{i}] {cite}  (matched: {matched})\n{snippet}")
@@ -52,6 +55,9 @@ def build_search_knowledge_tool(
         if not query:
             return "ERROR: 'query' is required."
         corpus = args.get("corpus") or None
+        fm_filter = args.get("filter") or None
+        if fm_filter is not None and not isinstance(fm_filter, dict):
+            return "ERROR: 'filter' must be an object of frontmatter key/values."
         try:
             k = int(args.get("k", default_k))
         except (TypeError, ValueError):
@@ -63,7 +69,7 @@ def build_search_knowledge_tool(
         except Exception as exc:  # noqa: BLE001 — surface embedder/key errors to the agent
             return f"ERROR: embedding the query failed: {exc}"
         # Hybrid: semantic (vector) fused with exact-token (full-text) matching.
-        hits = store.hybrid_search(query, qvec, k=k, corpus=corpus)
+        hits = store.hybrid_search(query, qvec, k=k, corpus=corpus, frontmatter=fm_filter)
         if not hits:
             avail = ", ".join(f"{n} ({c})" for n, c in store.corpora().items())
             msg = f"No knowledge-base entries matched {query!r}."
@@ -106,6 +112,15 @@ def build_search_knowledge_tool(
                         "Optional corpus name to restrict the search to. Omit to search all "
                         "corpora (recommended unless you know the exact corpus). The set of "
                         "corpora is dynamic; a missing match lists what's available."
+                    ),
+                },
+                "filter": {
+                    "type": "object",
+                    "description": (
+                        "Optional frontmatter filter (JSONB containment). Restrict to "
+                        "documents whose metadata matches, e.g. {\"doc_type\": \"runbook\"} "
+                        "or {\"tags\": [\"oncall\"]} (a tag filter matches any doc carrying "
+                        "that tag). Use memory_index to see available types/tags."
                     ),
                 },
                 "k": {

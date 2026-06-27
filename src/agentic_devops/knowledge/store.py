@@ -53,13 +53,16 @@ class SearchHit:
 class VectorStore(Protocol):
     def upsert(self, chunks: list[StoredChunk], embeddings: list[list[float]]) -> None: ...
     def search(
-        self, query: list[float], k: int = 5, corpus: Optional[str] = None
+        self, query: list[float], k: int = 5, corpus: Optional[str] = None,
+        frontmatter: Optional[dict] = None,
     ) -> list[SearchHit]: ...
     def hybrid_search(
         self, query_text: str, query_vec: list[float], k: int = 5,
         corpus: Optional[str] = None, candidates: int = 20,
+        frontmatter: Optional[dict] = None,
     ) -> list[SearchHit]: ...
     def corpora(self) -> dict[str, int]: ...
+    def facets(self) -> dict[str, list[str]]: ...
     def count(self) -> int: ...
     def hashes_for_source(self, corpus: str, source_path: str) -> set[str]: ...
     def delete_source(self, corpus: str, source_path: str) -> None: ...
@@ -140,19 +143,37 @@ class PgVectorStore:
             )
 
     # -- query --------------------------------------------------------------
+    @staticmethod
+    def _filters(corpus: Optional[str], frontmatter: Optional[dict]) -> tuple[str, list]:
+        """Build the shared WHERE fragment (no leading WHERE/AND) + its params.
+
+        ``frontmatter`` is a JSONB containment filter (``metadata @> …``): exact
+        match on scalar keys, subset on array keys (e.g. ``{"tags": ["oncall"]}``
+        matches any chunk whose ``tags`` includes ``oncall``)."""
+        clauses: list[str] = []
+        params: list = []
+        if corpus:
+            clauses.append("corpus = %s")
+            params.append(corpus)
+        if frontmatter:
+            clauses.append("metadata @> %s::jsonb")
+            params.append(json.dumps(frontmatter))
+        return " AND ".join(clauses), params
+
     def search(
-        self, query: list[float], k: int = 5, corpus: Optional[str] = None
+        self, query: list[float], k: int = 5, corpus: Optional[str] = None,
+        frontmatter: Optional[dict] = None,
     ) -> list[SearchHit]:
         """Pure vector (cosine) search. Hybrid search is preferred for the tool;
         this stays for callers/tests that want vector-only ranking."""
         qlit = _vec_literal(query)
-        sql = f"SELECT {_CHUNK_COLS}, 1 - (embedding <=> %s::vector) AS score FROM chunks"
-        params: list = [qlit]
-        if corpus:
-            sql += " WHERE corpus = %s"
-            params.append(corpus)
-        sql += " ORDER BY embedding <=> %s::vector LIMIT %s"
-        params.extend([qlit, max(1, k)])
+        clause, fparams = self._filters(corpus, frontmatter)
+        where = f" WHERE {clause}" if clause else ""
+        sql = (
+            f"SELECT {_CHUNK_COLS}, 1 - (embedding <=> %s::vector) AS score "
+            f"FROM chunks{where} ORDER BY embedding <=> %s::vector LIMIT %s"
+        )
+        params = [qlit, *fparams, qlit, max(1, k)]
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [SearchHit(chunk=_row_to_chunk(r), score=float(r[8]), sources=("vector",)) for r in rows]
@@ -160,31 +181,28 @@ class PgVectorStore:
     def hybrid_search(
         self, query_text: str, query_vec: list[float], k: int = 5,
         corpus: Optional[str] = None, candidates: int = 20,
+        frontmatter: Optional[dict] = None,
     ) -> list[SearchHit]:
         """Fuse vector and full-text candidate lists with RRF.
 
         Pulls up to ``candidates`` from each arm, fuses by id, returns the top
-        ``k``. ``sources`` records which arm(s) matched each hit.
+        ``k``. ``sources`` records which arm(s) matched each hit. An optional
+        ``frontmatter`` JSONB filter is applied to both arms.
         """
         qlit = _vec_literal(query_vec)
         cand = max(k, candidates)
+        clause, fparams = self._filters(corpus, frontmatter)
+        where = f" WHERE {clause}" if clause else ""
 
-        vec_sql = f"SELECT {_CHUNK_COLS} FROM chunks"
-        vec_params: list = []
-        if corpus:
-            vec_sql += " WHERE corpus = %s"
-            vec_params.append(corpus)
-        vec_sql += " ORDER BY embedding <=> %s::vector LIMIT %s"
-        vec_params.extend([qlit, cand])
+        vec_sql = f"SELECT {_CHUNK_COLS} FROM chunks{where} ORDER BY embedding <=> %s::vector LIMIT %s"
+        vec_params: list = [*fparams, qlit, cand]
 
         fts_sql = (
             f"SELECT {_CHUNK_COLS} FROM chunks "
             "WHERE tsv @@ plainto_tsquery('english', %s)"
+            + (f" AND {clause}" if clause else "")
         )
-        fts_params: list = [query_text]
-        if corpus:
-            fts_sql += " AND corpus = %s"
-            fts_params.append(corpus)
+        fts_params: list = [query_text, *fparams]
         fts_sql += " ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC LIMIT %s"
         fts_params.extend([query_text, cand])
 
@@ -214,6 +232,25 @@ class PgVectorStore:
                 "SELECT corpus, COUNT(*) FROM chunks GROUP BY corpus ORDER BY corpus"
             ).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    def facets(self) -> dict[str, list[str]]:
+        """Distinct frontmatter facets across all chunks — the values an agent can
+        filter by (doc/OKF types and tags). Powers the memory_index orientation
+        tool so Devy can see what's filterable before querying."""
+        with self._pool.connection() as conn:
+            type_rows = conn.execute(
+                "SELECT DISTINCT metadata->>'doc_type' FROM chunks "
+                "WHERE metadata ? 'doc_type' ORDER BY 1"
+            ).fetchall()
+            # tags is a JSON array; unnest distinct values.
+            tag_rows = conn.execute(
+                "SELECT DISTINCT jsonb_array_elements_text(metadata->'tags') AS tag "
+                "FROM chunks WHERE jsonb_typeof(metadata->'tags') = 'array' ORDER BY tag"
+            ).fetchall()
+        return {
+            "doc_types": [r[0] for r in type_rows if r[0]],
+            "tags": [r[0] for r in tag_rows if r[0]],
+        }
 
     def count(self) -> int:
         with self._pool.connection() as conn:

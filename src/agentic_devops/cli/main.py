@@ -137,6 +137,7 @@ def crawl_repo(
         build_embedder, build_enricher, build_redactor, build_store,
     )
     from agentic_devops.proxy.documents import DocumentStore
+    from agentic_devops.proxy.github import RepoCrawlStore
     from agentic_devops.proxy.github_client import GitHubClient, GitHubError
     from agentic_devops.proxy.github_crawl import crawl_repo_markdown
 
@@ -152,23 +153,31 @@ def crawl_repo(
     apply_schema(settings.database.url)
     kcfg = settings.knowledge.chunk
     typer.echo(f"Crawling {repo} markdown (embedding: {settings.knowledge.embedding.model}) …")
+    pool = get_pool(settings.database.url)
     try:
-        stats = crawl_repo_markdown(
+        outcome = crawl_repo_markdown(
             GitHubClient(), pat, repo,
             store=build_store(settings.database), embedder=build_embedder(settings.knowledge),
             corpus=corpus, redactor=build_redactor(settings.knowledge),
             enricher=build_enricher(settings, force=context),
-            document_store=DocumentStore(get_pool(settings.database.url)),
+            document_store=DocumentStore(pool),
             max_chars=kcfg.max_chars, overlap=kcfg.overlap, split_level=kcfg.split_level,
         )
     except GitHubError as exc:
         typer.echo(f"GitHub error: {exc}")
         raise typer.Exit(code=1)
+    stats = outcome.stats
+    RepoCrawlStore(pool).record(
+        repo, stats.corpus, commit_sha=outcome.commit_sha, default_branch=outcome.ref,
+        files_ingested=stats.files_ingested, chunks_written=stats.chunks_written,
+        files_quarantined=stats.files_quarantined, secrets_redacted=stats.secrets_redacted,
+    )
     note = f", {stats.secrets_redacted} secrets redacted" if stats.secrets_redacted else ""
     if stats.files_quarantined:
         note += f", {stats.files_quarantined} QUARANTINED"
+    sha = f" @ {outcome.commit_sha[:7]}" if outcome.commit_sha else ""
     typer.echo(
-        f"Corpus '{stats.corpus}': {stats.files_ingested} ingested, "
+        f"Corpus '{stats.corpus}'{sha}: {stats.files_ingested} ingested, "
         f"{stats.files_skipped} unchanged, {stats.chunks_written} chunks{note}."
     )
 

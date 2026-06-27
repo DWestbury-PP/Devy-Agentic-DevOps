@@ -157,7 +157,8 @@ knowledge base on demand.
 | `DELETE /v1/admin/github/accounts/{id}` | Remove. |
 | `POST /v1/admin/github/accounts/{id}/test` | Verify the PAT → `{ "ok": true, "login": "…" }` (auto-fills `login`) or `{ "ok": false, "error": "…" }`. |
 | `GET /v1/admin/github/repos[?account=…]` | Live-list accessible repos (name it when several accounts). |
-| `POST /v1/admin/github/crawl` | Body: `repo` (`owner/name`), optional `corpus`/`account`. Fetches the repo's markdown via the API → OKF + redaction ingest → `{ "corpus", "files_ingested", "files_skipped", "files_quarantined", "chunks_written", "secrets_redacted" }`. |
+| `POST /v1/admin/github/crawl` | Body: `repo` (`owner/name`), optional `corpus`/`account`. Fetches the repo's markdown via the API → OKF + redaction ingest → `{ "corpus", "files_ingested", "files_skipped", "files_quarantined", "chunks_written", "secrets_redacted", "commit_sha", "default_branch" }`. Records the crawl (commit + counts) in the scan history. |
+| `GET /v1/admin/github/crawls` | Scan history — one row per crawled repo (most-recent first): `{ "full_name", "corpus", "commit_sha", "default_branch", "files_ingested", "chunks_written", "files_quarantined", "secrets_redacted", "crawled_at" }`. Powers the "Scanned repos" table. |
 
 ### Document import — `/v1/admin/documents`, `/jobs`, `/corpora`
 

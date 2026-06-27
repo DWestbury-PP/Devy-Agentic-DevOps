@@ -182,6 +182,17 @@
           <div class="field"><button id="crawl-btn" class="btn" type="submit">Crawl markdown</button></div>
         </form>
         <div id="crawl-msg" class="msg"></div>
+
+        <div class="row-between" style="margin-top:18px">
+          <div class="sub">Scanned repos — what's in the knowledge base, when it was scanned, and at which commit.</div>
+        </div>
+        <table class="tbl">
+          <thead>
+            <tr><th>Repo</th><th>Corpus</th><th>Last scanned</th><th>Commit</th><th>Files</th><th>Chunks</th><th></th></tr>
+          </thead>
+          <tbody id="crawls-body"></tbody>
+        </table>
+        <div id="crawls-msg" class="msg"></div>
       </div><!-- /repos-page -->
 
       <!-- ===== Knowledge page ===== -->

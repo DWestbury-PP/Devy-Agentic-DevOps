@@ -233,9 +233,68 @@ async function renderRepos() {
   } catch (_) {
     return ghMsg("Couldn't reach the proxy.", true);
   }
-  if (!accounts.length) return ghMsg("No GitHub accounts yet — add a read-only PAT above.");
-  ghMsg("");
-  accounts.forEach((a) => body.appendChild(accountRow(a)));
+  if (!accounts.length) {
+    ghMsg("No GitHub accounts yet — add a read-only PAT above.");
+  } else {
+    ghMsg("");
+    accounts.forEach((a) => body.appendChild(accountRow(a)));
+  }
+  renderCrawls();
+}
+
+async function renderCrawls() {
+  const body = $("crawls-body");
+  if (!body) return;
+  body.innerHTML = "";
+  const msg = $("crawls-msg");
+  let crawls = [];
+  try {
+    const r = await fetch("/v1/admin/github/crawls", { headers: authHeaders() });
+    if (!r.ok) { msg.textContent = `Couldn't load scan history (${r.status}).`; return; }
+    crawls = await r.json();
+  } catch (_) {
+    msg.textContent = "Couldn't reach the proxy.";
+    return;
+  }
+  if (!crawls.length) {
+    msg.textContent = "No repos scanned yet — crawl one above.";
+    return;
+  }
+  msg.textContent = "";
+  crawls.forEach((c) => body.appendChild(crawlRow(c)));
+}
+
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function crawlRow(c) {
+  const tr = el("tr");
+  tr.appendChild(el("td", null, c.full_name));
+  tr.appendChild(el("td", null, c.corpus || "—"));
+  tr.appendChild(el("td", null, fmtWhen(c.crawled_at)));
+  const sha = el("td");
+  if (c.commit_sha) {
+    const code = el("span", "pill", c.commit_sha.slice(0, 7));
+    code.title = c.commit_sha + (c.default_branch ? ` (${c.default_branch})` : "");
+    sha.appendChild(code);
+  } else {
+    sha.textContent = "—";
+  }
+  tr.appendChild(sha);
+  tr.appendChild(el("td", null, String(c.files_ingested)));
+  tr.appendChild(el("td", null, String(c.chunks_written)));
+  const actions = el("td");
+  const rescan = el("button", "btn ghost-btn", "Rescan");
+  rescan.addEventListener("click", () => doCrawl(c.full_name, c.corpus));
+  actions.appendChild(rescan);
+  tr.appendChild(actions);
+  return tr;
 }
 
 function accountRow(a) {
@@ -331,16 +390,8 @@ $("gh-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("crawl-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const repo = $("crawl-repo").value.trim();
-  const corpus = $("crawl-corpus").value.trim();
+async function doCrawl(repo, corpus) {
   const msg = $("crawl-msg");
-  if (!repo) {
-    msg.className = "msg err";
-    msg.textContent = "Repo (owner/name) is required.";
-    return;
-  }
   // The crawl is synchronous (fetch → tree → contents → ingest), so give a clear
   // busy state: spinner on the button + a "working" message until it returns.
   const btn = $("crawl-btn");
@@ -360,12 +411,15 @@ $("crawl-form").addEventListener("submit", async (e) => {
       msg.textContent = `Crawl failed: ${d.detail || r.status}`;
       return;
     }
-    let note = `Crawled into '${d.corpus}': ${d.files_ingested} ingested, ${d.chunks_written} chunks`;
+    let note = `Crawled into '${d.corpus}'`;
+    if (d.commit_sha) note += ` @ ${d.commit_sha.slice(0, 7)}`;
+    note += `: ${d.files_ingested} ingested, ${d.chunks_written} chunks`;
     if (d.secrets_redacted) note += `, ${d.secrets_redacted} secrets redacted`;
     if (d.files_quarantined) note += `, ${d.files_quarantined} quarantined (suspected secrets)`;
     msg.className = "msg";
     msg.textContent = note + ".";
     $("crawl-form").reset();
+    renderCrawls();
   } catch (_) {
     msg.className = "msg err";
     msg.textContent = "Couldn't reach the proxy.";
@@ -373,6 +427,19 @@ $("crawl-form").addEventListener("submit", async (e) => {
     btn.disabled = false;
     btn.textContent = "Crawl markdown";
   }
+}
+
+$("crawl-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const repo = $("crawl-repo").value.trim();
+  const corpus = $("crawl-corpus").value.trim();
+  if (!repo) {
+    const msg = $("crawl-msg");
+    msg.className = "msg err";
+    msg.textContent = "Repo (owner/name) is required.";
+    return;
+  }
+  doCrawl(repo, corpus);
 });
 
 /* ---------- knowledge (document import) ---------- */

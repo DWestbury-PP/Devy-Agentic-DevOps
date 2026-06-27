@@ -50,6 +50,6 @@ def pool(pg_url):
     with p.connection() as conn:
         conn.execute(
             "TRUNCATE chunks, sessions, conversation_memories, memories, hosts, "
-            "github_accounts, documents, ingest_jobs"
+            "github_accounts, repo_crawls, documents, ingest_jobs"
         )
     return p

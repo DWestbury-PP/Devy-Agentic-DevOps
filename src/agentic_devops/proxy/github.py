@@ -166,3 +166,82 @@ class GitHubAccountStore:
         if by_login is not None:
             return by_login
         return self.resolve()  # single active account, or None if ambiguous/absent
+
+
+_CRAWL_COLS = (
+    "full_name, corpus, account_id, commit_sha, default_branch, files_ingested, "
+    "chunks_written, files_quarantined, secrets_redacted, crawled_at"
+)
+
+
+@dataclass
+class RepoCrawl:
+    """A record of the last crawl of a repo into the knowledge base."""
+
+    full_name: str
+    corpus: str
+    account_id: Optional[str] = None
+    commit_sha: Optional[str] = None
+    default_branch: Optional[str] = None
+    files_ingested: int = 0
+    chunks_written: int = 0
+    files_quarantined: int = 0
+    secrets_redacted: int = 0
+    crawled_at: Optional[str] = None
+
+
+def _row_to_crawl(r: tuple) -> RepoCrawl:
+    return RepoCrawl(
+        full_name=r[0], corpus=r[1], account_id=r[2], commit_sha=r[3],
+        default_branch=r[4], files_ingested=r[5], chunks_written=r[6],
+        files_quarantined=r[7], secrets_redacted=r[8], crawled_at=_iso(r[9]),
+    )
+
+
+class RepoCrawlStore:
+    """Tracks the last crawl per repo (commit, when, counts) so the admin UI can
+    show what has been scanned. One upserted row per ``owner/name``."""
+
+    def __init__(self, pool: ConnectionPool) -> None:
+        self._pool = pool
+
+    def list(self) -> list[RepoCrawl]:
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_CRAWL_COLS} FROM repo_crawls ORDER BY crawled_at DESC"
+            ).fetchall()
+        return [_row_to_crawl(r) for r in rows]
+
+    def get(self, full_name: str) -> Optional[RepoCrawl]:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT {_CRAWL_COLS} FROM repo_crawls WHERE full_name = %s", (full_name,)
+            ).fetchone()
+        return _row_to_crawl(row) if row else None
+
+    def record(
+        self, full_name: str, corpus: str, *, account_id: Optional[str] = None,
+        commit_sha: Optional[str] = None, default_branch: Optional[str] = None,
+        files_ingested: int = 0, chunks_written: int = 0,
+        files_quarantined: int = 0, secrets_redacted: int = 0,
+    ) -> RepoCrawl:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO repo_crawls "
+                "(full_name, corpus, account_id, commit_sha, default_branch, "
+                " files_ingested, chunks_written, files_quarantined, secrets_redacted, crawled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now()) "
+                "ON CONFLICT (full_name) DO UPDATE SET "
+                "corpus=EXCLUDED.corpus, account_id=EXCLUDED.account_id, "
+                "commit_sha=EXCLUDED.commit_sha, default_branch=EXCLUDED.default_branch, "
+                "files_ingested=EXCLUDED.files_ingested, chunks_written=EXCLUDED.chunks_written, "
+                "files_quarantined=EXCLUDED.files_quarantined, "
+                "secrets_redacted=EXCLUDED.secrets_redacted, crawled_at=now()",
+                (full_name, corpus, account_id, commit_sha, default_branch,
+                 files_ingested, chunks_written, files_quarantined, secrets_redacted),
+            )
+        return self.get(full_name)  # type: ignore[return-value]
+
+    def delete(self, full_name: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute("DELETE FROM repo_crawls WHERE full_name = %s", (full_name,))

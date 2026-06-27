@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +24,27 @@ from agentic_devops.proxy.github_client import GitHubClient
 
 _MD_SUFFIXES = (".md", ".markdown")
 _MAX_FILES = 500  # safety cap on a single crawl
+
+
+@dataclass
+class CrawlOutcome:
+    """What a crawl produced: the ingest stats plus the commit it built from, so
+    the caller can record crawl history (commit SHA + branch)."""
+
+    stats: IngestStats
+    ref: str
+    commit_sha: Optional[str] = None
+
+
+def _head_sha(client: GitHubClient, token: str, full_name: str, ref: str) -> Optional[str]:
+    """Best-effort: the HEAD commit SHA at ``ref`` (so we record what was scanned)."""
+    try:
+        commits = client.list_commits(token, full_name, per_page=1)
+        if commits:
+            return commits[0].get("sha")
+    except Exception:  # noqa: BLE001 — history is informational, never fail the crawl
+        pass
+    return None
 
 
 def crawl_repo_markdown(
@@ -40,9 +62,10 @@ def crawl_repo_markdown(
     max_chars: int = 8000,
     overlap: int = 200,
     split_level: int = 2,
-) -> IngestStats:
+) -> CrawlOutcome:
     """Fetch ``full_name``'s markdown and ingest it into ``corpus`` (default: the
-    repo's full name). Returns the ``IngestStats`` from the shared pipeline."""
+    repo's full name). Returns a :class:`CrawlOutcome` (stats + the commit/branch
+    crawled) from the shared pipeline."""
     corpus = corpus or full_name
     if ref is None:
         ref = client.get_repo(token, full_name).get("default_branch") or "main"
@@ -53,8 +76,11 @@ def crawl_repo_markdown(
         if t.get("type") == "blob" and t.get("path", "").lower().endswith(_MD_SUFFIXES)
     ][:_MAX_FILES]
 
+    commit_sha = _head_sha(client, token, full_name, ref)
+
     if not md_paths:
-        return IngestStats(corpus=corpus)  # nothing to ingest (D-2 will generate docs)
+        # nothing to ingest (D-2 will generate docs) — still a recorded crawl
+        return CrawlOutcome(IngestStats(corpus=corpus), ref, commit_sha)
 
     tmp = Path(tempfile.mkdtemp(prefix="devy-crawl-"))
     try:
@@ -63,10 +89,11 @@ def crawl_repo_markdown(
             dest = tmp / path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content, encoding="utf-8")
-        return ingest_path(
+        stats = ingest_path(
             tmp, store, embedder, corpus=corpus,
             max_chars=max_chars, overlap=overlap, split_level=split_level,
             enricher=enricher, document_store=document_store, redactor=redactor,
         )
+        return CrawlOutcome(stats, ref, commit_sha)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

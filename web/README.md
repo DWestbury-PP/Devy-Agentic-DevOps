@@ -52,8 +52,10 @@ unlocks three tabs:
   diagnostics against, and test reachability. Per-host MCP tokens are stored
   encrypted and never shown back.
 - **Repos** — the GitHub connector: register a read-only PAT (stored encrypted),
-  test it, and crawl a repo's Markdown into the knowledge base on demand. Devy
-  reads repos for triage/RCA via the read-only `repo_*` tools.
+  test it, and crawl a repo's Markdown into the knowledge base on demand. A
+  **Scanned repos** table records what's been crawled, when, and at which commit
+  (with one-click Rescan). Devy reads repos for triage/RCA via the read-only
+  `repo_*` tools.
 - **Knowledge** — document import: upload Markdown into a corpus (chunked,
   enriched, embedded), watch ingest jobs, and list / delete documents and corpora.
 

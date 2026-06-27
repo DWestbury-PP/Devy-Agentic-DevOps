@@ -165,6 +165,22 @@ CREATE TABLE IF NOT EXISTS github_accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_github_accounts_active ON github_accounts (active);
 
+-- Repo crawl history (Phase D-1): one row per crawled repo, upserted on each
+-- crawl. Records the commit the KB was built from (so a user can see what was
+-- scanned and when, and whether it is behind the repo HEAD) plus crawl counts.
+CREATE TABLE IF NOT EXISTS repo_crawls (
+    full_name         TEXT PRIMARY KEY,              -- owner/name
+    corpus            TEXT NOT NULL,
+    account_id        TEXT,                          -- github_accounts.id used for the crawl
+    commit_sha        TEXT,                          -- HEAD commit at crawl time
+    default_branch    TEXT,
+    files_ingested    INTEGER NOT NULL DEFAULT 0,
+    chunks_written    INTEGER NOT NULL DEFAULT 0,
+    files_quarantined INTEGER NOT NULL DEFAULT 0,
+    secrets_redacted  INTEGER NOT NULL DEFAULT 0,
+    crawled_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Document import (Phase 9c-2): one row per imported source document. Both the
 -- `ingest` CLI and the UI upload register documents (one unified registry), so
 -- the Knowledge admin page shows every corpus. Chunks link back via

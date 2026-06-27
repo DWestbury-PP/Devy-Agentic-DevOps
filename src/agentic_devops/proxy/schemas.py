@@ -216,6 +216,21 @@ class RepoCrawlResult(BaseModel):
     files_quarantined: int
     chunks_written: int
     secrets_redacted: int
+    commit_sha: Optional[str] = None
+    default_branch: Optional[str] = None
+
+
+class RepoCrawlInfo(BaseModel):
+    full_name: str
+    corpus: str
+    account_id: Optional[str] = None
+    commit_sha: Optional[str] = None
+    default_branch: Optional[str] = None
+    files_ingested: int = 0
+    chunks_written: int = 0
+    files_quarantined: int = 0
+    secrets_redacted: int = 0
+    crawled_at: Optional[str] = None
 
 
 class UploadResult(BaseModel):

@@ -341,8 +341,13 @@ $("crawl-form").addEventListener("submit", async (e) => {
     msg.textContent = "Repo (owner/name) is required.";
     return;
   }
+  // The crawl is synchronous (fetch → tree → contents → ingest), so give a clear
+  // busy state: spinner on the button + a "working" message until it returns.
+  const btn = $("crawl-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Crawling…';
   msg.className = "msg";
-  msg.textContent = `Crawling ${repo}…`;
+  msg.innerHTML = `<span class="spinner"></span>Crawling ${repo} — fetching markdown, redacting, embedding…`;
   try {
     const r = await fetch("/v1/admin/github/crawl", {
       method: "POST",
@@ -357,13 +362,16 @@ $("crawl-form").addEventListener("submit", async (e) => {
     }
     let note = `Crawled into '${d.corpus}': ${d.files_ingested} ingested, ${d.chunks_written} chunks`;
     if (d.secrets_redacted) note += `, ${d.secrets_redacted} secrets redacted`;
-    if (d.files_quarantined) note += `, ${d.files_quarantined} quarantined`;
+    if (d.files_quarantined) note += `, ${d.files_quarantined} quarantined (suspected secrets)`;
     msg.className = "msg";
     msg.textContent = note + ".";
     $("crawl-form").reset();
   } catch (_) {
     msg.className = "msg err";
     msg.textContent = "Couldn't reach the proxy.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Crawl markdown";
   }
 });
 

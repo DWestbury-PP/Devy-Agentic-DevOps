@@ -42,6 +42,11 @@
     .acts { display: flex; gap: 6px; }
     .acts .btn { padding: 4px 9px; font-size: 12px; }
     .hidden { display: none; }
+    .btn[disabled] { opacity: 0.6; cursor: default; }
+    .spinner { display: inline-block; width: 11px; height: 11px; margin-right: 7px;
+            border: 2px solid var(--line); border-top-color: var(--green); border-radius: 50%;
+            vertical-align: -1px; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .pill.ready { color: var(--green); border-color: var(--green-deep); }
     .pill.pending, .pill.processing { color: var(--amber); border-color: var(--amber); }
     .pill.failed { color: var(--red); border-color: var(--red); }
@@ -174,7 +179,7 @@
             <input id="crawl-repo" name="repo" placeholder="owner/name (required)" />
             <input id="crawl-corpus" name="corpus" placeholder="Corpus (default: repo name)" />
           </div>
-          <div class="field"><button class="btn" type="submit">Crawl markdown</button></div>
+          <div class="field"><button id="crawl-btn" class="btn" type="submit">Crawl markdown</button></div>
         </form>
         <div id="crawl-msg" class="msg"></div>
       </div><!-- /repos-page -->

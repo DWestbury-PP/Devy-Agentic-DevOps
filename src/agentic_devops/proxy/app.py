@@ -191,12 +191,14 @@ def create_app(
     # Document import (control plane): registry + jobs + the in-process ingest
     # worker. Built from the shared pool; the worker shares the knowledge store /
     # embedder / (optional) enricher with the search path.
-    from agentic_devops.knowledge.factory import build_embedder, build_enricher
+    from agentic_devops.knowledge.factory import build_embedder, build_enricher, build_redactor
     from agentic_devops.knowledge.store import PgVectorStore
 
     document_store = DocumentStore(pool)
     job_store = JobStore(pool)
     kb_store = PgVectorStore(pool)
+    # Secret redaction (Phase C): applied to uploads before content is persisted.
+    redactor = build_redactor(settings.knowledge)
     kcfg = settings.knowledge.chunk
     ingest_worker = IngestWorker(
         document_store, job_store, kb_store, build_embedder(settings.knowledge),
@@ -390,7 +392,11 @@ def create_app(
         if not corpus:
             raise HTTPException(status_code=400, detail="corpus is required")
 
+        from agentic_devops.knowledge.redaction import apply_redaction
+
+        uploaded_by = str(principal.get("sub") or "admin")
         accepted: list[tuple[str, str, int]] = []
+        quarantined: list = []  # registered failed, never stored unredacted
         for f in files:
             name = (f.filename or "").strip()
             if not name.lower().endswith((".md", ".markdown")):
@@ -400,24 +406,46 @@ def create_app(
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 continue
-            accepted.append((name, text, len(raw)))
-        if not accepted:
+            # Redact BEFORE persisting: a quarantined upload is recorded failed and
+            # its content is never stored; otherwise we keep the redacted text.
+            redacted, red = apply_redaction(text, redactor)
+            if redacted is None:
+                doc = await run_in_threadpool(
+                    lambda n=name: document_store.register(
+                        corpus, n, title=n, doc_type="doc", content="", content_hash="",
+                        bytes_=0, uploaded_by=uploaded_by, status="failed",
+                    )
+                )
+                await run_in_threadpool(
+                    document_store.set_status, doc.id, "failed",
+                    error=f"quarantined: suspected secret ({red.summary})",
+                )
+                quarantined.append(await run_in_threadpool(document_store.by_source, corpus, name))
+                continue
+            accepted.append((name, redacted, len(redacted.encode("utf-8"))))
+        if not accepted and not quarantined:
             raise HTTPException(status_code=400, detail="no valid markdown files (.md/.markdown)")
 
-        uploaded_by = str(principal.get("sub") or "admin")
-        job = await run_in_threadpool(job_store.create, corpus, len(accepted))
-        created = []
-        for name, text, nbytes in accepted:
-            doc = await run_in_threadpool(
-                lambda n=name, t=text, b=nbytes: document_store.register(
-                    corpus, n, title=doc_title(t, fallback=n), doc_type=doc_type(n, t),
-                    content=t, content_hash=content_hash(t), bytes_=b,
-                    uploaded_by=uploaded_by, status="pending", job_id=job.id,
+        created = list(quarantined)
+        if accepted:
+            job = await run_in_threadpool(job_store.create, corpus, len(accepted))
+            for name, text, nbytes in accepted:
+                doc = await run_in_threadpool(
+                    lambda n=name, t=text, b=nbytes: document_store.register(
+                        corpus, n, title=doc_title(t, fallback=n), doc_type=doc_type(n, t),
+                        content=t, content_hash=content_hash(t), bytes_=b,
+                        uploaded_by=uploaded_by, status="pending", job_id=job.id,
+                    )
                 )
-            )
-            created.append(doc)
-        ingest_worker.notify()
-        return UploadResult(job=_job_info(job), documents=[_doc_info(d) for d in created])
+                created.append(doc)
+            ingest_worker.notify()
+            job_info = _job_info(job)
+        else:
+            # Everything quarantined — no work to enqueue.
+            job = await run_in_threadpool(job_store.create, corpus, 0)
+            await run_in_threadpool(job_store.set_status, job.id, "done")
+            job_info = _job_info(await run_in_threadpool(job_store.get, job.id))
+        return UploadResult(job=job_info, documents=[_doc_info(d) for d in created if d])
 
     @app.get("/v1/admin/jobs/{job_id}", response_model=JobInfo)
     def get_job(job_id: str, _: dict = Depends(require_admin)) -> JobInfo:

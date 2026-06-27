@@ -125,6 +125,14 @@ class KnowledgeConfig(BaseModel):
     # cross-conversation knowledge, distinct from per-user conversation history.
     # Set false to disable both tools (no fact storage/retrieval).
     facts_enabled: bool = True
+    # Secret redaction at ingest (Knowledge Memory, Phase C): strip secrets from
+    # documents and fact deposits before they're persisted/embedded. `fail_closed`
+    # quarantines a doc on an ambiguous high-entropy hit (human review); known
+    # secret patterns are always redacted inline. `best_effort` redacts everything
+    # inline and never quarantines. `redaction_entropy` toggles the Tier-2 heuristic.
+    redaction_enabled: bool = True
+    redaction_mode: str = "fail_closed"  # fail_closed | best_effort
+    redaction_entropy: bool = True
 
 
 def _default_tiers() -> dict[str, ModelTier]:

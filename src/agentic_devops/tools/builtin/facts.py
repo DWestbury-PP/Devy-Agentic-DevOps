@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from agentic_devops.knowledge.facts import FactStore
+from agentic_devops.knowledge.redaction import RedactionQuarantine
 from agentic_devops.tools.base import ToolSpec
 
 _MAX_K = 10
@@ -156,6 +157,12 @@ def build_memory_add_tool(store: FactStore) -> ToolSpec:
             result = store.add_fact(
                 content, kind=kind, source=source, subject=subject,
                 attribute=attribute, importance=importance, metadata=metadata,
+            )
+        except RedactionQuarantine as exc:
+            return (
+                f"ERROR: not stored — the content looks like it contains a secret "
+                f"({exc.summary}). Restate the fact without the sensitive value "
+                "(describe the mechanism, not the value)."
             )
         except Exception as exc:  # noqa: BLE001
             return f"ERROR: could not store the fact: {exc}"

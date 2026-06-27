@@ -62,7 +62,12 @@ def ingest(
     from pathlib import Path
 
     from agentic_devops.config import load_settings
-    from agentic_devops.knowledge.factory import build_embedder, build_enricher, build_store
+    from agentic_devops.knowledge.factory import (
+        build_embedder,
+        build_enricher,
+        build_redactor,
+        build_store,
+    )
     from agentic_devops.knowledge.ingest import DEFAULT_EXTENSIONS, ingest_path
 
     settings = load_settings()
@@ -91,15 +96,22 @@ def ingest(
     typer.echo(
         f"Ingesting {target} (embedding model: {settings.knowledge.embedding.model}; {ctx_note}) …"
     )
+    redactor = build_redactor(settings.knowledge)
     stats = ingest_path(
         target, store, embedder, corpus=corpus,
         extensions=extensions, max_chars=kcfg.max_chars, overlap=kcfg.overlap,
-        split_level=kcfg.split_level, enricher=enricher,
+        split_level=kcfg.split_level, enricher=enricher, redactor=redactor,
     )
+    redaction_note = ""
+    if redactor is not None:
+        redaction_note = f", {stats.secrets_redacted} secrets redacted"
+        if stats.files_quarantined:
+            redaction_note += f", {stats.files_quarantined} QUARANTINED (suspected secret)"
     typer.echo(
         f"Corpus '{stats.corpus}': {stats.files_ingested} ingested, "
         f"{stats.files_skipped} unchanged, {stats.chunks_written} chunks written "
-        f"({stats.chunks_contextualized} contextualized; {stats.files_seen} files seen)."
+        f"({stats.chunks_contextualized} contextualized; {stats.files_seen} files seen"
+        f"{redaction_note})."
     )
     typer.echo(f"Knowledge base now holds: {store.corpora()}")
 

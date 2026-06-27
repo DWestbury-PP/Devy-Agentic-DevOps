@@ -89,6 +89,11 @@ tiers:
 #   facts_enabled: true     # the evolving fact tier (recall_facts / memory_add):
 #                           # durable, bi-temporal structured facts shared across
 #                           # conversations; set false to disable both tools.
+#   redaction_enabled: true    # strip secrets from docs + fact deposits at ingest
+#   redaction_mode: fail_closed   # fail_closed (quarantine ambiguous high-entropy for
+#                                 # review; known patterns redacted inline) | best_effort
+#   redaction_entropy: true    # Tier-2 high-entropy heuristic (conservative); set false
+#                              # to rely on known secret patterns + assignments only
 #   contextual_enabled: false   # opt-in fast-tier per-chunk synopsis; off by default
 #                               # (the deterministic title>heading lineage is free either way)
 #   contextual_max_doc_chars: 8000   # cap on doc text fed to the synopsis step

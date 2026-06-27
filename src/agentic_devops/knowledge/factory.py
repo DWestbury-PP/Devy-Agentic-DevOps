@@ -21,12 +21,26 @@ def build_store(database: DatabaseConfig) -> PgVectorStore:
     return PgVectorStore(get_pool(database.url))
 
 
+def build_redactor(cfg: KnowledgeConfig):
+    """A ``Redactor`` (Knowledge Memory, Phase C), or ``None`` when disabled."""
+    if not cfg.redaction_enabled:
+        return None
+    from agentic_devops.knowledge.redaction import Redactor
+
+    return Redactor(mode=cfg.redaction_mode, entropy_enabled=cfg.redaction_entropy)
+
+
 def build_fact_store(settings: Settings) -> "FactStore":
     """The evolving fact tier (Knowledge Memory, Phase A), sharing the pool +
-    embedder with the rest of the knowledge subsystem."""
+    embedder with the rest of the knowledge subsystem. Fact deposits pass through
+    the configured redactor (Phase C) before they're embedded/stored."""
     from agentic_devops.knowledge.facts import FactStore
 
-    return FactStore(get_pool(settings.database.url), build_embedder(settings.knowledge))
+    return FactStore(
+        get_pool(settings.database.url),
+        build_embedder(settings.knowledge),
+        redactor=build_redactor(settings.knowledge),
+    )
 
 
 def build_embedder(cfg: KnowledgeConfig) -> Embedder:

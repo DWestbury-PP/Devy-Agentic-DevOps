@@ -22,12 +22,14 @@ from agentic_devops.knowledge.frontmatter import (
     frontmatter_metadata,
     parse_frontmatter,
 )
+from agentic_devops.knowledge.redaction import Redactor, apply_redaction
 from agentic_devops.knowledge.store import StoredChunk, VectorStore
 
 DEFAULT_EXTENSIONS = (".md", ".markdown", ".txt", ".rst")
 # Bump when the embedding recipe changes (e.g. how context is prepended) so a
 # re-ingest re-embeds existing chunks even when their source text is unchanged.
-_EMBED_RECIPE = "ctx2"
+# ctx3: secret redaction at ingest (Phase C) — re-scan existing corpora on re-ingest.
+_EMBED_RECIPE = "ctx3"
 _SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
     ".ruff_cache", ".mypy_cache", "dist", "build", "traces", "sessions", ".idea", ".vscode",
@@ -40,8 +42,10 @@ class IngestStats:
     files_seen: int = 0
     files_ingested: int = 0
     files_skipped: int = 0  # unchanged since last ingest
+    files_quarantined: int = 0  # held back: suspected unredacted secret (Phase C)
     chunks_written: int = 0
     chunks_contextualized: int = 0  # chunks that got a contextual prefix
+    secrets_redacted: int = 0  # secret values stripped at ingest (Phase C)
 
 
 @dataclass
@@ -176,6 +180,7 @@ def ingest_path(
     split_level: int = 2,
     enricher: Optional[Enricher] = None,
     document_store: Any = None,
+    redactor: Optional[Redactor] = None,
 ) -> IngestStats:
     """Ingest every matching file under ``root`` into ``corpus``.
 
@@ -204,6 +209,25 @@ def ingest_path(
         except (UnicodeDecodeError, OSError):
             continue  # skip binaries / unreadable files silently
         rel = str(path.relative_to(base)) if base in path.parents or base == path.parent else str(path)
+
+        # Redact secrets BEFORE anything is persisted (registry content or chunks).
+        # A quarantined file (fail-closed: suspected unredacted secret) is held back
+        # and, if tracked, recorded as failed for human review.
+        redacted, red = apply_redaction(raw, redactor)
+        if redacted is None:
+            stats.files_quarantined += 1
+            if document_store is not None:
+                doc = document_store.register(
+                    corpus, rel, title=Path(rel).stem, doc_type="doc",
+                    content="", content_hash="", bytes_=0, status="failed",
+                )
+                document_store.set_status(
+                    doc.id, "failed",
+                    error=f"quarantined: suspected secret ({red.summary})",
+                )
+            continue
+        raw = redacted
+        stats.secrets_redacted += red.total
 
         document_id = None
         if document_store is not None:

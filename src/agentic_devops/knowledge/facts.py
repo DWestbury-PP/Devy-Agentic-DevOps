@@ -30,6 +30,7 @@ from typing import Optional
 from psycopg_pool import ConnectionPool
 
 from agentic_devops.knowledge.embeddings import Embedder
+from agentic_devops.knowledge.redaction import RedactionQuarantine, Redactor
 from agentic_devops.knowledge.store import _rrf_fuse, _vec_literal
 
 # Columns selected for a hydrated fact, in order (see _row_to_fact).
@@ -89,9 +90,12 @@ def _row_to_fact(r: tuple) -> StoredFact:
 class FactStore:
     """Postgres/pgvector-backed bi-temporal fact store with race-safe supersession."""
 
-    def __init__(self, pool: ConnectionPool, embedder: Embedder) -> None:
+    def __init__(
+        self, pool: ConnectionPool, embedder: Embedder, redactor: Optional[Redactor] = None
+    ) -> None:
         self._pool = pool
         self._embedder = embedder
+        self._redactor = redactor
 
     # -- write --------------------------------------------------------------
     def add_fact(
@@ -118,6 +122,14 @@ class FactStore:
             raise ValueError("content is required")
         if kind not in ("semantic", "episodic"):
             raise ValueError(f"kind must be 'semantic' or 'episodic', got {kind!r}")
+        # Redact secrets before embed/store. Tier-1 patterns are stripped inline;
+        # an ambiguous high-entropy deposit (fail-closed) raises RedactionQuarantine
+        # so the caller rejects it rather than silently storing a possible secret.
+        if self._redactor is not None:
+            red = self._redactor.scan(content)
+            if red.quarantine:
+                raise RedactionQuarantine(red.summary)
+            content = red.text
         memory_id = uuid.uuid4().hex
         when = valid_from or datetime.now(timezone.utc)
         embedding = self._embedder.embed_query(content)

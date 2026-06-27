@@ -117,6 +117,7 @@ tiers:
 # host: 127.0.0.1
 # port: 8765
 # max_iterations: 16
+# request_timeout: 120      # per-call provider timeout (s); a stall fails fast, never hangs the turn
 # tracing: jsonl            # jsonl | langsmith | none
 
 # --- Conversation memory / compaction (Phase 7; defaults shown) ---

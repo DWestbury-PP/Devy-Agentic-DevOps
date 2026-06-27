@@ -181,6 +181,11 @@ class Settings(BaseSettings):
     # config.yaml for deeper investigations).
     max_iterations: int = 16
 
+    # Per-call provider timeout (seconds). Bounds every model request so a stalled
+    # streaming connection fails with an error event instead of hanging the turn
+    # (and its worker thread) forever. A normal turn completes in seconds.
+    request_timeout: float = 120.0
+
     # Conversation memory (Phase 7). Compaction triggers when the assembled
     # context exceeds compaction_ratio of the active tier's context window
     # (tier.context_window, else default_context_window). keep_recent_exchanges

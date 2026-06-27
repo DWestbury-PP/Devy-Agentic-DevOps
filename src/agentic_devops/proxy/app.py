@@ -252,7 +252,7 @@ def create_app(
     else:
         mem_store = None
 
-    provider = provider or ProviderClient()
+    provider = provider or ProviderClient(request_timeout=settings.request_timeout)
     sessions = PgSessionStore(pool)
     tracer = get_tracer(settings)
     admin = admin_auth_from_env()

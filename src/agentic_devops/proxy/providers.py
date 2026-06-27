@@ -62,8 +62,15 @@ def _default_completion_fn(**kwargs: Any) -> Any:
 class ProviderClient:
     """Resolves tiers to models and performs (normalized) completions."""
 
-    def __init__(self, completion_fn: Optional[Callable[..., Any]] = None) -> None:
+    def __init__(
+        self,
+        completion_fn: Optional[Callable[..., Any]] = None,
+        request_timeout: Optional[float] = None,
+    ) -> None:
         self._completion_fn = completion_fn or _default_completion_fn
+        # Bounds every provider call so a stalled (streaming) connection raises
+        # instead of hanging the turn — and its worker thread — forever.
+        self._request_timeout = request_timeout
 
     def complete(
         self,
@@ -82,6 +89,8 @@ class ProviderClient:
             kwargs["api_base"] = tier.api_base
         if tools:
             kwargs["tools"] = tools
+        if self._request_timeout is not None:
+            kwargs["timeout"] = self._request_timeout
 
         raw = self._completion_fn(**kwargs)
         return self._normalize(raw)
@@ -111,6 +120,8 @@ class ProviderClient:
             kwargs["api_base"] = tier.api_base
         if tools:
             kwargs["tools"] = tools
+        if self._request_timeout is not None:
+            kwargs["timeout"] = self._request_timeout
 
         text_parts: list[str] = []
         fragments: dict[int, dict[str, str]] = {}

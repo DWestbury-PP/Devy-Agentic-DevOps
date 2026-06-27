@@ -49,3 +49,26 @@ def test_completion_fn_receives_tier_settings():
     assert captured["max_tokens"] == 128
     assert captured["temperature"] == 0.2
     assert captured["api_base"] == "http://x"
+    assert "timeout" not in captured  # no timeout configured → not passed
+
+
+def test_request_timeout_passed_to_complete_and_stream():
+    captured = {}
+
+    def fake(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    client = ProviderClient(completion_fn=fake, request_timeout=90.0)
+    client.complete([{"role": "user", "content": "hi"}], tier=TIER)
+    assert captured["timeout"] == 90.0
+
+    def fake_stream(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return iter(())  # no chunks; we only assert the kwargs
+
+    client_s = ProviderClient(completion_fn=fake_stream, request_timeout=90.0)
+    list(client_s.stream([{"role": "user", "content": "hi"}], tier=TIER))
+    assert captured["timeout"] == 90.0 and captured["stream"] is True

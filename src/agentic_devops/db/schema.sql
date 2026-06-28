@@ -181,6 +181,39 @@ CREATE TABLE IF NOT EXISTS repo_crawls (
     crawled_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Doc generation (Phase D-2): per-repo docgen checkpoint + the component registry.
+-- repo_docgen.last_doc_sha is the commit the docs were last generated from — the
+-- diff-driven engine skips a repo whose HEAD equals it (zero LLM tokens). scan_brief
+-- is operator guidance fed to the generator. doc_components is one row per discovered
+-- component, tracking its generated doc paths and review status.
+CREATE TABLE IF NOT EXISTS repo_docgen (
+    full_name        TEXT PRIMARY KEY,
+    last_doc_sha     TEXT,
+    default_branch   TEXT,
+    scan_brief       TEXT NOT NULL DEFAULT '',
+    components_doced INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL DEFAULT 'idle',     -- idle | running | error
+    last_run_at      TIMESTAMPTZ,
+    error            TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS doc_components (
+    id                TEXT PRIMARY KEY,
+    full_name         TEXT NOT NULL,
+    component_path    TEXT NOT NULL,                    -- repo-relative dir, '' for repo root
+    component_name    TEXT NOT NULL,
+    kind              TEXT NOT NULL DEFAULT 'manifest', -- dockerfile | manifest | observed
+    arch_doc_path     TEXT,
+    releases_doc_path TEXT,
+    last_doc_sha      TEXT,
+    status            TEXT NOT NULL DEFAULT 'draft',    -- draft | approved
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (full_name, component_path)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_components_repo ON doc_components (full_name);
+
 -- Document import (Phase 9c-2): one row per imported source document. Both the
 -- `ingest` CLI and the UI upload register documents (one unified registry), so
 -- the Knowledge admin page shows every corpus. Chunks link back via

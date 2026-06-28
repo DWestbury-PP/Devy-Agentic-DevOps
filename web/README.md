@@ -55,7 +55,10 @@ unlocks three tabs:
   test it, and crawl a repo's Markdown into the knowledge base on demand. A
   **Scanned repos** table records what's been crawled, when, and at which commit
   (with one-click Rescan). Devy reads repos for triage/RCA via the read-only
-  `repo_*` tools.
+  `repo_*` tools. A **Generate component docs** subsection has Devy read a repo's
+  *code* and author OKF architecture docs (diff-driven — unchanged repos cost
+  nothing; an optional scan brief steers the generator); a status table tracks
+  each component as it completes.
 - **Knowledge** — document import: upload Markdown into a corpus (chunked,
   enriched, embedded), watch ingest jobs, and list / delete documents and corpora.
 

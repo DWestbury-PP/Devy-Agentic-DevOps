@@ -236,6 +236,39 @@ class RepoCrawlInfo(BaseModel):
     chunk_count: int = 0
 
 
+class DocgenTriggerRequest(BaseModel):
+    repo: str  # owner/name
+    components: Optional[list[str]] = None  # limit to these component paths
+    brief: Optional[str] = None             # scan-brief guidance (stored + fed to generator)
+    force: bool = False                     # regenerate even if unchanged
+
+
+class DocgenComponentInfo(BaseModel):
+    component_path: str
+    component_name: str
+    kind: str
+    status: str
+    arch_doc_path: Optional[str] = None
+    last_doc_sha: Optional[str] = None
+
+
+class DocgenInfo(BaseModel):
+    full_name: str
+    last_doc_sha: Optional[str] = None
+    default_branch: Optional[str] = None
+    scan_brief: str = ""
+    components_doced: int = 0
+    status: str = "idle"
+    last_run_at: Optional[str] = None
+    error: str = ""
+    components: list[DocgenComponentInfo] = Field(default_factory=list)
+
+
+class DocgenBrief(BaseModel):
+    repo: str
+    brief: str = ""
+
+
 class UploadResult(BaseModel):
     job: JobInfo
     documents: list[DocumentInfo] = Field(default_factory=list)

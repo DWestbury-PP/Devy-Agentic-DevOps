@@ -160,6 +160,19 @@ knowledge base on demand.
 | `POST /v1/admin/github/crawl` | Body: `repo` (`owner/name`), optional `corpus`/`account`. Fetches the repo's markdown via the API → OKF + redaction ingest → `{ "corpus", "files_ingested", "files_skipped", "files_quarantined", "chunks_written", "secrets_redacted", "commit_sha", "default_branch" }`. Records the crawl (commit + counts) in the scan history. |
 | `GET /v1/admin/github/crawls` | Scan history — one row per crawled repo (most-recent first): the last-run fields (`commit_sha`, `default_branch`, `files_ingested`, `chunks_written`, `files_quarantined`, `secrets_redacted`, `crawled_at`) plus the **live** corpus footprint `doc_count`/`chunk_count` (current totals, computed per request, not last-run deltas). Powers the "Scanned repos" table. |
 
+#### Doc generation — `/v1/admin/github/docgen` (Phase D-2)
+
+Devy reads a repo's **code** and writes OKF architecture docs (one per discovered
+component), redacts them before disk, and ingests them into a `gen:<repo>` corpus.
+Diff-driven: a repo unchanged since the last run is skipped (zero model calls).
+Gated by `knowledge.docgen_enabled` (default off → `400`).
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `POST /v1/admin/github/docgen` | Trigger. Body: `repo` (`owner/name`, required), optional `components` (limit to these paths), `brief` (scan guidance, persisted + fed to the generator), `force` (regenerate even if unchanged). Generation is many sequential model calls, so it runs in a **background thread** — returns `{ "repo", "started": true }` immediately; poll the GET below for progress. `400` if disabled, `404` if no GitHub account owns the repo. |
+| `GET /v1/admin/github/docgen` | Per-repo status + components: `full_name`, `status` (`idle`/`running`/`error`), `last_doc_sha`, `scan_brief`, `components_doced`, `error`, and `components[]` (`component_path`, `component_name`, `kind`, `status`, `arch_doc_path`, `last_doc_sha`). Powers the generated-docs table. |
+| `PUT /v1/admin/github/docgen/brief` | Persist a repo's scan brief without triggering a run. Body: `repo`, `brief`. Returns the updated record. |
+
 ### Document import — `/v1/admin/documents`, `/jobs`, `/corpora`
 
 UI-driven markdown ingest into the hybrid knowledge base (chunk → context →

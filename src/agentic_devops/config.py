@@ -133,6 +133,15 @@ class KnowledgeConfig(BaseModel):
     redaction_enabled: bool = True
     redaction_mode: str = "fail_closed"  # fail_closed | best_effort
     redaction_entropy: bool = True
+    # LLM documentation generation (Phase D-2): synthesize OKF component docs from
+    # code. Diff-driven (skips unchanged repos). Generated markdown is written under
+    # `docgen_output_dir` (a durable bindmount/volume — never overlay FS) and ingested
+    # into a `gen:<repo>` corpus. The reduce/synthesis step uses `docgen_tier`
+    # (Sonnet-level minimum — quality is the primary hallucination control).
+    docgen_enabled: bool = False
+    docgen_output_dir: str = "docs-corpus"
+    docgen_tier: str = "balanced"  # Sonnet-level minimum; operator may map to a `deep` tier
+    docgen_max_files: int = 40  # signal-file cap per component (cost guard)
 
 
 def _default_tiers() -> dict[str, ModelTier]:

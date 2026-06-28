@@ -1,17 +1,41 @@
-"""Doc-generation deterministic spine (Phase D-2-1): component discovery, diff
-mapping, and signal selection (pure, no LLM/network), plus the checkpoint +
-component stores on the live DB."""
+"""Doc generation (Phase D-2-1): the deterministic spine (component discovery, diff
+mapping, signal selection, OKF assembly — pure), the checkpoint + component stores,
+and the end-to-end run against a fake client + fake provider."""
+
+import hashlib
+from types import SimpleNamespace
 
 import pytest
 
+from agentic_devops.config import ModelTier
 from agentic_devops.knowledge.docgen import (
     Component,
+    arch_doc_path,
+    architecture_frontmatter,
+    architecture_prompt,
+    assemble_okf,
     discover_components,
     head_is_current,
     map_changes,
     select_signal_files,
 )
+from agentic_devops.knowledge.embeddings import Embedder
+from agentic_devops.knowledge.redaction import Redactor
+from agentic_devops.knowledge.store import PgVectorStore
+from agentic_devops.proxy.docgen_run import run_docgen
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
+
+_DIM = 64
+
+
+def _fake_embed(texts, model, api_base):
+    out = []
+    for t in texts:
+        v = [0.0] * _DIM
+        for tok in t.lower().split():
+            v[int(hashlib.sha256(tok.encode()).hexdigest(), 16) % _DIM] += 1.0
+        out.append(v)
+    return out
 
 
 # -- component discovery ----------------------------------------------------
@@ -164,3 +188,119 @@ def test_doc_component_status_change(pool):
     store.upsert("me/api", Component(path="", name="api", kind="observed"))
     store.set_status("me/api", "", "approved")
     assert store.get("me/api", "").status == "approved"
+
+
+# -- OKF assembly + prompt (pure) -------------------------------------------
+def test_assemble_okf_requires_type():
+    with pytest.raises(ValueError):
+        assemble_okf({"title": "x"}, "body")
+
+
+def test_assemble_okf_roundtrips_frontmatter():
+    import yaml
+    from agentic_devops.knowledge.frontmatter import parse_frontmatter
+    doc = assemble_okf({"type": "architecture", "tags": ["a", "b"]}, "## Hi\n\ntext")
+    fm, body = parse_frontmatter(doc)
+    assert fm["type"] == "architecture" and fm["tags"] == ["a", "b"]
+    assert body.strip().startswith("## Hi")
+
+
+def test_architecture_frontmatter_carries_provenance():
+    fm = architecture_frontmatter(
+        "me/api", Component("svc", "svc", "dockerfile"),
+        commit_sha="abc123", model="anthropic/x", generated_at="2026-06-28T00:00:00Z",
+    )
+    assert fm["type"] == "architecture" and fm["generated"] is True
+    assert fm["source_commit"] == "abc123" and fm["resource"] == "me/api:svc"
+
+
+def test_architecture_prompt_includes_brief_files_and_grounding():
+    comp = Component("svc", "svc", "dockerfile")
+    p = architecture_prompt("me/api", comp, {"svc/Dockerfile": "FROM python"}, scan_brief="core/ is the engine")
+    assert "core/ is the engine" in p          # operator brief threaded in
+    assert "svc/Dockerfile" in p and "FROM python" in p
+    assert "Not evident" in p                  # anti-hallucination instruction present
+
+
+def test_arch_doc_path():
+    assert arch_doc_path("me/api", Component("svc", "svc", "x")) == "me/api/svc/architecture.md"
+    assert arch_doc_path("me/api", Component("", "api", "x")) == "me/api/architecture.md"
+
+
+# -- end-to-end run (fake client + fake provider) ---------------------------
+class _DocgenClient:
+    def __init__(self, files):
+        self._files = files
+
+    def get_repo(self, token, full_name):
+        return {"default_branch": "main"}
+
+    def list_commits(self, token, full_name, **kw):
+        return [{"sha": "headsha123456"}]
+
+    def get_tree(self, token, full_name, ref, recursive=True):
+        return [{"type": "blob", "path": p} for p in self._files]
+
+    def get_file(self, token, full_name, path, ref=None):
+        return self._files[path]
+
+    def compare(self, token, full_name, base, head):
+        return {"files": []}
+
+
+def _provider(body):
+    return SimpleNamespace(complete=lambda messages, tier: SimpleNamespace(text=body))
+
+
+def _run(pool, tmp_path, client, provider, **kw):
+    return run_docgen(
+        client, "tok", "me/api",
+        repo_store=RepoDocgenStore(pool), component_store=DocComponentStore(pool),
+        kb_store=PgVectorStore(pool), embedder=Embedder(model="fake", embed_fn=_fake_embed),
+        provider=provider, tier=ModelTier(model="fake/m"),
+        output_dir=tmp_path, generated_at="2026-06-28T00:00:00Z", redactor=Redactor(),
+        **kw,
+    )
+
+
+def test_run_docgen_end_to_end(pool, tmp_path):
+    client = _DocgenClient({
+        "services/api/Dockerfile": "FROM python:3.12\nEXPOSE 8080",
+        "services/api/main.py": "app.run(port=8080)",
+    })
+    body = "## Component & services\n\nThe API service handles orders on port 8080.\n"
+    out = _run(pool, tmp_path, client, _provider(body))
+
+    assert out.skipped is False
+    assert out.components_generated == ["services/api"]
+    assert out.chunks_written > 0 and out.head_sha == "headsha123456"
+
+    doc = (tmp_path / "me/api/services/api/architecture.md").read_text()
+    assert doc.startswith("---") and "type: architecture" in doc and "generated: true" in doc
+    assert "port 8080" in doc
+
+    # checkpoint advanced + component registered
+    assert RepoDocgenStore(pool).get("me/api").last_doc_sha == "headsha123456"
+    assert DocComponentStore(pool).get("me/api", "services/api").arch_doc_path.endswith("architecture.md")
+
+    # second run: unchanged HEAD → skipped (zero provider calls)
+    out2 = _run(pool, tmp_path, client, _provider(body))
+    assert out2.skipped is True
+
+
+def test_run_docgen_redacts_generated_secret_before_disk(pool, tmp_path):
+    client = _DocgenClient({"svc/Dockerfile": "FROM python"})
+    # The model "leaks" an AWS key in its output — must not reach disk verbatim.
+    body = "## Secret handling\n\nUses key AKIAIOSFODNN7EXAMPLE for S3.\n"
+    out = _run(pool, tmp_path, client, _provider(body))
+    assert out.components_generated == ["svc"]
+    doc = (tmp_path / "me/api/svc/architecture.md").read_text()
+    assert "AKIAIOSFODNN7EXAMPLE" not in doc and "«REDACTED" in doc
+
+
+def test_run_docgen_only_filters_components(pool, tmp_path):
+    client = _DocgenClient({
+        "a/Dockerfile": "FROM x", "b/Dockerfile": "FROM y",
+    })
+    out = _run(pool, tmp_path, client, _provider("## Component & services\n\nX."), only=["a"])
+    assert out.components_generated == ["a"]  # b skipped by the filter

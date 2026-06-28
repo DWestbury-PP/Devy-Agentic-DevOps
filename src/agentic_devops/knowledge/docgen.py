@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import posixpath
 from dataclasses import dataclass, field
+from typing import Any
+
+import yaml
 
 # --- component-discovery signals ------------------------------------------
 
@@ -214,3 +217,98 @@ def head_is_current(last_doc_sha: str | None, head_sha: str | None) -> bool:
     """True when the repo is unchanged since the last docgen (skip → zero tokens).
     A missing checkpoint or HEAD is never 'current' (force a run)."""
     return bool(last_doc_sha) and bool(head_sha) and last_doc_sha == head_sha
+
+
+# --- OKF assembly + synthesis prompt (pure) --------------------------------
+
+_PER_FILE_CHARS = 3500   # cap each signal file in the prompt
+_TOTAL_FILE_CHARS = 60000  # cap the whole signal bundle (the root component guard)
+
+
+def arch_doc_path(full_name: str, component: Component) -> str:
+    """Repo-relative path of a component's architecture doc within the docs corpus."""
+    base = posixpath.join(full_name, component.path) if component.path else full_name
+    return posixpath.join(base, "architecture.md")
+
+
+def architecture_frontmatter(
+    full_name: str, component: Component, *, commit_sha: str, model: str, generated_at: str,
+) -> dict[str, Any]:
+    """OKF frontmatter for a generated architecture doc — loud provenance, `type`
+    present (producer conformance), `resource` binding the doc to the component."""
+    return {
+        "type": "architecture",
+        "title": f"{component.label} — Architecture",
+        "resource": f"{full_name}:{component.path}" if component.path else full_name,
+        "generated": True,
+        "source_commit": commit_sha,
+        "model": model,
+        "generated_at": generated_at,
+        "status": "draft",
+        "tags": [full_name, component.label, "generated", "architecture"],
+    }
+
+
+def assemble_okf(frontmatter: dict[str, Any], body: str) -> str:
+    """A complete OKF markdown doc: a YAML frontmatter block + the body. Producer
+    conformance: a non-empty `type` is required (raises if absent)."""
+    if not frontmatter.get("type"):
+        raise ValueError("OKF doc requires a non-empty 'type'")
+    fm = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
+    return f"---\n{fm}\n---\n\n{body.strip()}\n"
+
+
+_ARCH_INSTRUCTION = """\
+You are a senior SRE documenting a software component for an operational knowledge \
+base used during incident response. Produce a precise, factual **architecture** \
+document in Markdown.
+
+STRICT GROUNDING RULES (this is for incident response — wrong facts are dangerous):
+- Use ONLY the files provided below. Do not invent ports, endpoints, dependencies, \
+or secrets.
+- When something is not evidenced by the files, write "Not evident from the \
+available files." — do NOT guess.
+- Never reproduce secret values. Describe only the NAME and SOURCE of a secret \
+(e.g. "expects DATABASE_URL from the environment").
+
+Output ONLY the Markdown body (no frontmatter, no surrounding code fence). Use these \
+H2 sections, omitting a section only if you have a "Not evident" note for it:
+
+## Component & services
+## Ports & endpoints
+## External services
+## Architecture & dependencies
+## Build toolchain
+## Deployment
+## Secret handling
+## Informed by
+(list the files you used)
+"""
+
+
+def architecture_prompt(
+    full_name: str, component: Component, signal_files: dict[str, str], *, scan_brief: str = "",
+) -> str:
+    """Build the synthesis prompt: instruction + optional operator scan brief +
+    the bounded signal files (path-labeled, per-file and total caps applied)."""
+    parts = [_ARCH_INSTRUCTION, f"\nREPOSITORY: {full_name}\nCOMPONENT: {component.label}"]
+    if component.path:
+        parts.append(f"COMPONENT PATH: {component.path}/")
+    if scan_brief.strip():
+        parts.append(
+            "\nOPERATOR GUIDANCE (authoritative context about this repo — trust it):\n"
+            + scan_brief.strip()
+        )
+    parts.append("\n--- FILES ---")
+    budget = _TOTAL_FILE_CHARS
+    for path, content in signal_files.items():
+        if budget <= 0:
+            parts.append(f"\n(+ more files omitted for length)")
+            break
+        snippet = content[:_PER_FILE_CHARS]
+        if len(content) > _PER_FILE_CHARS:
+            snippet += "\n… (truncated)"
+        snippet = snippet[:budget]
+        budget -= len(snippet)
+        parts.append(f"\n### FILE: {path}\n```\n{snippet}\n```")
+    return "\n".join(parts)

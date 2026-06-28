@@ -154,4 +154,7 @@ CLAUDE.md
 
 # Go TUI build artifacts
 /tui/ask
-/tui/ask-* 
+/tui/ask-*
+
+# Generated component docs (Phase D-2) — Devy authors these; not source
+/docs-corpus/ 

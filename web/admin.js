@@ -240,6 +240,7 @@ async function renderRepos() {
     accounts.forEach((a) => body.appendChild(accountRow(a)));
   }
   renderCrawls();
+  renderDocgen();
 }
 
 async function renderCrawls() {
@@ -440,6 +441,116 @@ $("crawl-form").addEventListener("submit", (e) => {
     return;
   }
   doCrawl(repo, corpus);
+});
+
+/* ---------- doc generation (Phase D-2) ---------- */
+let docgenPolling = false;
+
+async function renderDocgen() {
+  const body = $("docgen-body");
+  if (!body) return;
+  const msg = $("docgen-list-msg");
+  let repos = [];
+  try {
+    const r = await fetch("/v1/admin/github/docgen", { headers: authHeaders() });
+    if (!r.ok) { msg.textContent = `Couldn't load generated docs (${r.status}).`; return; }
+    repos = await r.json();
+  } catch (_) {
+    msg.textContent = "Couldn't reach the proxy.";
+    return;
+  }
+  body.innerHTML = "";
+  if (!repos.length) {
+    msg.textContent = "No docs generated yet — generate one above.";
+    return;
+  }
+  msg.textContent = "";
+  let anyRunning = false;
+  repos.forEach((repo) => {
+    if (repo.status === "running") anyRunning = true;
+    if (!repo.components.length) {
+      // A repo with status but no components yet (e.g. first run in flight).
+      body.appendChild(docgenRow(repo, null));
+    } else {
+      repo.components.forEach((c) => body.appendChild(docgenRow(repo, c)));
+    }
+  });
+  // If a generation is in flight, keep refreshing until it settles.
+  if (anyRunning && !docgenPolling) {
+    docgenPolling = true;
+    setTimeout(() => { docgenPolling = false; renderDocgen(); }, 4000);
+  }
+}
+
+function docgenRow(repo, c) {
+  const tr = el("tr");
+  tr.appendChild(el("td", null, repo.full_name));
+  tr.appendChild(el("td", null, c ? (c.component_name || c.component_path || "root") : "—"));
+  tr.appendChild(el("td", null, c ? c.kind : "—"));
+  const st = el("td");
+  const status = (c && c.status) || repo.status || "—";
+  const cls = status === "error" ? "failed" : status === "running" ? "processing"
+            : status === "idle" || status === "ok" || status === "ready" ? "ready" : "";
+  st.appendChild(el("span", "pill " + cls, status));
+  if (repo.status === "error" && repo.error) st.title = repo.error;
+  tr.appendChild(st);
+  const sha = el("td");
+  const commit = (c && c.last_doc_sha) || repo.last_doc_sha;
+  if (commit) {
+    const code = el("span", "pill", commit.slice(0, 7));
+    code.title = commit;
+    sha.appendChild(code);
+  } else {
+    sha.textContent = "—";
+  }
+  tr.appendChild(sha);
+  return tr;
+}
+
+async function doDocgen(repo, brief, force) {
+  const msg = $("docgen-msg");
+  const btn = $("docgen-btn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Generating…';
+  msg.className = "msg";
+  msg.textContent = `Generating docs for ${repo} — Devy is reading the code (this runs in the background; the table updates as components complete)…`;
+  try {
+    const payload = { repo, force: !!force };
+    if (brief) payload.brief = brief;
+    const r = await fetch("/v1/admin/github/docgen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msg.className = "msg err";
+      msg.textContent = `Generation failed to start: ${d.detail || r.status}`;
+      return;
+    }
+    msg.textContent = `Generation started for ${repo}. Watch the status column below.`;
+    renderDocgen();
+  } catch (_) {
+    msg.className = "msg err";
+    msg.textContent = "Couldn't reach the proxy.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Generate docs";
+  }
+}
+
+$("docgen-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const repo = $("docgen-repo").value.trim();
+  const brief = $("docgen-brief").value.trim();
+  const force = $("docgen-force").checked;
+  if (!repo) {
+    const msg = $("docgen-msg");
+    msg.className = "msg err";
+    msg.textContent = "Repo (owner/name) is required.";
+    return;
+  }
+  doDocgen(repo, brief, force);
 });
 
 /* ---------- knowledge (document import) ---------- */

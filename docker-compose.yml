@@ -29,6 +29,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://agentic:agentic@postgres:5432/agentic}
     volumes:
       - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"
+      # Generated component docs (Phase D-2). A durable bind mount, NOT the
+      # ephemeral container overlay FS — the docs Devy authors survive restarts
+      # and are inspectable/editable on the host. Matches the default
+      # knowledge.docgen_output_dir ("docs-corpus", relative to WORKDIR /app).
+      - "${AGENTIC_DEVOPS_DOCS_DIR:-./docs-corpus}:/app/docs-corpus"
     depends_on:
       host-mcp:
         condition: service_healthy

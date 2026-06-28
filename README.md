@@ -201,8 +201,19 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
 - **MCP**: mount any MCP server, plus the deployable **safe-allowlist host MCP**
   (host + Docker diagnostics, no shell, profile-gated, bearer auth).
 - **Knowledge base**: enriched ingest (deterministic structural context, optional
-  LLM synopsis) → **hybrid** `search_knowledge` (vector + full-text, RRF-fused)
-  with metadata-rich citations.
+  LLM synopsis) of **OKF**-formatted Markdown (YAML frontmatter → metadata, filters,
+  and a `memory_index` orientation tool) → **hybrid** `search_knowledge` (vector +
+  full-text, RRF-fused) with metadata-rich citations.
+- **Evolving fact memory**: a bi-temporal fact tier (`recall_facts` / `memory_add`)
+  with supersession and *as-of* queries — durable, correctable knowledge, distinct
+  from conversation recall.
+- **Secret redaction at ingest** (the gate): high-confidence credentials are
+  redacted inline and ambiguous high-entropy blobs are **fail-closed quarantined**,
+  before any content reaches the database.
+- **Connectors — read-only by design**: a **GitHub** connector (encrypted read-only
+  PAT → repo discovery, `repo_*` code/diff/history tools, and Markdown crawl into the
+  KB), plus **LLM doc generation** — Devy reads a repo's *code* and writes OKF
+  architecture docs (diff-driven, redacted-before-disk, ingested per repo).
 - **Incident RCA** as an adaptive mode of reasoning + a `correlate_timeline` helper.
 - **Surfaces**: web chat (with history slide-out), native `ask` TUI, one-shot HTTP.
 - **Persistence**: Postgres + pgvector (bundled or managed/RDS), self-bootstrapping.
@@ -210,8 +221,9 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
   compaction, and `recall_history` for cross-conversation recall.
 - **Admin control plane** (`/v1/admin/*` + admin UI, behind an interim password):
   a DB-backed **host registry** (the fleet Devy reaches via host MCP, with
-  per-host tokens encrypted at rest) and **document import** (UI upload → async,
-  enriched ingestion into the hybrid knowledge base).
+  per-host tokens encrypted at rest), **document import** (UI upload → async,
+  enriched ingestion into the hybrid knowledge base), and **GitHub repos + doc
+  generation** management.
 
 **Next** — a dependency-ordered chain from *foundation* → *expanded reach* → *the
 leap from observing to acting*. Full breakdown (with the "why it builds on the last"
@@ -224,12 +236,13 @@ for each): **[Roadmap](docs/plans/roadmap.md)**.
    calls, and a golden-set eval + feedback harness as a quality gate.
 3. **Extended retrieval** — new `find_tools` backends fused into hybrid search: file,
    structured/JSONB, web (Tavily/Brave), optional graph; plus scheduled re-ingest.
-4. **Reach** — hardened **bring-your-own MCP**, and observability adapters: **Grafana**,
-   **AWS CloudWatch / CloudTrail**, AWS auto-discovery into the host registry.
+4. **Reach** — hardened **bring-your-own MCP**, and **read-only AWS connectors**
+   (building on the GitHub connector): bulk infra doc-gen plus interactive
+   **CloudWatch / CloudTrail** for RCA, and AWS auto-discovery into the host registry.
 5. **DB-broker MCP** — a fixed, allow-listed query plane (the read-side twin of the
    host MCP) — never raw database access.
 6. **Hosting hardening** — secrets backend (Vault / AWS Secrets Manager), cost/rate
-   budgets, PII/secret redaction, and a unified, exportable audit trail.
+   budgets, and a unified, exportable audit trail.
 7. **Guarded actions** — a safe write path: Devy *proposes* a remediation, a human
    *approves* it in the UI (gated by profile + RBAC, fully audited).
 8. **Proactive & ChatOps** — alert-webhook-triggered auto-RCA and a Slack/Teams

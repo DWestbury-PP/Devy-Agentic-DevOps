@@ -44,6 +44,10 @@ from agentic_devops.proxy.schemas import (
     HostCreate,
     HostInfo,
     HostUpdate,
+    DocgenBrief,
+    DocgenInfo,
+    DocgenComponentInfo,
+    DocgenTriggerRequest,
     JobInfo,
     RepoCrawlInfo,
     RepoCrawlRequest,
@@ -58,6 +62,7 @@ from agentic_devops.proxy.schemas import (
 from agentic_devops.proxy.auth import admin_auth_from_env
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.encryption import cipher_from_env
+from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
 from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.proxy.github_client import GitHubClient, GitHubError
 from agentic_devops.proxy.host_mcp_client import HostMCPClient
@@ -200,6 +205,8 @@ def create_app(
     # GitHub connector (Phase D-1): encrypted-PAT account registry + read-only client.
     github_store = GitHubAccountStore(pool, cipher)
     repo_crawl_store = RepoCrawlStore(pool)
+    repo_docgen_store = RepoDocgenStore(pool)
+    doc_component_store = DocComponentStore(pool)
     github_client = GitHubClient()
 
     # Document import (control plane): registry + jobs + the in-process ingest
@@ -497,6 +504,80 @@ def create_app(
             chunks_written=stats.chunks_written, secrets_redacted=stats.secrets_redacted,
             commit_sha=outcome.commit_sha, default_branch=outcome.ref,
         )
+
+    # ---- Doc generation (Phase D-2) ----
+    def _docgen_info(rec: Any, components: list[Any]) -> DocgenInfo:
+        return DocgenInfo(
+            full_name=rec.full_name, last_doc_sha=rec.last_doc_sha,
+            default_branch=rec.default_branch, scan_brief=rec.scan_brief,
+            components_doced=rec.components_doced, status=rec.status,
+            last_run_at=rec.last_run_at, error=rec.error,
+            components=[
+                DocgenComponentInfo(
+                    component_path=c.component_path, component_name=c.component_name,
+                    kind=c.kind, status=c.status, arch_doc_path=c.arch_doc_path,
+                    last_doc_sha=c.last_doc_sha,
+                )
+                for c in components
+            ],
+        )
+
+    @app.get("/v1/admin/github/docgen", response_model=list[DocgenInfo])
+    def list_docgen(_: dict = Depends(require_admin)) -> list[DocgenInfo]:
+        return [
+            _docgen_info(rec, doc_component_store.list(rec.full_name))
+            for rec in repo_docgen_store.list()
+        ]
+
+    @app.put("/v1/admin/github/docgen/brief", response_model=DocgenInfo)
+    def set_docgen_brief(body: DocgenBrief, _: dict = Depends(require_admin)) -> DocgenInfo:
+        rec = repo_docgen_store.set_brief(body.repo, body.brief)
+        return _docgen_info(rec, doc_component_store.list(rec.full_name))
+
+    @app.post("/v1/admin/github/docgen")
+    async def trigger_docgen(body: DocgenTriggerRequest, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        from agentic_devops.proxy.docgen_run import run_docgen
+
+        if not settings.knowledge.docgen_enabled:
+            raise HTTPException(status_code=400, detail="doc generation is disabled (knowledge.docgen_enabled)")
+        resolved = await run_in_threadpool(github_store.resolve_for_repo, body.repo)
+        if resolved is None or not resolved.token:
+            raise HTTPException(status_code=404, detail="no matching GitHub account for this repo")
+        try:
+            tier = settings.resolve_tier(settings.knowledge.docgen_tier)
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if body.brief is not None:
+            await run_in_threadpool(repo_docgen_store.set_brief, body.repo, body.brief)
+        token = resolved.token
+        account_id = resolved.account.id
+
+        # Generation is many sequential model calls — run it in the background and
+        # let the UI poll GET /docgen (status running → idle); never block the request.
+        await run_in_threadpool(repo_docgen_store.set_status, body.repo, "running")
+
+        def work() -> None:
+            try:
+                run_docgen(
+                    github_client, token, body.repo,
+                    repo_store=repo_docgen_store, component_store=doc_component_store,
+                    kb_store=kb_store, embedder=build_embedder(settings.knowledge),
+                    provider=provider, tier=tier,
+                    output_dir=Path(settings.knowledge.docgen_output_dir),
+                    generated_at=datetime.now(timezone.utc).isoformat(),
+                    redactor=redactor, enricher=build_enricher(settings),
+                    document_store=document_store, only=body.components or None,
+                    max_files=settings.knowledge.docgen_max_files, force=body.force,
+                )
+                github_store.touch(account_id, "ok")
+            except Exception:  # run_docgen records error status itself; flag the account
+                github_store.touch(account_id, "error")
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"repo": body.repo, "started": True}
 
     @app.get("/v1/admin/github/crawls", response_model=list[RepoCrawlInfo])
     def list_repo_crawls(_: dict = Depends(require_admin)) -> list[RepoCrawlInfo]:

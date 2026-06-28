@@ -182,6 +182,79 @@ def crawl_repo(
     )
 
 
+@app.command("docgen")
+def docgen(
+    repo: str = typer.Argument(..., help="Repository as owner/name."),
+    component: list[str] = typer.Option(None, "--component", help="Limit to these component path(s); repeatable."),
+    brief: Optional[str] = typer.Option(None, "--brief", help="Scan-brief guidance to store + feed the generator."),
+    token: Optional[str] = typer.Option(None, "--token", help="Read-only GitHub PAT (or set GITHUB_TOKEN)."),
+    force: bool = typer.Option(False, "--force", help="Regenerate even if the repo is unchanged since last run."),
+) -> None:
+    """Generate OKF architecture docs from a repo's code (Phase D-2).
+
+    Diff-driven: skips an unchanged repo, regenerates only touched components.
+    Writes redacted OKF markdown under `knowledge.docgen_output_dir` and ingests it
+    into a `gen:<repo>` corpus. Read-only PAT from --token or GITHUB_TOKEN.
+    """
+    import os
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from agentic_devops.config import load_settings
+    from agentic_devops.db import apply_schema, get_pool
+    from agentic_devops.knowledge.factory import (
+        build_embedder, build_enricher, build_redactor, build_store,
+    )
+    from agentic_devops.proxy.documents import DocumentStore
+    from agentic_devops.proxy.docgen_run import run_docgen
+    from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
+    from agentic_devops.proxy.github_client import GitHubClient, GitHubError
+    from agentic_devops.proxy.providers import ProviderClient
+
+    settings = load_settings()
+    pat = token or os.environ.get("GITHUB_TOKEN")
+    if not pat:
+        typer.echo("A read-only GitHub PAT is required (--token or GITHUB_TOKEN).")
+        raise typer.Exit(code=1)
+    try:
+        tier = settings.resolve_tier(settings.knowledge.docgen_tier)
+    except KeyError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+
+    apply_schema(settings.database.url)
+    pool = get_pool(settings.database.url)
+    out_dir = Path(settings.knowledge.docgen_output_dir)
+    typer.echo(f"Generating docs for {repo} (tier: {tier.model}, → {out_dir}/) …")
+    try:
+        outcome = run_docgen(
+            GitHubClient(), pat, repo,
+            repo_store=RepoDocgenStore(pool), component_store=DocComponentStore(pool),
+            kb_store=build_store(settings.database), embedder=build_embedder(settings.knowledge),
+            provider=ProviderClient(request_timeout=settings.request_timeout), tier=tier,
+            output_dir=out_dir, generated_at=datetime.now(timezone.utc).isoformat(),
+            redactor=build_redactor(settings.knowledge), enricher=build_enricher(settings),
+            document_store=DocumentStore(pool), scan_brief=brief,
+            only=list(component) if component else None,
+            max_files=settings.knowledge.docgen_max_files, force=force,
+        )
+    except GitHubError as exc:
+        typer.echo(f"GitHub error: {exc}")
+        raise typer.Exit(code=1)
+
+    if outcome.skipped:
+        typer.echo(f"Unchanged since last run ({(outcome.head_sha or '')[:7]}) — skipped. Use --force to regenerate.")
+        return
+    q = f", {len(outcome.components_quarantined)} quarantined" if outcome.components_quarantined else ""
+    typer.echo(
+        f"Corpus '{outcome.corpus}' @ {(outcome.head_sha or '')[:7]}: "
+        f"{len(outcome.components_generated)}/{outcome.components_total} components generated, "
+        f"{outcome.chunks_written} chunks{q}."
+    )
+    if outcome.components_generated:
+        typer.echo("  generated: " + ", ".join(c or "(root)" for c in outcome.components_generated))
+
+
 db_app = typer.Typer(add_completion=False, help="Database bootstrap (Postgres + pgvector).")
 app.add_typer(db_app, name="db")
 

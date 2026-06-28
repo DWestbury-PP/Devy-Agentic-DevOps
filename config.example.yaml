@@ -97,6 +97,12 @@ tiers:
 #   contextual_enabled: false   # opt-in fast-tier per-chunk synopsis; off by default
 #                               # (the deterministic title>heading lineage is free either way)
 #   contextual_max_doc_chars: 8000   # cap on doc text fed to the synopsis step
+#   docgen_enabled: false       # LLM doc-generation (Phase D-2): synthesize OKF
+#                               # component docs from code (diff-driven)
+#   docgen_output_dir: docs-corpus   # durable bindmount/volume (NEVER overlay FS)
+#   docgen_tier: balanced       # synthesis tier — Sonnet-level minimum (quality is
+#                               # the primary hallucination control); map e.g. deep
+#   docgen_max_files: 40        # signal-file cap per component (cost guard)
 #   embedding:
 #     model: openai/text-embedding-3-small   # default (needs OPENAI_API_KEY)
 #     # Local, zero-cost alternative (run Ollama, `ollama pull nomic-embed-text`):

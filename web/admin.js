@@ -718,4 +718,57 @@ function confirmDeleteDoc(wrap, id) {
   wrap.append(yes, no);
 }
 
+/* ---------- sortable tables ----------
+ * Click a header to sort the rows by that column (toggle asc/desc); numeric
+ * columns sort numerically. Decoupled from the render functions: a per-table
+ * MutationObserver re-applies the active sort whenever the body re-renders
+ * (polling, filtering, deletes), so sort order survives a refresh. Headers stay
+ * sticky via CSS while the body scrolls. */
+function makeSortable(table) {
+  const head = table.tHead && table.tHead.rows[0];
+  const tbody = table.tBodies[0];
+  if (!head || !tbody) return;
+  const ths = Array.from(head.cells);
+  const state = { col: -1, dir: 1 };
+
+  const text = (row, i) => (row.cells[i] ? row.cells[i].textContent.trim() : "");
+  const isNum = (s) => s !== "" && /\d/.test(s) && !isNaN(parseFloat(s.replace(/[^0-9.\-]/g, "")));
+  const toNum = (s) => parseFloat(s.replace(/[^0-9.\-]/g, ""));
+
+  function apply() {
+    if (state.col < 0) return;
+    obs.disconnect(); // our own re-append mutates the body — don't observe ourselves
+    const i = state.col;
+    Array.from(tbody.rows)
+      .sort((a, b) => {
+        const av = text(a, i), bv = text(b, i);
+        const r = isNum(av) && isNum(bv)
+          ? toNum(av) - toNum(bv)
+          : av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
+        return r * state.dir;
+      })
+      .forEach((r) => tbody.appendChild(r));
+    obs.takeRecords();
+    obs.observe(tbody, { childList: true });
+  }
+
+  const obs = new MutationObserver(apply);
+
+  ths.forEach((th, i) => {
+    if (!th.textContent.trim()) return; // skip the trailing actions column
+    th.classList.add("sortable");
+    th.addEventListener("click", () => {
+      state.dir = state.col === i ? -state.dir : 1;
+      state.col = i;
+      ths.forEach((h) => h.removeAttribute("aria-sort"));
+      th.setAttribute("aria-sort", state.dir > 0 ? "ascending" : "descending");
+      apply();
+    });
+  });
+
+  obs.observe(tbody, { childList: true });
+}
+
+document.querySelectorAll("table.tbl").forEach(makeSortable);
+
 checkSession();

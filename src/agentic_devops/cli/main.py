@@ -309,13 +309,51 @@ def admin_set_password(
     typer.echo("\nUntil both are set, the admin plane stays disabled (endpoints return 503).")
 
 
-@admin_app.command("gen-key")
-def admin_gen_key() -> None:
-    """Generate a Fernet encryption key for per-host MCP tokens (host registry)."""
-    from cryptography.fernet import Fernet
+# -- secrets (S-1): manage the unified secrets manager (LocalStack/AWS SM) --------
+secrets_app = typer.Typer(add_completion=False, help="Secrets backend (dev=LocalStack / prod=AWS SM).")
+app.add_typer(secrets_app, name="secrets")
 
-    typer.echo("Add this to your .env (encrypts per-host tokens at rest):\n")
-    typer.echo(f"DEVY_ENCRYPTION_KEY={Fernet.generate_key().decode()}")
+
+@secrets_app.command("list")
+def secrets_list() -> None:
+    """List secret names known to Devy and whether each is loaded (never the value)."""
+    from agentic_devops.config import load_settings
+    from agentic_devops.db import get_pool
+    from agentic_devops.proxy.github import GitHubAccountStore
+    from agentic_devops.proxy.hosts import HostStore
+    from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
+
+    import os as _os
+
+    settings = load_settings()
+    secrets = build_secrets_provider(settings)
+    endpoint = settings.secrets.endpoint_url or _os.environ.get("AWS_ENDPOINT_URL") or "aws"
+    typer.echo(f"mode={settings.secrets.mode}  endpoint={endpoint}  "
+               f"writable={secrets.writable}  reachable={secrets.health()}\n")
+    refs: list[tuple[str, str]] = [(r, "provider key") for r in provider_key_refs(settings.secrets.namespace)]
+    try:
+        pool = get_pool(settings.database.url)
+        refs += [(a.secret_ref, f"github:{a.label}") for a in GitHubAccountStore(pool, secrets).list() if a.secret_ref]
+        refs += [(h.secret_ref, f"host:{h.fqdn}") for h in HostStore(pool, secrets).list() if h.secret_ref]
+    except Exception as exc:  # noqa: BLE001 — DB optional for a bare secrets check
+        typer.echo(f"(registry unavailable: {exc})\n")
+    for ref, kind in refs:
+        mark = "✓ loaded" if secrets.exists(ref) else "· empty"
+        typer.echo(f"  {mark:10} {ref:40} {kind}")
+
+
+@secrets_app.command("set")
+def secrets_set(ref: str = typer.Argument(...), value: str = typer.Argument(...)) -> None:
+    """Set a secret by name (dev only — prod is provisioned out-of-band)."""
+    from agentic_devops.config import load_settings
+    from agentic_devops.proxy.secrets import build_secrets_provider
+
+    secrets = build_secrets_provider(load_settings())
+    if not secrets.writable:
+        typer.echo("Refused: secrets are read-only in prod mode (provision via your IaC).")
+        raise typer.Exit(code=1)
+    secrets.set(ref, value)
+    typer.echo(f"set {ref}")
 
 
 if __name__ == "__main__":

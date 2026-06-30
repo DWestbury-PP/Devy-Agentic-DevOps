@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 from dataclasses import asdict
 from typing import Any, Optional
@@ -61,7 +62,7 @@ from agentic_devops.proxy.schemas import (
 )
 from agentic_devops.proxy.auth import admin_auth_from_env
 from agentic_devops.proxy.documents import DocumentStore, JobStore
-from agentic_devops.proxy.encryption import cipher_from_env
+from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
 from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.proxy.github_client import GitHubClient, GitHubError
@@ -197,13 +198,28 @@ def create_app(
         )
     pool = get_pool(settings.database.url)
 
-    # Host registry (control plane): encrypted-token store + on-demand MCP caller.
-    cipher = cipher_from_env()
-    host_store = HostStore(pool, cipher)
+    # Secrets backend (Phase S-1): one AWS SM API surface (LocalStack in dev, real
+    # AWS SM in prod). Connector tokens + provider keys resolve through it; nothing
+    # secret lives in our DB. Writable only in dev (prod is provisioned out-of-band).
+    secrets = build_secrets_provider(settings)
+    secrets_writable = secrets.writable
+
+    # Provider/LLM keys (Anthropic, OpenAI) live in the same store; hydrate them into
+    # os.environ so LiteLLM finds them. Non-clobbering: a key already in the env
+    # (e.g. from a transitional .env) wins, so this never regresses a working stack.
+    for _ref, _env_var in provider_key_refs(settings.secrets.namespace).items():
+        if not os.environ.get(_env_var):
+            _val = secrets.get(_ref)
+            if _val:
+                os.environ[_env_var] = _val
+                logger.info("hydrated %s from the secrets manager", _env_var)
+
+    # Host registry (control plane): secrets-backed token store + on-demand MCP caller.
+    host_store = HostStore(pool, secrets)
     host_mcp = HostMCPClient()
 
-    # GitHub connector (Phase D-1): encrypted-PAT account registry + read-only client.
-    github_store = GitHubAccountStore(pool, cipher)
+    # GitHub connector (Phase D-1): account registry (secrets-backed PAT) + client.
+    github_store = GitHubAccountStore(pool, secrets)
     repo_crawl_store = RepoCrawlStore(pool)
     repo_docgen_store = RepoDocgenStore(pool)
     doc_component_store = DocComponentStore(pool)
@@ -349,10 +365,10 @@ def create_app(
 
     @app.post("/v1/admin/hosts", response_model=HostInfo, status_code=201)
     def create_host(body: HostCreate, _: dict = Depends(require_admin)) -> HostInfo:
-        if body.token and not cipher.enabled:
+        if body.token and not secrets_writable:
             raise HTTPException(
-                status_code=400,
-                detail="DEVY_ENCRYPTION_KEY is not set; cannot store a per-host token",
+                status_code=403,
+                detail="secrets are read-only in prod mode; provision the token out-of-band",
             )
         try:
             host = host_store.create(body.model_dump(exclude={"token"}), token=body.token)
@@ -370,8 +386,11 @@ def create_app(
     @app.patch("/v1/admin/hosts/{host_id}", response_model=HostInfo)
     def update_host(host_id: str, body: HostUpdate, _: dict = Depends(require_admin)) -> HostInfo:
         set_token = "token" in body.model_fields_set
-        if set_token and body.token and not cipher.enabled:
-            raise HTTPException(status_code=400, detail="DEVY_ENCRYPTION_KEY is not set")
+        if set_token and not secrets_writable:
+            raise HTTPException(
+                status_code=403,
+                detail="secrets are read-only in prod mode; provision the token out-of-band",
+            )
         data = body.model_dump(exclude={"token"}, exclude_unset=True)
         host = host_store.update(host_id, data, token=body.token, set_token=set_token)
         if host is None:
@@ -401,9 +420,10 @@ def create_app(
 
     @app.post("/v1/admin/github/accounts", response_model=GitHubAccountInfo, status_code=201)
     def create_github_account(body: GitHubAccountCreate, _: dict = Depends(require_admin)) -> GitHubAccountInfo:
-        if body.token and not cipher.enabled:
+        if body.token and not secrets_writable:
             raise HTTPException(
-                status_code=400, detail="DEVY_ENCRYPTION_KEY is not set; cannot store a PAT"
+                status_code=403,
+                detail="secrets are read-only in prod mode; provision the PAT out-of-band",
             )
         try:
             account = github_store.create(body.model_dump(exclude={"token"}), token=body.token)
@@ -416,8 +436,11 @@ def create_app(
         account_id: str, body: GitHubAccountUpdate, _: dict = Depends(require_admin)
     ) -> GitHubAccountInfo:
         set_token = "token" in body.model_fields_set
-        if set_token and body.token and not cipher.enabled:
-            raise HTTPException(status_code=400, detail="DEVY_ENCRYPTION_KEY is not set")
+        if set_token and not secrets_writable:
+            raise HTTPException(
+                status_code=403,
+                detail="secrets are read-only in prod mode; provision the PAT out-of-band",
+            )
         data = body.model_dump(exclude={"token"}, exclude_unset=True)
         account = github_store.update(account_id, data, token=body.token, set_token=set_token)
         if account is None:

@@ -21,6 +21,19 @@ default_tier: balanced
 database:
   url: ${DATABASE_URL}   # e.g. postgresql://agentic:agentic@localhost:5432/agentic
 
+# Secrets backend (Phase S-1). One AWS Secrets Manager API surface everywhere —
+# LocalStack in dev, real AWS SM in prod — so connector tokens (GitHub PAT, host
+# MCP) and provider keys resolve through one path; nothing secret lives in the DB.
+# The mode is also settable via DEVY_MODE in .env (it wins over this block).
+secrets:
+  mode: dev                          # dev = LocalStack + UI can set/test; prod = AWS SM, test-only
+  region: us-east-1
+  # endpoint_url: http://localhost:4566   # LocalStack in dev (compose sets AWS_ENDPOINT_URL instead);
+  #                                        # leave unset in prod → real AWS SM via the instance IAM role.
+  # store_file: ~/.config/agentic-devops/secrets-store.json  # dev write-through so UI-set secrets
+  #                                        # survive restarts (LocalStack Community doesn't persist).
+  # In prod, boto3 uses the default credential chain (instance IAM role) — no keys at rest.
+
 tiers:
   fast:
     model: ollama/llama3.1          # a local model via Ollama — cheap, private, quick

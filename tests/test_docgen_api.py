@@ -7,7 +7,6 @@ The generation engine itself is exercised end-to-end in ``test_docgen.py``.
 
 import bcrypt
 import pytest
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import agentic_devops.proxy.docgen_run as docgen_run
@@ -19,7 +18,6 @@ from agentic_devops.tools.router import ToolsRouter
 def _make_client(tmp_path, pg_url, monkeypatch, *, docgen_enabled):
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
-    monkeypatch.setenv("DEVY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     app = create_app(
         settings=Settings(
             database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",

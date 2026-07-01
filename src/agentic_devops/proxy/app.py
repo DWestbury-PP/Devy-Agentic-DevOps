@@ -418,6 +418,32 @@ def create_app(
         await run_in_threadpool(host_store.set_status, host_id, status)
         return {"status": status, "checks": checks}
 
+    @app.get("/v1/admin/mcp-mounts")
+    async def list_mounted_hosts(_: dict = Depends(require_admin)) -> list[dict[str, Any]]:
+        """Statically-mounted MCP servers from config (`mcp_servers`) — read-only,
+        non-removable 'built-in' hosts. Always includes the local host MCP that ships
+        on Devy's own Docker network (a guaranteed host to test against), shown as a
+        reference example alongside the editable DB-registered hosts."""
+        from urllib.parse import urlparse
+
+        out: list[dict[str, Any]] = []
+        for s in settings.mcp_servers:
+            address, reachable, checks = "", None, 0
+            if s.transport == "http" and s.url:
+                address = urlparse(s.url).netloc or s.url
+                try:
+                    found = await run_in_threadpool(host_mcp.list_tools, s.url, s.token)
+                    reachable, checks = bool(found), len(found)
+                except Exception:  # noqa: BLE001 — unreachable is a state, not an error
+                    reachable = False
+            elif s.transport == "stdio":
+                address = s.command or "(stdio)"
+            out.append({
+                "name": s.name, "transport": s.transport, "address": address,
+                "url": s.url, "reachable": reachable, "checks": checks,
+            })
+        return out
+
     # ---- GitHub connector (admin, Phase D-1) ----
     @app.get("/v1/admin/github/accounts", response_model=list[GitHubAccountInfo])
     def list_github_accounts(_: dict = Depends(require_admin)) -> list[GitHubAccountInfo]:
@@ -490,6 +516,20 @@ def create_app(
             return "host"
         return "unknown"
 
+    def _known_refs() -> set[str]:
+        """Refs the Secrets tab may write: provider keys + any connector's secret_ref
+        (so we never write an arbitrary/unknown name)."""
+        refs = set(_sc.settable_refs(_ns))
+        refs |= {a.secret_ref for a in github_store.list() if a.secret_ref}
+        refs |= {h.secret_ref for h in host_store.list() if h.secret_ref}
+        return refs
+
+    def _entry_for(ref: str) -> SecretEntry:
+        for e in _sc.build_catalog(_ns, secrets, github_store, host_store):
+            if e["ref"] == ref:
+                return SecretEntry(**e)
+        raise HTTPException(status_code=404, detail="unknown secret")
+
     @app.get("/v1/admin/secrets", response_model=SecretCatalog)
     def list_secrets(_: dict = Depends(require_admin)) -> SecretCatalog:
         entries = _sc.build_catalog(_ns, secrets, github_store, host_store)
@@ -503,30 +543,27 @@ def create_app(
     def set_secret(body: SecretSet, _: dict = Depends(require_admin)) -> SecretEntry:
         if not secrets.writable:
             raise HTTPException(status_code=403, detail="secrets are read-only in prod mode")
-        if body.ref not in _sc.settable_refs(_ns):
+        if body.ref not in _known_refs():
             raise HTTPException(
                 status_code=400,
-                detail="only provider keys are settable here; edit connector tokens on their tab",
+                detail="unknown secret ref (register the account/host first on its tab)",
             )
         if not body.value.strip():
             raise HTTPException(status_code=400, detail="value is required")
         secrets.set(body.ref, body.value)
-        # Re-hydrate the live process so the new key takes effect without a restart.
+        # Provider keys hydrate an env var so the change takes effect without a
+        # restart; connector tokens are resolved on-demand (no env var).
         env = _env_by_ref.get(body.ref)
         if env:
             os.environ[env] = body.value
-        spec = next(p for p in _sc.provider_specs(_ns) if p["ref"] == body.ref)
-        return SecretEntry(
-            service=spec["service"], label=spec["label"], ref=body.ref, category="provider",
-            env=spec["env"], loaded=True, editable=True, testable=True,
-        )
+        return _entry_for(body.ref)
 
     @app.delete("/v1/admin/secrets")
     def delete_secret(ref: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
         if not secrets.writable:
             raise HTTPException(status_code=403, detail="secrets are read-only in prod mode")
-        if ref not in _sc.settable_refs(_ns):
-            raise HTTPException(status_code=400, detail="only provider keys are clearable here")
+        if ref not in _known_refs():
+            raise HTTPException(status_code=400, detail="unknown secret ref")
         secrets.delete(ref)
         env = _env_by_ref.get(ref)
         if env:

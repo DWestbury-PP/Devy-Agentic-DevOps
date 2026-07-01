@@ -3,8 +3,10 @@
 The catalog is the inventory the admin panel renders: every credential Devy knows
 about — provider/service keys (Anthropic, OpenAI, Tavily, LangSmith) plus the
 connector tokens (GitHub accounts, hosts) — each as `service · ref · loaded`, and
-never the value. Provider keys are settable here (dev only); connector tokens are
-listed read-only and edited on their own tabs (single source of truth).
+never the value. In DEV every secret is settable here (the Secrets tab is the single
+write-point for secret *values*); the connector tabs own the *metadata* (account/host
+rows) and derive the `secret_ref`. Provider keys hydrate an env var; connector tokens
+are resolved on-demand from the vault (no env var).
 
 Probes are the safe "does this key actually work?" test: a lightweight
 authenticated call per service that reveals nothing. They distinguish invalid
@@ -66,7 +68,7 @@ def build_catalog(
         entries.append({
             "service": f"github:{a.label}", "label": f"GitHub · {a.label}",
             "ref": a.secret_ref, "category": "github", "env": None,
-            "loaded": secrets.exists(a.secret_ref), "editable": False, "testable": True,
+            "loaded": secrets.exists(a.secret_ref), "editable": secrets.writable, "testable": True,
         })
     for h in host_store.list():
         if not h.secret_ref:
@@ -74,7 +76,7 @@ def build_catalog(
         entries.append({
             "service": f"host:{h.fqdn}", "label": f"Host · {h.fqdn}",
             "ref": h.secret_ref, "category": "host", "env": None,
-            "loaded": secrets.exists(h.secret_ref), "editable": False, "testable": True,
+            "loaded": secrets.exists(h.secret_ref), "editable": secrets.writable, "testable": True,
         })
     return entries
 

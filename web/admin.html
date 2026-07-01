@@ -52,11 +52,20 @@
     table.tbl th[aria-sort="ascending"]::after { content: "↑"; opacity: 1; color: var(--green); }
     table.tbl th[aria-sort="descending"]::after { content: "↓"; opacity: 1; color: var(--green); }
     table.tbl td { padding: 8px; border-bottom: 1px solid var(--line-soft); color: var(--fg); }
-    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--fg-faint); }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line);
+            color: var(--fg-faint); white-space: nowrap; }
+    /* Secrets table: fixed columns so the inline "Set" editor can't reflow the row. */
+    #secrets-page table.tbl { table-layout: fixed; }
+    #secrets-page table.tbl th:nth-child(1), #secrets-page table.tbl td:nth-child(1) { width: 32%; }
+    #secrets-page table.tbl th:nth-child(2), #secrets-page table.tbl td:nth-child(2) { width: 25%; }
+    #secrets-page table.tbl th:nth-child(3), #secrets-page table.tbl td:nth-child(3) { width: 11%; }
+    #secrets-page table.tbl th:nth-child(4), #secrets-page table.tbl td:nth-child(4) { width: 32%; }
+    #secrets-page table.tbl td:nth-child(2) .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .svc-env { display: block; color: var(--fg-faint); font-size: 11px; margin-top: 2px; }
     .pill.reachable { color: var(--green); border-color: var(--green-deep); }
     .pill.unreachable { color: var(--red); border-color: var(--red); }
     .pill.inactive { color: var(--amber); border-color: var(--amber); }
-    .acts { display: flex; gap: 6px; }
+    .acts { display: flex; gap: 6px; flex-wrap: wrap; }
     .acts .btn { padding: 4px 9px; font-size: 12px; }
     .hidden { display: none; }
     .btn[disabled] { opacity: 0.6; cursor: default; }
@@ -122,7 +131,7 @@
       <!-- ===== Hosts page ===== -->
       <div id="hosts-page" class="tab-page">
       <div class="row-between">
-        <div class="sub">Hosts Devy can run diagnostics against (via each host's MCP).</div>
+        <div class="sub">Hosts Devy can run diagnostics against (via each host's MCP). The built-in local host MCP (on Devy's own network) is always available; add remote hosts below.</div>
         <button id="add-toggle" class="btn">+ Add host</button>
       </div>
 
@@ -150,8 +159,8 @@
             <option value="diagnostic">diagnostic</option>
             <option value="elevated">elevated</option>
           </select>
-          <input name="token" type="password" placeholder="MCP token (stored encrypted)" />
         </div>
+        <div class="sub">The MCP token is set on the <b>Secrets</b> tab after saving (or provisioned out-of-band in prod).</div>
         <div class="field">
           <button class="btn" type="submit">Save host</button>
           <button id="cancel-add" class="btn ghost-btn" type="button">Cancel</button>
@@ -170,7 +179,7 @@
       <!-- ===== Repos page ===== -->
       <div id="repos-page" class="tab-page hidden">
         <div class="row-between">
-          <div class="sub">GitHub accounts (read-only PAT) Devy reads repos with — discovery, diffs, code crawl.</div>
+          <div class="sub">GitHub accounts Devy reads repos with — discovery, diffs, code crawl. Set each account's read-only PAT on the <b>Secrets</b> tab.</div>
           <button id="gh-add-toggle" class="btn">+ Add account</button>
         </div>
 
@@ -179,8 +188,8 @@
             <input name="label" placeholder="Label e.g. home / work (required)" />
             <input name="login" placeholder="GitHub login (optional; auto-filled on Test)" />
             <input name="default_corpus" placeholder="Default corpus (optional)" />
-            <input name="token" type="password" placeholder="Read-only PAT (stored encrypted)" />
           </div>
+          <div class="sub">The read-only PAT is set on the <b>Secrets</b> tab after saving (or provisioned out-of-band in prod).</div>
           <div class="field">
             <button class="btn" type="submit">Save account</button>
             <button id="gh-cancel" class="btn ghost-btn" type="button">Cancel</button>

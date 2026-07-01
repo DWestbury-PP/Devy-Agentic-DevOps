@@ -27,6 +27,8 @@
        pinned, and the active tab body scrolls inside (tables/forms can grow past
        one screen without the whole page scrolling). */
     #shell { display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 360px; }
+    /* An ID selector outweighs .hidden, so re-hide explicitly when signed out. */
+    #shell.hidden { display: none; }
     #shell > h1, #shell > .nav { flex: 0 0 auto; }
     .tab-page { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; margin-right: -4px; }
     .nav { display: flex; gap: 8px; margin: 14px 0 18px; }

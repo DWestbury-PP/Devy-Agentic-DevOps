@@ -51,6 +51,8 @@ def provider_key_refs(namespace: str = "devy") -> dict[str, str]:
     return {
         f"{namespace}/provider/anthropic": "ANTHROPIC_API_KEY",
         f"{namespace}/provider/openai": "OPENAI_API_KEY",
+        f"{namespace}/provider/tavily": "TAVILY_API_KEY",
+        f"{namespace}/provider/langsmith": "LANGSMITH_API_KEY",
     }
 
 

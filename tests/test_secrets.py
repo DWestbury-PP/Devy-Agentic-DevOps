@@ -75,7 +75,9 @@ def test_ref_helpers_sanitize_and_namespace():
     assert github_secret_ref("My Work Acct") == "devy/github/my-work-acct"
     assert host_secret_ref("web01.example.com") == "devy/host/web01.example.com"
     assert github_secret_ref("home", namespace="acme") == "acme/github/home"
-    assert set(provider_key_refs().values()) == {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+    assert set(provider_key_refs().values()) == {
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY", "LANGSMITH_API_KEY",
+    }
 
 
 def test_health_reflects_reachability():

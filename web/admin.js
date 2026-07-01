@@ -26,21 +26,19 @@ function view(name) {
   if (name === "shell") showPage(currentPage);
 }
 
+const PAGES = ["hosts", "repos", "knowledge", "secrets"];
 function showPage(name) {
   currentPage = name;
-  $("hosts-page").classList.toggle("hidden", name !== "hosts");
-  $("repos-page").classList.toggle("hidden", name !== "repos");
-  $("knowledge-page").classList.toggle("hidden", name !== "knowledge");
-  $("tab-hosts").classList.toggle("active", name === "hosts");
-  $("tab-repos").classList.toggle("active", name === "repos");
-  $("tab-knowledge").classList.toggle("active", name === "knowledge");
+  PAGES.forEach((p) => {
+    $(`${p}-page`).classList.toggle("hidden", name !== p);
+    $(`tab-${p}`).classList.toggle("active", name === p);
+  });
   if (name === "hosts") renderHosts();
   else if (name === "repos") renderRepos();
-  else renderKnowledge();
+  else if (name === "knowledge") renderKnowledge();
+  else if (name === "secrets") renderSecrets();
 }
-$("tab-hosts").addEventListener("click", () => showPage("hosts"));
-$("tab-repos").addEventListener("click", () => showPage("repos"));
-$("tab-knowledge").addEventListener("click", () => showPage("knowledge"));
+PAGES.forEach((p) => $(`tab-${p}`).addEventListener("click", () => showPage(p)));
 
 async function checkSession() {
   if (!getToken()) return view("login");
@@ -716,6 +714,124 @@ function confirmDeleteDoc(wrap, id) {
   const no = el("button", "btn ghost-btn", "Cancel");
   no.addEventListener("click", renderKnowledge);
   wrap.append(yes, no);
+}
+
+/* ---------- secrets / connections (Phase S-2) ---------- */
+let secretsWritable = false;
+
+async function renderSecrets() {
+  const body = $("secrets-body");
+  if (!body) return;
+  const msg = $("secrets-msg");
+  let cat;
+  try {
+    const r = await fetch("/v1/admin/secrets", { headers: authHeaders() });
+    if (!r.ok) { msg.textContent = `Couldn't load secrets (${r.status}).`; return; }
+    cat = await r.json();
+  } catch (_) {
+    msg.textContent = "Couldn't reach the proxy.";
+    return;
+  }
+  secretsWritable = cat.writable;
+  const store = cat.reachable ? "reachable" : "UNREACHABLE";
+  $("secrets-mode").textContent =
+    `mode: ${cat.mode} · store ${store} · ${cat.writable ? "editable (dev)" : "read-only (prod — provisioned out-of-band)"}`;
+  body.innerHTML = "";
+  msg.textContent = "";
+  cat.secrets.forEach((e) => body.appendChild(secretRow(e)));
+}
+
+function secretRow(e) {
+  const tr = el("tr");
+  const svc = el("td");
+  svc.appendChild(el("span", null, e.label));
+  if (e.env) { const t = el("span", "sub"); t.textContent = "  " + e.env; svc.appendChild(t); }
+  tr.appendChild(svc);
+  const ref = el("td");
+  ref.appendChild(el("span", "pill", e.ref));
+  tr.appendChild(ref);
+  const loaded = el("td");
+  loaded.appendChild(el("span", "pill " + (e.loaded ? "ready" : ""), e.loaded ? "✓ loaded" : "· empty"));
+  tr.appendChild(loaded);
+  const actions = el("td");
+  const wrap = el("div", "acts");
+  const test = el("button", "btn ghost-btn", "Test");
+  test.addEventListener("click", () => testSecret(e.ref, test));
+  wrap.appendChild(test);
+  if (e.editable && secretsWritable) {
+    const set = el("button", "btn ghost-btn", e.loaded ? "Update" : "Set");
+    set.addEventListener("click", () => promptSetSecret(wrap, e));
+    wrap.appendChild(set);
+    if (e.loaded) {
+      const clr = el("button", "btn ghost-btn", "Clear");
+      clr.addEventListener("click", () => clearSecret(e.ref));
+      wrap.appendChild(clr);
+    }
+  }
+  actions.appendChild(wrap);
+  tr.appendChild(actions);
+  return tr;
+}
+
+async function testSecret(ref, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch("/v1/admin/secrets/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ ref }),
+    });
+    const d = await r.json().catch(() => ({}));
+    const m = $("secrets-msg");
+    m.className = "msg" + (d.ok ? "" : " err");
+    m.textContent = `${ref}: ${d.ok ? "✓ " : "✗ "}${d.detail || (d.ok ? "valid" : "failed")}`;
+  } catch (_) {
+    $("secrets-msg").textContent = "Couldn't reach the proxy.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function promptSetSecret(wrap, e) {
+  wrap.innerHTML = "";
+  const input = el("input");
+  input.type = "password";
+  input.placeholder = "paste value";
+  input.style.width = "220px";
+  const save = el("button", "btn", "Save");
+  const cancel = el("button", "btn ghost-btn", "Cancel");
+  save.addEventListener("click", async () => {
+    const value = input.value.trim();
+    if (!value) return;
+    const r = await fetch("/v1/admin/secrets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ ref: e.ref, value }),
+    });
+    const m = $("secrets-msg");
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      m.className = "msg err";
+      m.textContent = `Couldn't set ${e.ref}: ${d.detail || r.status}`;
+    } else {
+      m.className = "msg";
+      m.textContent = `${e.ref} saved.`;
+    }
+    renderSecrets();
+  });
+  cancel.addEventListener("click", renderSecrets);
+  wrap.append(input, save, cancel);
+  input.focus();
+}
+
+async function clearSecret(ref) {
+  await fetch(`/v1/admin/secrets?ref=${encodeURIComponent(ref)}`, {
+    method: "DELETE", headers: authHeaders(),
+  });
+  renderSecrets();
 }
 
 /* ---------- sortable tables ----------

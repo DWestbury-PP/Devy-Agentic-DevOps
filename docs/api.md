@@ -130,17 +130,19 @@ a Google/Okta JWT verifier drops in here later.
 
 ### Host registry — `/v1/admin/hosts`
 
-The fleet Devy reaches via each host's MCP. Per-host MCP tokens are **Fernet-
-encrypted at rest** (`DEVY_ENCRYPTION_KEY`) and **never returned** (only `has_token`).
+The fleet Devy reaches via each host's MCP. Per-host MCP tokens live in the
+**secrets manager** (Phase S-1; the row holds a `secret_ref`, never the value) and
+are **never returned** (only `has_token`).
 
 | Method / path | Purpose |
 |---|---|
 | `GET /v1/admin/hosts` | List hosts (token never included). |
-| `POST /v1/admin/hosts` | Create (**`201`**; **`409`** on duplicate `fqdn`). Body: `fqdn` (required), `private_ip`/`public_ip`, `instance_id`, `aws_account`/`aws_region`, `mcp_port` (8780), `mcp_scheme` (`https`\|`http`), `address_preference` (`private_ip`\|`public_ip`\|`fqdn`), `profile`, `active`, `labels`, `token` (write-only). |
+| `POST /v1/admin/hosts` | Create (**`201`**; **`409`** on duplicate `fqdn`). Body: `fqdn` (required), `private_ip`/`public_ip`, `instance_id`, `aws_account`/`aws_region`, `mcp_port` (8780), `mcp_scheme` (`https`\|`http`), `address_preference` (`private_ip`\|`public_ip`\|`fqdn`), `profile`, `active`, `labels`, `secret_ref` (override the manager name). Token is set on the **Secrets** tab, not here. |
 | `GET /v1/admin/hosts/{id}` | One host. |
-| `PATCH /v1/admin/hosts/{id}` | Update (token changed only if the `token` field is present). |
+| `PATCH /v1/admin/hosts/{id}` | Update metadata. |
 | `DELETE /v1/admin/hosts/{id}` | Remove. |
 | `POST /v1/admin/hosts/{id}/check` | Test reachability → `{ "status": "reachable"\|"unreachable", "checks": [...] }`; updates `last_status`. |
+| `GET /v1/admin/mcp-mounts` | Statically-mounted MCP servers from `config.yaml` (`mcp_servers`) as read-only **built-in** hosts — always includes the local host MCP on Devy's own network (a guaranteed test target). Each: `name`, `transport`, `address`, `url`, `reachable`, `checks`. Not removable (config-managed). |
 
 ### GitHub connector — `/v1/admin/github/*`
 

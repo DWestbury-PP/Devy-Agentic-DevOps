@@ -140,3 +140,40 @@ def test_host_crud_endpoints(admin_client):
     assert admin_client.patch(f"/v1/admin/hosts/{hid}", json={"active": False}).json()["active"] is False
     assert admin_client.delete(f"/v1/admin/hosts/{hid}").status_code == 200
     assert admin_client.get(f"/v1/admin/hosts/{hid}").status_code == 404
+
+
+# ---- mounted MCP servers (built-in hosts from config, S-4) -------------------
+def _mounted_client(tmp_path, pg_url, monkeypatch, mcp_servers):
+    monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",
+                          mcp_servers=mcp_servers),
+        provider=object(), router=ToolsRouter(),
+    )
+    c = TestClient(app)
+    tok = c.post("/v1/admin/login", json={"password": "pw"}).json()["token"]
+    c.headers.update({"Authorization": f"Bearer {tok}"})
+    return c
+
+
+def test_mcp_mounts_empty_when_none_configured(tmp_path, pool, pg_url, monkeypatch):
+    c = _mounted_client(tmp_path, pg_url, monkeypatch, [])
+    assert c.get("/v1/admin/mcp-mounts").json() == []
+    assert TestClient(c.app).get("/v1/admin/mcp-mounts").status_code == 401  # gated
+
+
+def test_mcp_mounts_lists_reachable_host(tmp_path, pool, pg_url, monkeypatch):
+    import agentic_devops.proxy.host_mcp_client as hmc
+    from agentic_devops.config import MCPServerConfig
+
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, url, token: ["df", "free"])
+    c = _mounted_client(
+        tmp_path, pg_url, monkeypatch,
+        [MCPServerConfig(name="host", transport="http", url="http://host-mcp:8780/mcp", token="t")],
+    )
+    data = c.get("/v1/admin/mcp-mounts").json()
+    assert len(data) == 1
+    m = data[0]
+    assert m["name"] == "host" and m["address"] == "host-mcp:8780"
+    assert m["reachable"] is True and m["checks"] == 2

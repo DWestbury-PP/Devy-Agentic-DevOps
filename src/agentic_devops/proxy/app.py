@@ -418,6 +418,32 @@ def create_app(
         await run_in_threadpool(host_store.set_status, host_id, status)
         return {"status": status, "checks": checks}
 
+    @app.get("/v1/admin/mcp-mounts")
+    async def list_mounted_hosts(_: dict = Depends(require_admin)) -> list[dict[str, Any]]:
+        """Statically-mounted MCP servers from config (`mcp_servers`) — read-only,
+        non-removable 'built-in' hosts. Always includes the local host MCP that ships
+        on Devy's own Docker network (a guaranteed host to test against), shown as a
+        reference example alongside the editable DB-registered hosts."""
+        from urllib.parse import urlparse
+
+        out: list[dict[str, Any]] = []
+        for s in settings.mcp_servers:
+            address, reachable, checks = "", None, 0
+            if s.transport == "http" and s.url:
+                address = urlparse(s.url).netloc or s.url
+                try:
+                    found = await run_in_threadpool(host_mcp.list_tools, s.url, s.token)
+                    reachable, checks = bool(found), len(found)
+                except Exception:  # noqa: BLE001 — unreachable is a state, not an error
+                    reachable = False
+            elif s.transport == "stdio":
+                address = s.command or "(stdio)"
+            out.append({
+                "name": s.name, "transport": s.transport, "address": address,
+                "url": s.url, "reachable": reachable, "checks": checks,
+            })
+        return out
+
     # ---- GitHub connector (admin, Phase D-1) ----
     @app.get("/v1/admin/github/accounts", response_model=list[GitHubAccountInfo])
     def list_github_accounts(_: dict = Depends(require_admin)) -> list[GitHubAccountInfo]:

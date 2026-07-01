@@ -97,16 +97,51 @@ async function renderHosts() {
   const body = $("hosts-body");
   body.innerHTML = "";
   let hosts = [];
+  let mounted = [];
   try {
-    const r = await fetch("/v1/admin/hosts", { headers: authHeaders() });
-    if (!r.ok) return hostsMsg(`Couldn't load hosts (${r.status}).`, true);
-    hosts = await r.json();
+    const [rh, rm] = await Promise.all([
+      fetch("/v1/admin/hosts", { headers: authHeaders() }),
+      fetch("/v1/admin/mcp-mounts", { headers: authHeaders() }),
+    ]);
+    if (!rh.ok) return hostsMsg(`Couldn't load hosts (${rh.status}).`, true);
+    hosts = await rh.json();
+    if (rm.ok) mounted = await rm.json();
   } catch (_) {
     return hostsMsg("Couldn't reach the proxy.", true);
   }
-  if (!hosts.length) return hostsMsg("No hosts registered yet — add one above.");
-  hostsMsg("");
+  // Built-in (config-mounted) host MCPs first — read-only, always present.
+  mounted.forEach((m) => body.appendChild(mountedHostRow(m)));
   hosts.forEach((h) => body.appendChild(hostRow(h)));
+  hostsMsg(hosts.length ? "" : "No additional hosts registered — the built-in local host MCP is shown above. Add one with “+ Add host”.");
+}
+
+function mountedHostRow(m) {
+  const tr = el("tr");
+  const name = el("td");
+  name.appendChild(el("span", null, m.name));
+  const tag = el("span", "pill");
+  tag.textContent = "built-in";
+  tag.title = "mounted from config (mcp_servers) — always available, not removable";
+  tag.style.marginLeft = "8px";
+  name.appendChild(tag);
+  tr.appendChild(name);
+  tr.appendChild(el("td", null, m.address || "—"));
+  tr.appendChild(el("td", null, "—"));
+  const st = el("td");
+  const cls = m.reachable === true ? "reachable" : m.reachable === false ? "unreachable" : "";
+  const label = m.reachable === true ? `reachable · ${m.checks} checks`
+    : m.reachable === false ? "unreachable" : m.transport;
+  st.appendChild(el("span", "pill " + cls, label));
+  tr.appendChild(st);
+  tr.appendChild(el("td", null, "")); // no active toggle for built-ins
+  const actions = el("td");
+  const wrap = el("div", "acts");
+  const recheck = el("button", "btn ghost-btn", "Recheck");
+  recheck.addEventListener("click", renderHosts);
+  wrap.appendChild(recheck);
+  actions.appendChild(wrap);
+  tr.appendChild(actions);
+  return tr;
 }
 
 function hostRow(h) {

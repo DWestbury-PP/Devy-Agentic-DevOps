@@ -23,6 +23,14 @@
     .btn.ghost-btn:hover { color: var(--green); border-color: var(--green-deep); box-shadow: none; background: none; }
     .msg { margin-top: 12px; font-size: 12px; color: var(--fg-dim); }
     .msg.err { color: var(--red); }
+    /* The control-plane card is a fixed-height flex column: the title + tabs stay
+       pinned, and the active tab body scrolls inside (tables/forms can grow past
+       one screen without the whole page scrolling). */
+    #shell { display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 360px; }
+    /* An ID selector outweighs .hidden, so re-hide explicitly when signed out. */
+    #shell.hidden { display: none; }
+    #shell > h1, #shell > .nav { flex: 0 0 auto; }
+    .tab-page { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; margin-right: -4px; }
     .nav { display: flex; gap: 8px; margin: 14px 0 18px; }
     .tab { color: var(--fg-dim); border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px;
             font-size: 13px; background: none; cursor: pointer; font-family: var(--mono); }
@@ -34,6 +42,15 @@
     table.tbl { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
     table.tbl th { text-align: left; color: var(--fg-faint); font-weight: 400; text-transform: uppercase;
             font-size: 10.5px; letter-spacing: 1px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    /* Headers stay put while the tab body scrolls. Opaque background + shadow so
+       rows can't bleed through; top:0 sticks to the .tab-page scroll viewport. */
+    table.tbl thead th { position: sticky; top: 0; z-index: 2; background: var(--panel);
+            box-shadow: 0 1px 0 var(--line); }
+    table.tbl th.sortable { cursor: pointer; }
+    table.tbl th.sortable:hover { color: var(--green); }
+    table.tbl th.sortable::after { content: "↕"; opacity: 0.3; margin-left: 5px; font-size: 10px; }
+    table.tbl th[aria-sort="ascending"]::after { content: "↑"; opacity: 1; color: var(--green); }
+    table.tbl th[aria-sort="descending"]::after { content: "↓"; opacity: 1; color: var(--green); }
     table.tbl td { padding: 8px; border-bottom: 1px solid var(--line-soft); color: var(--fg); }
     .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--fg-faint); }
     .pill.reachable { color: var(--green); border-color: var(--green-deep); }
@@ -102,7 +119,7 @@
       </div>
 
       <!-- ===== Hosts page ===== -->
-      <div id="hosts-page">
+      <div id="hosts-page" class="tab-page">
       <div class="row-between">
         <div class="sub">Hosts Devy can run diagnostics against (via each host's MCP).</div>
         <button id="add-toggle" class="btn">+ Add host</button>
@@ -150,7 +167,7 @@
       </div><!-- /hosts-page -->
 
       <!-- ===== Repos page ===== -->
-      <div id="repos-page" class="hidden">
+      <div id="repos-page" class="tab-page hidden">
         <div class="row-between">
           <div class="sub">GitHub accounts (read-only PAT) Devy reads repos with — discovery, diffs, code crawl.</div>
           <button id="gh-add-toggle" class="btn">+ Add account</button>
@@ -226,7 +243,7 @@
       </div><!-- /repos-page -->
 
       <!-- ===== Knowledge page ===== -->
-      <div id="knowledge-page" class="hidden">
+      <div id="knowledge-page" class="tab-page hidden">
         <div class="row-between">
           <div class="sub">Markdown documents Devy can search (chunked, embedded, hybrid retrieval).</div>
           <button id="kb-add-toggle" class="btn">+ Upload</button>

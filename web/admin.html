@@ -150,8 +150,8 @@
             <option value="diagnostic">diagnostic</option>
             <option value="elevated">elevated</option>
           </select>
-          <input name="token" type="password" placeholder="MCP token (stored encrypted)" />
         </div>
+        <div class="sub">The MCP token is set on the <b>Secrets</b> tab after saving (or provisioned out-of-band in prod).</div>
         <div class="field">
           <button class="btn" type="submit">Save host</button>
           <button id="cancel-add" class="btn ghost-btn" type="button">Cancel</button>
@@ -179,8 +179,8 @@
             <input name="label" placeholder="Label e.g. home / work (required)" />
             <input name="login" placeholder="GitHub login (optional; auto-filled on Test)" />
             <input name="default_corpus" placeholder="Default corpus (optional)" />
-            <input name="token" type="password" placeholder="Read-only PAT (stored encrypted)" />
           </div>
+          <div class="sub">The read-only PAT is set on the <b>Secrets</b> tab after saving (or provisioned out-of-band in prod).</div>
           <div class="field">
             <button class="btn" type="submit">Save account</button>
             <button id="gh-cancel" class="btn ghost-btn" type="button">Cancel</button>

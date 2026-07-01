@@ -177,15 +177,18 @@ Gated by `knowledge.docgen_enabled` (default off → `400`).
 
 The unified credential inventory: provider/service keys (Anthropic, OpenAI,
 Tavily, LangSmith) plus the connector tokens (GitHub, hosts). **Values are never
-returned** — only loaded-state and a live Test. Provider keys are settable here in
-**dev**; connector tokens are edited on their own tabs (single source of truth).
-Writes are refused (`403`) in **prod** (secrets provisioned out-of-band).
+returned** — only loaded-state and a live Test. In **dev** the Secrets tab is the
+single write-point for secret *values* (provider keys AND connector tokens); the
+connector tabs own the *metadata* (account/host rows) and derive the `secret_ref`.
+Writes are refused (`403`) in **prod** (secrets provisioned out-of-band). Provider
+keys carry an `env` (hydrated into `os.environ`); connector tokens are resolved
+on-demand and have no env var.
 
 | Endpoint | Behaviour |
 | --- | --- |
-| `GET /v1/admin/secrets` | The catalog: `{ mode, writable, reachable, secrets[] }`. Each entry: `service`, `label`, `ref`, `category` (`provider`/`github`/`host`), `env`, `loaded`, `editable`, `testable`. |
-| `PUT /v1/admin/secrets` | Set a **provider** key. Body: `{ ref, value }`. `403` in prod; `400` if `ref` isn't a provider key (edit connector tokens on their tab). Re-hydrates the matching env var so it takes effect without a restart. |
-| `DELETE /v1/admin/secrets?ref=…` | Clear a provider key (dev only; `403` in prod). |
+| `GET /v1/admin/secrets` | The catalog: `{ mode, writable, reachable, secrets[] }`. Each entry: `service`, `label`, `ref`, `category` (`provider`/`github`/`host`), `env` (null for connectors), `loaded`, `editable`, `testable`. |
+| `PUT /v1/admin/secrets` | Set a secret value. Body: `{ ref, value }`. `403` in prod; `400` for an unknown `ref` (register the account/host on its tab first). For a provider key, re-hydrates the matching env var so it takes effect without a restart. |
+| `DELETE /v1/admin/secrets?ref=…` | Clear a secret (dev only; `403` in prod). |
 | `POST /v1/admin/secrets/test` | Live-validate a secret without revealing it. Body: `{ ref }` → `{ ok, detail }`. Provider keys → a lightweight authenticated call (e.g. Anthropic/OpenAI models list); GitHub → `whoami`; host → MCP list-tools ping. |
 
 ### Document import — `/v1/admin/documents`, `/jobs`, `/corpora`

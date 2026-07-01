@@ -49,9 +49,10 @@ def test_catalog_lists_provider_keys_and_connectors(client):
     for svc in ("anthropic", "openai", "tavily", "langsmith"):
         e = by_ref[f"devy/provider/{svc}"]
         assert e["category"] == "provider" and e["editable"] is True and e["loaded"] is False
-    # the github connector secret is listed, loaded, but not editable here
+    # the github connector secret is listed, loaded, and editable here in dev
     gh = by_ref["devy/github/home"]
-    assert gh["category"] == "github" and gh["loaded"] is True and gh["editable"] is False
+    assert gh["category"] == "github" and gh["loaded"] is True and gh["editable"] is True
+    assert gh["env"] is None  # connector tokens are resolved on demand (no env var)
 
 
 def test_set_and_clear_provider_key(client):
@@ -64,9 +65,16 @@ def test_set_and_clear_provider_key(client):
     assert {e["ref"]: e for e in client.get("/v1/admin/secrets").json()["secrets"]}[ref]["loaded"] is False
 
 
-def test_set_rejects_non_provider_ref(client):
-    # connector tokens are edited on their own tab, not here
-    assert client.put("/v1/admin/secrets", json={"ref": "devy/github/home", "value": "x"}).status_code == 400
+def test_set_connector_secret_from_secrets_tab(client):
+    # the PAT for an existing account can be set here (single write-point for values)
+    client.post("/v1/admin/github/accounts", json={"label": "home", "login": "me"})
+    r = client.put("/v1/admin/secrets", json={"ref": "devy/github/home", "value": "ghp_new"})
+    assert r.status_code == 200 and r.json()["loaded"] is True and r.json()["category"] == "github"
+
+
+def test_set_rejects_unknown_ref(client):
+    # only known refs (provider keys + registered connectors) are writable
+    assert client.put("/v1/admin/secrets", json={"ref": "devy/github/nope", "value": "x"}).status_code == 400
     assert client.put("/v1/admin/secrets", json={"ref": "devy/random/thing", "value": "x"}).status_code == 400
 
 

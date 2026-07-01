@@ -745,7 +745,12 @@ function secretRow(e) {
   const tr = el("tr");
   const svc = el("td");
   svc.appendChild(el("span", null, e.label));
-  if (e.env) { const t = el("span", "sub"); t.textContent = "  " + e.env; svc.appendChild(t); }
+  const hint = el("span", "sub");
+  hint.textContent = "  " + (e.env || "on-demand");
+  hint.title = e.env
+    ? "read by the provider SDK from this environment variable"
+    : "resolved on demand from the vault (not an environment variable)";
+  svc.appendChild(hint);
   tr.appendChild(svc);
   const ref = el("td");
   ref.appendChild(el("span", "pill", e.ref));

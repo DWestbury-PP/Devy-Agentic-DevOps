@@ -53,6 +53,11 @@ from agentic_devops.proxy.schemas import (
     RepoCrawlInfo,
     RepoCrawlRequest,
     RepoCrawlResult,
+    SecretCatalog,
+    SecretEntry,
+    SecretRefBody,
+    SecretSet,
+    SecretTestResult,
     SessionDetail,
     SessionInfo,
     SessionRename,
@@ -469,6 +474,87 @@ def create_app(
                 github_store.update, account_id, {"login": login}, None, False
             )
         return {"ok": True, "login": login}
+
+    # ---- Secrets / Connections (Phase S-2) ----
+    from agentic_devops.proxy import secrets_catalog as _sc
+
+    _ns = settings.secrets.namespace
+    _env_by_ref = provider_key_refs(_ns)
+
+    def _secret_category(ref: str) -> str:
+        if ref in _sc.settable_refs(_ns):
+            return "provider"
+        if ref.startswith(f"{_ns}/github/"):
+            return "github"
+        if ref.startswith(f"{_ns}/host/"):
+            return "host"
+        return "unknown"
+
+    @app.get("/v1/admin/secrets", response_model=SecretCatalog)
+    def list_secrets(_: dict = Depends(require_admin)) -> SecretCatalog:
+        entries = _sc.build_catalog(_ns, secrets, github_store, host_store)
+        return SecretCatalog(
+            mode=settings.secrets.mode, writable=secrets.writable,
+            reachable=secrets.health(),
+            secrets=[SecretEntry(**e) for e in entries],
+        )
+
+    @app.put("/v1/admin/secrets", response_model=SecretEntry)
+    def set_secret(body: SecretSet, _: dict = Depends(require_admin)) -> SecretEntry:
+        if not secrets.writable:
+            raise HTTPException(status_code=403, detail="secrets are read-only in prod mode")
+        if body.ref not in _sc.settable_refs(_ns):
+            raise HTTPException(
+                status_code=400,
+                detail="only provider keys are settable here; edit connector tokens on their tab",
+            )
+        if not body.value.strip():
+            raise HTTPException(status_code=400, detail="value is required")
+        secrets.set(body.ref, body.value)
+        # Re-hydrate the live process so the new key takes effect without a restart.
+        env = _env_by_ref.get(body.ref)
+        if env:
+            os.environ[env] = body.value
+        spec = next(p for p in _sc.provider_specs(_ns) if p["ref"] == body.ref)
+        return SecretEntry(
+            service=spec["service"], label=spec["label"], ref=body.ref, category="provider",
+            env=spec["env"], loaded=True, editable=True, testable=True,
+        )
+
+    @app.delete("/v1/admin/secrets")
+    def delete_secret(ref: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        if not secrets.writable:
+            raise HTTPException(status_code=403, detail="secrets are read-only in prod mode")
+        if ref not in _sc.settable_refs(_ns):
+            raise HTTPException(status_code=400, detail="only provider keys are clearable here")
+        secrets.delete(ref)
+        env = _env_by_ref.get(ref)
+        if env:
+            os.environ.pop(env, None)
+        return {"ref": ref, "deleted": True}
+
+    @app.post("/v1/admin/secrets/test", response_model=SecretTestResult)
+    async def test_secret(body: SecretRefBody, _: dict = Depends(require_admin)) -> SecretTestResult:
+        ref = body.ref
+        category = _secret_category(ref)
+        value = await run_in_threadpool(secrets.get, ref)
+        if not value:
+            return SecretTestResult(ok=False, detail="not set")
+        if category == "provider":
+            service = ref.rsplit("/", 1)[-1]
+            ok, detail = await run_in_threadpool(_sc.probe_provider, service, value)
+        elif category == "github":
+            ok, detail = await run_in_threadpool(_sc.probe_github, github_client, value)
+        elif category == "host":
+            host = next((h for h in host_store.list() if h.secret_ref == ref), None)
+            if host is None:
+                return SecretTestResult(ok=False, detail="no host bound to this secret")
+            resolved = await run_in_threadpool(host_store.resolve, host.id, False)
+            checks = await run_in_threadpool(host_mcp.list_tools, resolved.url, resolved.token)
+            ok, detail = (bool(checks), f"{len(checks)} checks available" if checks else "unreachable")
+        else:
+            return SecretTestResult(ok=False, detail="unknown secret category")
+        return SecretTestResult(ok=ok, detail=detail)
 
     @app.get("/v1/admin/github/repos")
     async def list_github_repos(

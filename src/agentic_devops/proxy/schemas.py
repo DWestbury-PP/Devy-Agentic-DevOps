@@ -278,6 +278,41 @@ class UploadResult(BaseModel):
     documents: list[DocumentInfo] = Field(default_factory=list)
 
 
+# -- Secrets / Connections (Phase S-2) --------------------------------------
+class SecretEntry(BaseModel):
+    """One credential in the inventory — never the value, only loaded-state."""
+
+    service: str
+    label: str
+    ref: str
+    category: str            # provider | github | host
+    env: Optional[str] = None
+    loaded: bool = False
+    editable: bool = False   # settable from the Secrets tab (provider keys, dev only)
+    testable: bool = True
+
+
+class SecretCatalog(BaseModel):
+    mode: str                # dev | prod
+    writable: bool
+    reachable: bool
+    secrets: list[SecretEntry] = Field(default_factory=list)
+
+
+class SecretSet(BaseModel):
+    ref: str
+    value: str
+
+
+class SecretRefBody(BaseModel):
+    ref: str
+
+
+class SecretTestResult(BaseModel):
+    ok: bool
+    detail: str = ""
+
+
 class CorpusInfo(BaseModel):
     name: str
     documents: int = 0

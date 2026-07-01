@@ -173,6 +173,21 @@ Gated by `knowledge.docgen_enabled` (default off → `400`).
 | `GET /v1/admin/github/docgen` | Per-repo status + components: `full_name`, `status` (`idle`/`running`/`error`), `last_doc_sha`, `scan_brief`, `components_doced`, `error`, and `components[]` (`component_path`, `component_name`, `kind`, `status`, `arch_doc_path`, `last_doc_sha`). Powers the generated-docs table. |
 | `PUT /v1/admin/github/docgen/brief` | Persist a repo's scan brief without triggering a run. Body: `repo`, `brief`. Returns the updated record. |
 
+### Secrets / Connections — `/v1/admin/secrets` (Phase S-2)
+
+The unified credential inventory: provider/service keys (Anthropic, OpenAI,
+Tavily, LangSmith) plus the connector tokens (GitHub, hosts). **Values are never
+returned** — only loaded-state and a live Test. Provider keys are settable here in
+**dev**; connector tokens are edited on their own tabs (single source of truth).
+Writes are refused (`403`) in **prod** (secrets provisioned out-of-band).
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `GET /v1/admin/secrets` | The catalog: `{ mode, writable, reachable, secrets[] }`. Each entry: `service`, `label`, `ref`, `category` (`provider`/`github`/`host`), `env`, `loaded`, `editable`, `testable`. |
+| `PUT /v1/admin/secrets` | Set a **provider** key. Body: `{ ref, value }`. `403` in prod; `400` if `ref` isn't a provider key (edit connector tokens on their tab). Re-hydrates the matching env var so it takes effect without a restart. |
+| `DELETE /v1/admin/secrets?ref=…` | Clear a provider key (dev only; `403` in prod). |
+| `POST /v1/admin/secrets/test` | Live-validate a secret without revealing it. Body: `{ ref }` → `{ ok, detail }`. Provider keys → a lightweight authenticated call (e.g. Anthropic/OpenAI models list); GitHub → `whoami`; host → MCP list-tools ping. |
+
 ### Document import — `/v1/admin/documents`, `/jobs`, `/corpora`
 
 UI-driven markdown ingest into the hybrid knowledge base (chunk → context →

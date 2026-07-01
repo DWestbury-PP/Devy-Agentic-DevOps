@@ -61,6 +61,11 @@ unlocks three tabs:
   each component as it completes.
 - **Knowledge** — document import: upload Markdown into a corpus (chunked,
   enriched, embedded), watch ingest jobs, and list / delete documents and corpora.
+- **Secrets** — the unified credential inventory (Phase S-2): provider/service keys
+  (Anthropic, OpenAI, Tavily, LangSmith) + connector tokens (GitHub, hosts), each
+  with loaded-state and a live **Test**. Values are never shown; provider keys are
+  editable here in dev, read-only (test-only) in prod. Backed by the secrets manager
+  (LocalStack in dev, AWS SM in prod).
 
 It reuses the same terminal theme and is **gated by the admin env secrets**
 (`DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET`) — if they're unset the plane

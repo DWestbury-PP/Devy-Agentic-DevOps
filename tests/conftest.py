@@ -53,3 +53,69 @@ def pool(pg_url):
             "github_accounts, repo_crawls, repo_docgen, doc_components, documents, ingest_jobs"
         )
     return p
+
+
+# -- secrets backend test double (Phase S-1) --------------------------------
+# An in-memory AWS Secrets Manager client mirroring just the boto3 surface the
+# SecretsProvider uses, so the suite is hermetic (no boto3 / LocalStack / network).
+class _FakeSMClient:
+    class exceptions:
+        class ResourceNotFoundException(Exception):
+            pass
+
+        class ResourceExistsException(Exception):
+            pass
+
+    def __init__(self) -> None:
+        self._d: dict[str, str] = {}
+
+    def get_secret_value(self, SecretId):
+        if SecretId not in self._d:
+            raise self.exceptions.ResourceNotFoundException()
+        return {"SecretString": self._d[SecretId]}
+
+    def describe_secret(self, SecretId):
+        if SecretId not in self._d:
+            raise self.exceptions.ResourceNotFoundException()
+        return {"Name": SecretId}
+
+    def create_secret(self, Name, SecretString):
+        if Name in self._d:
+            raise self.exceptions.ResourceExistsException()
+        self._d[Name] = SecretString
+
+    def put_secret_value(self, SecretId, SecretString):
+        self._d[SecretId] = SecretString
+
+    def delete_secret(self, SecretId, ForceDeleteWithoutRecovery=False):
+        if SecretId not in self._d:
+            raise self.exceptions.ResourceNotFoundException()
+        del self._d[SecretId]
+
+    def list_secrets(self, MaxResults=10):
+        return {"SecretList": [{"Name": k} for k in list(self._d)[:MaxResults]]}
+
+
+def make_fake_secrets(writable: bool = True, store_file=None):
+    from agentic_devops.proxy.secrets import SecretsProvider
+
+    return SecretsProvider(_FakeSMClient(), writable=writable, store_file=store_file)
+
+
+@pytest.fixture()
+def secrets():
+    """A writable in-memory SecretsProvider for store-level tests."""
+    return make_fake_secrets(writable=True)
+
+
+@pytest.fixture(autouse=True)
+def _patch_app_secrets(monkeypatch):
+    """Make every create_app() in the suite use an in-memory secrets backend whose
+    writability tracks settings.secrets.mode (so prod read-only / 403 tests work),
+    instead of a real boto3 client. Patched on the app module (where it's bound)."""
+    from agentic_devops.proxy.secrets import SecretsProvider
+
+    def _fake_build(settings):
+        return SecretsProvider(_FakeSMClient(), writable=settings.secrets.mode == "dev")
+
+    monkeypatch.setattr("agentic_devops.proxy.app.build_secrets_provider", _fake_build)

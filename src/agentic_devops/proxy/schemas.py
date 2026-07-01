@@ -94,7 +94,8 @@ class HostBase(BaseModel):
 
 
 class HostCreate(HostBase):
-    token: Optional[str] = None  # per-host MCP bearer token (write-only; stored encrypted)
+    token: Optional[str] = None  # per-host MCP bearer token (write-only; dev sets it, prod 403)
+    secret_ref: Optional[str] = None  # override the manager name (prod out-of-band provisioning)
 
 
 class HostUpdate(BaseModel):
@@ -126,6 +127,7 @@ class HostInfo(BaseModel):
     mcp_port: int
     mcp_scheme: str
     address_preference: str
+    secret_ref: Optional[str] = None  # name of the token in the secrets manager (not the value)
     profile: Optional[str] = None
     active: bool
     labels: dict[str, Any] = Field(default_factory=dict)
@@ -175,7 +177,8 @@ class GitHubAccountCreate(BaseModel):
     default_corpus: Optional[str] = None
     active: bool = True
     labels: dict[str, Any] = Field(default_factory=dict)
-    token: Optional[str] = None  # read-only PAT (write-only; stored encrypted)
+    token: Optional[str] = None  # read-only PAT (write-only; dev sets it, prod 403)
+    secret_ref: Optional[str] = None  # override the manager name (prod out-of-band provisioning)
 
 
 class GitHubAccountUpdate(BaseModel):
@@ -193,6 +196,7 @@ class GitHubAccountInfo(BaseModel):
     id: str
     label: str
     login: Optional[str] = None
+    secret_ref: Optional[str] = None  # name of the PAT in the secrets manager (not the value)
     default_corpus: Optional[str] = None
     active: bool
     labels: dict[str, Any] = Field(default_factory=dict)

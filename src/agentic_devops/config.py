@@ -144,6 +144,37 @@ class KnowledgeConfig(BaseModel):
     docgen_max_files: int = 40  # signal-file cap per component (cost guard)
 
 
+class SecretsConfig(BaseModel):
+    """Where external credentials (connector tokens, provider keys) come from.
+
+    One AWS Secrets Manager API surface everywhere — LocalStack in ``dev``, real
+    AWS SM in ``prod`` — so the resolve path is identical dev→prod. The mode is the
+    single deployment knob (set ``DEVY_MODE`` in ``.env``):
+
+    - ``dev``  — store = LocalStack (``endpoint_url``); the admin UI can **set** and
+      test secrets; writes are mirrored to ``store_file`` and re-hydrated into
+      LocalStack on boot (LocalStack Community doesn't persist), so secrets survive
+      restarts. Dummy AWS creds (LocalStack ignores them).
+    - ``prod`` — store = real AWS SM (no ``endpoint_url``); the app authenticates via
+      the ambient instance **IAM role** (no key at rest); secrets are provisioned
+      **out-of-band** (Terraform/CDK) and the admin UI is **test-only** (writes 403).
+
+    The mode is *not* a secret, so it lives in ``.env``/config, never in the store.
+    """
+
+    mode: Literal["dev", "prod"] = "dev"
+    region: str = "us-east-1"
+    # LocalStack endpoint in dev (e.g. http://localstack:4566); None → real AWS SM.
+    endpoint_url: Optional[str] = None
+    # DEV write-through/re-hydration file so UI-set secrets survive restarts.
+    store_file: Optional[str] = Field(default_factory=lambda: str(_home() / "secrets-store.json"))
+    # Dummy creds for LocalStack (ignored by it); unset in prod → IAM role chain.
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
+    # Secret-name prefix/namespace in the manager.
+    namespace: str = "devy"
+
+
 def _default_tiers() -> dict[str, ModelTier]:
     """Sensible starting tiers. Operators are expected to override these in
     ``config.yaml`` to match their own providers, costs, and security posture."""
@@ -184,6 +215,9 @@ class Settings(BaseSettings):
 
     # Knowledge / retrieval subsystem (overridden by config.yaml)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
+
+    # Secrets backend (dev=LocalStack / prod=AWS SM). Mode also settable via DEVY_MODE.
+    secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
     # Harness behavior. max_iterations bounds tool-calling rounds per turn; an
     # adaptive RCA investigation needs room to gather across passes (raise it in
@@ -268,5 +302,13 @@ def load_settings() -> Settings:
             data["knowledge"] = KnowledgeConfig(**data["knowledge"])
         if "database" in data and isinstance(data["database"], dict):
             data["database"] = DatabaseConfig(**data["database"])
+        if "secrets" in data and isinstance(data["secrets"], dict):
+            data["secrets"] = SecretsConfig(**data["secrets"])
         overrides = data
-    return Settings(**overrides)
+    settings = Settings(**overrides)
+    # DEVY_MODE (.env) is the single deploy-mode knob; it wins over config.yaml so
+    # the same image flips dev↔prod by environment alone.
+    mode = (os.environ.get("DEVY_MODE") or "").strip().lower()
+    if mode in ("dev", "prod"):
+        settings.secrets.mode = mode  # type: ignore[assignment]
+    return settings

@@ -1,33 +1,31 @@
-"""GitHub account registry + repo tools (Phase D-1).
+"""GitHub account registry + repo tools (Phase D-1; secrets-backed since S-1).
 
-Store CRUD + Fernet round-trip + resolution on the live DB; the read-only tools
-against a fake client.
+Store CRUD + secrets-manager round-trip + resolution on the live DB; the
+read-only tools against a fake client.
 """
 
 import bcrypt
 import pytest
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from agentic_devops.config import DatabaseConfig, Settings
 from agentic_devops.proxy.app import create_app
-from agentic_devops.proxy.encryption import TokenCipher
 from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.tools.builtin.repos import build_repo_tools
 from agentic_devops.tools.router import ToolsRouter
 
 
 @pytest.fixture()
-def store(pool):
-    return GitHubAccountStore(pool, TokenCipher(Fernet.generate_key().decode()))
+def store(pool, secrets):
+    return GitHubAccountStore(pool, secrets)
 
 
-# -- store + encryption -----------------------------------------------------
+# -- store + secrets backend ------------------------------------------------
 def test_create_resolve_roundtrips_token(store):
     a = store.create({"label": "home", "login": "octocat"}, token="ghp_secret")
     assert a.id and a.has_token is True
     resolved = store.resolve("home")
-    assert resolved.token == "ghp_secret"  # decrypted via Fernet
+    assert resolved.token == "ghp_secret"  # fetched from the secrets manager
     assert resolved.account.login == "octocat"
 
 
@@ -164,7 +162,6 @@ def test_repo_tools_are_in_repos_category(tools):
 def admin_client(tmp_path, pool, pg_url, monkeypatch):
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
-    monkeypatch.setenv("DEVY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     app = create_app(
         settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t"),
         provider=object(), router=ToolsRouter(),
@@ -191,6 +188,30 @@ def test_github_account_crud_endpoints(admin_client):
     patched = admin_client.patch(f"/v1/admin/github/accounts/{aid}", json={"active": False})
     assert patched.json()["active"] is False
     assert admin_client.delete(f"/v1/admin/github/accounts/{aid}").status_code == 200
+
+
+def test_prod_mode_refuses_token_writes(tmp_path, pool, pg_url, monkeypatch):
+    """Server-side posture (not just UI hiding): in prod, setting a token 403s —
+    secrets are provisioned out-of-band. Metadata-only creates still work."""
+    from agentic_devops.config import SecretsConfig
+
+    monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
+    app = create_app(
+        settings=Settings(
+            database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",
+            secrets=SecretsConfig(mode="prod"),
+        ),
+        provider=object(), router=ToolsRouter(),
+    )
+    client = TestClient(app)
+    tok = client.post("/v1/admin/login", json={"password": "pw"}).json()["token"]
+    client.headers.update({"Authorization": f"Bearer {tok}"})
+
+    assert client.post("/v1/admin/github/accounts", json={"label": "p", "token": "ghp_x"}).status_code == 403
+    # metadata-only registration is allowed (secret provisioned out-of-band)
+    r = client.post("/v1/admin/github/accounts", json={"label": "p", "login": "acme"})
+    assert r.status_code == 201 and r.json()["secret_ref"] == "devy/github/p"
 
 
 def test_duplicate_label_conflicts(admin_client):

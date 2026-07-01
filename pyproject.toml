@@ -30,7 +30,8 @@ dependencies = [
     "psycopg-pool>=3.2",      # connection pooling
     "bcrypt>=4.1",            # admin password hashing (control plane)
     "pyjwt>=2.8",             # signed admin session tokens (HS256; SSO seam)
-    "cryptography>=42.0",     # Fernet encryption for per-host MCP tokens at rest
+    "cryptography>=42.0",     # Fernet (legacy token migration) + general crypto
+    "boto3>=1.34",            # AWS Secrets Manager client (LocalStack in dev, real ASM in prod)
 ]
 
 [project.optional-dependencies]

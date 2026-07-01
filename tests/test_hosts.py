@@ -1,25 +1,23 @@
-"""Host registry (Phase 9b): store + encryption + resolution, the host tools,
+"""Host registry (Phase 9b): store + secrets resolution, the host tools,
 and the admin CRUD endpoints."""
 
 import bcrypt
 import pytest
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from agentic_devops.config import DatabaseConfig, Settings
 from agentic_devops.proxy.app import create_app
-from agentic_devops.proxy.encryption import TokenCipher
 from agentic_devops.proxy.hosts import HostStore
 from agentic_devops.tools.builtin.hosts import build_host_tools
 from agentic_devops.tools.router import ToolsRouter
 
 
 @pytest.fixture()
-def store(pool):
-    return HostStore(pool, TokenCipher(Fernet.generate_key().decode()))
+def store(pool, secrets):
+    return HostStore(pool, secrets)
 
 
-# ---- store + encryption + resolution ----------------------------------------
+# ---- store + secrets backend + resolution -----------------------------------
 
 def test_create_get_list_with_encrypted_token(store):
     h = store.create(
@@ -38,7 +36,7 @@ def test_resolve_builds_endpoint_and_decrypts_token(store):
     )
     rh = store.resolve("web-1")
     assert rh.url == "https://10.0.0.5:8780/mcp"
-    assert rh.token == "tok-123"  # round-tripped through Fernet
+    assert rh.token == "tok-123"  # fetched from the secrets manager
 
 
 def test_address_preference(store):
@@ -110,7 +108,6 @@ def test_host_tools_lookup_and_run(store):
 def admin_client(tmp_path, pool, pg_url, monkeypatch):
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
-    monkeypatch.setenv("DEVY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     app = create_app(
         settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t"),
         provider=object(), router=ToolsRouter(),

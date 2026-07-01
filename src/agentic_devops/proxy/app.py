@@ -45,6 +45,9 @@ from agentic_devops.proxy.schemas import (
     HostCreate,
     HostInfo,
     HostUpdate,
+    MCPServerCreate,
+    MCPServerInfo,
+    MCPServerUpdate,
     DocgenBrief,
     DocgenInfo,
     DocgenComponentInfo,
@@ -225,6 +228,13 @@ def create_app(
 
     # GitHub connector (Phase D-1): account registry (secrets-backed PAT) + client.
     github_store = GitHubAccountStore(pool, secrets)
+
+    # MCP Servers registry (Phase S-4): general HTTP MCP tool sources, called
+    # on-demand via the same client as hosts; tools normalized into the router.
+    from agentic_devops.proxy.mcp_registry import MCPServerStore
+    from agentic_devops.tools.mcp_source import build_server_tools
+
+    mcp_server_store = MCPServerStore(pool, secrets, namespace=settings.secrets.namespace)
     repo_crawl_store = RepoCrawlStore(pool)
     repo_docgen_store = RepoDocgenStore(pool)
     doc_component_store = DocComponentStore(pool)
@@ -280,6 +290,25 @@ def create_app(
     else:
         mem_store = None
 
+    # MCP Servers registry (Phase S-4): mount/refresh a registered server's tools
+    # into the live router. Names can't collide with built-in categories.
+    RESERVED_CATEGORIES = {"knowledge", "memory", "diagnostics", "hosts", "repos", "mcp"}
+
+    def _mount_mcp_server(server: Any) -> tuple[str, int, int]:
+        """(status, tool_count, write_count). Withdraws the server's existing tools
+        first, so this doubles as refresh; best-effort on an unreachable server."""
+        router.unregister_category(server.tool_category)
+        resolved = mcp_server_store.resolve(server.id)
+        if resolved is None:
+            return "unknown", 0, 0
+        detail = host_mcp.list_tools_detail(resolved.url, resolved.token)
+        if not detail:
+            return "unreachable", 0, 0
+        specs, write_count = build_server_tools(server, detail, store=mcp_server_store, caller=host_mcp)
+        for spec in specs:
+            router.register_or_replace(spec)
+        return "reachable", len(detail), write_count
+
     provider = provider or ProviderClient(request_timeout=settings.request_timeout)
     sessions = PgSessionStore(pool)
     tracer = get_tracer(settings)
@@ -306,6 +335,15 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             logger.warning("ingest reconcile skipped (%s)", exc)
         ingest_worker.start()
+
+    @app.on_event("startup")
+    def _mount_registered_mcp_servers() -> None:
+        try:
+            for s in mcp_server_store.list(enabled_only=True):
+                status, tc, wc = _mount_mcp_server(s)
+                mcp_server_store.set_health(s.id, status, tc, wc)
+        except Exception as exc:  # noqa: BLE001 — never block startup on MCP mounts
+            logger.warning("MCP registry mount skipped (%s)", exc)
 
     @app.on_event("shutdown")
     def _stop_ingest_worker() -> None:
@@ -444,6 +482,67 @@ def create_app(
             })
         return out
 
+    # ---- MCP Servers registry (admin, Phase S-4) ----
+    @app.get("/v1/admin/mcp-servers", response_model=list[MCPServerInfo])
+    def list_mcp_servers(_: dict = Depends(require_admin)) -> list[MCPServerInfo]:
+        return [MCPServerInfo(**asdict(s)) for s in mcp_server_store.list()]
+
+    @app.post("/v1/admin/mcp-servers", response_model=MCPServerInfo, status_code=201)
+    async def create_mcp_server(body: MCPServerCreate, _: dict = Depends(require_admin)) -> MCPServerInfo:
+        if body.name.lower() in RESERVED_CATEGORIES or (body.category or "").lower() in RESERVED_CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"name/category collides with a built-in ({', '.join(sorted(RESERVED_CATEGORIES))})")
+        try:
+            server = mcp_server_store.create(body.model_dump())
+        except Exception as exc:  # noqa: BLE001 — most likely a duplicate name
+            raise HTTPException(status_code=409, detail=f"could not create MCP server: {exc}") from exc
+        if server.enabled:
+            status, tc, wc = await run_in_threadpool(_mount_mcp_server, server)
+            mcp_server_store.set_health(server.id, status, tc, wc)
+            server = mcp_server_store.get(server.id)
+        return MCPServerInfo(**asdict(server))
+
+    @app.patch("/v1/admin/mcp-servers/{server_id}", response_model=MCPServerInfo)
+    async def update_mcp_server(server_id: str, body: MCPServerUpdate, _: dict = Depends(require_admin)) -> MCPServerInfo:
+        if (body.category or "").lower() in RESERVED_CATEGORIES:
+            raise HTTPException(status_code=400, detail="category collides with a built-in")
+        prev = mcp_server_store.get(server_id)
+        if prev is None:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        server = mcp_server_store.update(server_id, body.model_dump(exclude_unset=True))
+        # Re-mount if enabled (tools may have changed); withdraw if disabled.
+        if server.enabled:
+            status, tc, wc = await run_in_threadpool(_mount_mcp_server, server)
+            mcp_server_store.set_health(server.id, status, tc, wc)
+        else:
+            await run_in_threadpool(router.unregister_category, prev.tool_category)
+            mcp_server_store.set_health(server.id, "disabled", 0, server.write_tool_count)
+        return MCPServerInfo(**asdict(mcp_server_store.get(server_id)))
+
+    @app.delete("/v1/admin/mcp-servers/{server_id}")
+    async def delete_mcp_server(server_id: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        removed = mcp_server_store.delete(server_id)
+        if removed is not None:
+            await run_in_threadpool(router.unregister_category, removed.tool_category)
+        return {"id": server_id, "deleted": True}
+
+    @app.post("/v1/admin/mcp-servers/{server_id}/test")
+    async def test_mcp_server(server_id: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        resolved = await run_in_threadpool(mcp_server_store.resolve, server_id)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        checks = await run_in_threadpool(host_mcp.list_tools, resolved.url, resolved.token)
+        status = "reachable" if checks else "unreachable"
+        return {"status": status, "checks": checks}
+
+    @app.post("/v1/admin/mcp-servers/{server_id}/refresh", response_model=MCPServerInfo)
+    async def refresh_mcp_server(server_id: str, _: dict = Depends(require_admin)) -> MCPServerInfo:
+        server = mcp_server_store.get(server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        status, tc, wc = await run_in_threadpool(_mount_mcp_server, server)
+        mcp_server_store.set_health(server.id, status, tc, wc)
+        return MCPServerInfo(**asdict(mcp_server_store.get(server_id)))
+
     # ---- GitHub connector (admin, Phase D-1) ----
     @app.get("/v1/admin/github/accounts", response_model=list[GitHubAccountInfo])
     def list_github_accounts(_: dict = Depends(require_admin)) -> list[GitHubAccountInfo]:
@@ -514,6 +613,8 @@ def create_app(
             return "github"
         if ref.startswith(f"{_ns}/host/"):
             return "host"
+        if ref.startswith(f"{_ns}/mcp/"):
+            return "mcp"
         return "unknown"
 
     def _known_refs() -> set[str]:
@@ -522,17 +623,18 @@ def create_app(
         refs = set(_sc.settable_refs(_ns))
         refs |= {a.secret_ref for a in github_store.list() if a.secret_ref}
         refs |= {h.secret_ref for h in host_store.list() if h.secret_ref}
+        refs |= {m.secret_ref for m in mcp_server_store.list() if m.secret_ref}
         return refs
 
     def _entry_for(ref: str) -> SecretEntry:
-        for e in _sc.build_catalog(_ns, secrets, github_store, host_store):
+        for e in _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store):
             if e["ref"] == ref:
                 return SecretEntry(**e)
         raise HTTPException(status_code=404, detail="unknown secret")
 
     @app.get("/v1/admin/secrets", response_model=SecretCatalog)
     def list_secrets(_: dict = Depends(require_admin)) -> SecretCatalog:
-        entries = _sc.build_catalog(_ns, secrets, github_store, host_store)
+        entries = _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store)
         return SecretCatalog(
             mode=settings.secrets.mode, writable=secrets.writable,
             reachable=secrets.health(),
@@ -589,6 +691,12 @@ def create_app(
             resolved = await run_in_threadpool(host_store.resolve, host.id, False)
             checks = await run_in_threadpool(host_mcp.list_tools, resolved.url, resolved.token)
             ok, detail = (bool(checks), f"{len(checks)} checks available" if checks else "unreachable")
+        elif category == "mcp":
+            server = next((m for m in mcp_server_store.list() if m.secret_ref == ref), None)
+            if server is None:
+                return SecretTestResult(ok=False, detail="no MCP server bound to this secret")
+            checks = await run_in_threadpool(host_mcp.list_tools, server.url, value)
+            ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")
         return SecretTestResult(ok=ok, detail=detail)

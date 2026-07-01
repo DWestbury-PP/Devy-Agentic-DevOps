@@ -52,11 +52,20 @@
     table.tbl th[aria-sort="ascending"]::after { content: "↑"; opacity: 1; color: var(--green); }
     table.tbl th[aria-sort="descending"]::after { content: "↓"; opacity: 1; color: var(--green); }
     table.tbl td { padding: 8px; border-bottom: 1px solid var(--line-soft); color: var(--fg); }
-    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--fg-faint); }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line);
+            color: var(--fg-faint); white-space: nowrap; }
+    /* Secrets table: fixed columns so the inline "Set" editor can't reflow the row. */
+    #secrets-page table.tbl { table-layout: fixed; }
+    #secrets-page table.tbl th:nth-child(1), #secrets-page table.tbl td:nth-child(1) { width: 32%; }
+    #secrets-page table.tbl th:nth-child(2), #secrets-page table.tbl td:nth-child(2) { width: 25%; }
+    #secrets-page table.tbl th:nth-child(3), #secrets-page table.tbl td:nth-child(3) { width: 11%; }
+    #secrets-page table.tbl th:nth-child(4), #secrets-page table.tbl td:nth-child(4) { width: 32%; }
+    #secrets-page table.tbl td:nth-child(2) .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .svc-env { display: block; color: var(--fg-faint); font-size: 11px; margin-top: 2px; }
     .pill.reachable { color: var(--green); border-color: var(--green-deep); }
     .pill.unreachable { color: var(--red); border-color: var(--red); }
     .pill.inactive { color: var(--amber); border-color: var(--amber); }
-    .acts { display: flex; gap: 6px; }
+    .acts { display: flex; gap: 6px; flex-wrap: wrap; }
     .acts .btn { padding: 4px 9px; font-size: 12px; }
     .hidden { display: none; }
     .btn[disabled] { opacity: 0.6; cursor: default; }

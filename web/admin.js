@@ -745,8 +745,8 @@ function secretRow(e) {
   const tr = el("tr");
   const svc = el("td");
   svc.appendChild(el("span", null, e.label));
-  const hint = el("span", "sub");
-  hint.textContent = "  " + (e.env || "on-demand");
+  const hint = el("span", "svc-env");  // own line, so the column width is stable
+  hint.textContent = e.env || "on-demand";
   hint.title = e.env
     ? "read by the provider SDK from this environment variable"
     : "resolved on demand from the vault (not an environment variable)";
@@ -805,7 +805,7 @@ function promptSetSecret(wrap, e) {
   const input = el("input");
   input.type = "password";
   input.placeholder = "paste value";
-  input.style.width = "220px";
+  input.style.width = "130px";
   const save = el("button", "btn", "Save");
   const cancel = el("button", "btn ghost-btn", "Cancel");
   save.addEventListener("click", async () => {

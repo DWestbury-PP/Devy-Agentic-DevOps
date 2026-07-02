@@ -18,6 +18,7 @@ from typing import Any, Callable, Generator, Optional
 from agentic_devops.config import ModelTier, Settings
 from agentic_devops.proxy.auth import tier_allows
 from agentic_devops.proxy.providers import ProviderClient, ProviderResponse
+from agentic_devops.proxy.tracing import NOOP_SPAN, Span, Tracer
 from agentic_devops.tools.router import FIND_TOOLS_NAME, ToolNotFoundError, ToolsRouter
 
 EventCallback = Callable[[dict[str, Any]], None]
@@ -56,6 +57,18 @@ def _assistant_tool_call_message(response: ProviderResponse) -> dict[str, Any]:
     }
 
 
+def _llm_span_name(tier: ModelTier) -> str:
+    return f"llm: {tier.label or tier.model}"
+
+
+def _turn_inputs(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """The user's prompt for the turn's root span (last message in the assembled list)."""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            return {"input": m.get("content") or ""}
+    return {}
+
+
 def _process_tool_calls(
     response: ProviderResponse,
     router: ToolsRouter,
@@ -63,6 +76,7 @@ def _process_tool_calls(
     loaded: set[str],
     tools_used: list[str],
     tool_context: Optional[dict[str, Any]] = None,
+    turn_span: Span = NOOP_SPAN,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Handle one round of tool calls.
 
@@ -78,55 +92,60 @@ def _process_tool_calls(
     for tc in response.tool_calls:
         events.append({"type": "tool_call", "name": tc.name, "arguments": tc.arguments})
 
-        if tc.name == FIND_TOOLS_NAME:
-            specs = router.find(tc.arguments.get("intent"), tc.arguments.get("category"))
-            for spec in specs:
-                if spec.name not in loaded:
-                    available_tools.append(spec.openai_schema())
-                    loaded.add(spec.name)
-            content = json.dumps(
-                {
-                    "found": [s.summary() for s in specs],
-                    "note": "These tools are now callable. Call them directly to proceed.",
-                }
-            )
-            events.append({"type": "tools_found", "names": [s.name for s in specs]})
-        else:
-            tools_used.append(tc.name)
-            # RBAC-2: gate by the caller's permitted tier (from tool_context). Absent
-            # → 'elevated' (unrestricted) so non-chat callers / tests aren't limited.
-            _spec = router.get_spec(tc.name)
-            _allowed = (tool_context or {}).get("allowed_tier", "elevated")
-            if _spec is not None and not tier_allows(_allowed, _spec.safety_tier):
-                content = (
-                    f"ERROR: tool {tc.name!r} requires the {_spec.safety_tier!r} permission "
-                    f"tier; your role allows up to {_allowed!r}. Ask an admin if you need it."
-                )
-                events.append({"type": "tool_denied", "name": tc.name, "required": _spec.safety_tier})
-            else:
-                try:
-                    content = str(router.execute(tc.name, tc.arguments, context=tool_context))
-                    ok = True
-                except ToolNotFoundError:
-                    content = (
-                        f"ERROR: tool {tc.name!r} is not available. "
-                        f"Use {FIND_TOOLS_NAME} to discover valid tools first."
-                    )
-                    ok = False
-                except Exception as exc:  # surface tool failures to the model, don't crash
-                    content = f"ERROR: tool {tc.name!r} failed: {exc}"
-                    ok = False
-                events.append(
-                    {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
-                )
-                findings.append(
+        with turn_span.tool(f"tool: {tc.name}", tc.arguments) as span:
+            if tc.name == FIND_TOOLS_NAME:
+                specs = router.find(tc.arguments.get("intent"), tc.arguments.get("category"))
+                for spec in specs:
+                    if spec.name not in loaded:
+                        available_tools.append(spec.openai_schema())
+                        loaded.add(spec.name)
+                content = json.dumps(
                     {
-                        "tool": tc.name,
-                        "intent": json.dumps(tc.arguments, default=str)[:200],
-                        "result": content,
-                        "ok": ok,
+                        "found": [s.summary() for s in specs],
+                        "note": "These tools are now callable. Call them directly to proceed.",
                     }
                 )
+                events.append({"type": "tools_found", "names": [s.name for s in specs]})
+                span.outputs({"found": [s.name for s in specs]},
+                             ok=True, meta={"tool": tc.name, "n_found": len(specs)})
+            else:
+                tools_used.append(tc.name)
+                # RBAC-2: gate by the caller's permitted tier (from tool_context). Absent
+                # → 'elevated' (unrestricted) so non-chat callers / tests aren't limited.
+                _spec = router.get_spec(tc.name)
+                _allowed = (tool_context or {}).get("allowed_tier", "elevated")
+                if _spec is not None and not tier_allows(_allowed, _spec.safety_tier):
+                    content = (
+                        f"ERROR: tool {tc.name!r} requires the {_spec.safety_tier!r} permission "
+                        f"tier; your role allows up to {_allowed!r}. Ask an admin if you need it."
+                    )
+                    events.append({"type": "tool_denied", "name": tc.name, "required": _spec.safety_tier})
+                    span.outputs(ok=False, meta={"tool": tc.name, "denied": _spec.safety_tier})
+                else:
+                    try:
+                        content = str(router.execute(tc.name, tc.arguments, context=tool_context))
+                        ok = True
+                    except ToolNotFoundError:
+                        content = (
+                            f"ERROR: tool {tc.name!r} is not available. "
+                            f"Use {FIND_TOOLS_NAME} to discover valid tools first."
+                        )
+                        ok = False
+                    except Exception as exc:  # surface tool failures to the model, don't crash
+                        content = f"ERROR: tool {tc.name!r} failed: {exc}"
+                        ok = False
+                    events.append(
+                        {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
+                    )
+                    findings.append(
+                        {
+                            "tool": tc.name,
+                            "intent": json.dumps(tc.arguments, default=str)[:200],
+                            "result": content,
+                            "ok": ok,
+                        }
+                    )
+                    span.outputs({"result": content}, ok=ok, meta={"tool": tc.name})
 
         messages.append(
             {"role": "tool", "tool_call_id": tc.id, "name": tc.name, "content": content}
@@ -149,6 +168,7 @@ def run_turn(
     tier: ModelTier,
     on_event: Optional[EventCallback] = None,
     tool_context: Optional[dict[str, Any]] = None,
+    tracer: Optional[Tracer] = None,
 ) -> TurnResult:
     """Run one user turn to completion (non-streaming)."""
 
@@ -165,27 +185,37 @@ def run_turn(
     final_text = ""
     iterations = 0
 
-    while iterations < settings.max_iterations:
-        iterations += 1
-        response = provider.complete(working, tier=tier, tools=available_tools)
-        _accumulate_usage(usage, response.usage)
+    session_id = (tool_context or {}).get("session_id") or ""
+    turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
+    with turn:
+        while iterations < settings.max_iterations:
+            iterations += 1
+            with turn.llm(_llm_span_name(tier), {"messages": working}) as llm:
+                response = provider.complete(working, tier=tier, tools=available_tools)
+                llm.outputs({"completion": response.text,
+                             "tool_calls": [t.name for t in response.tool_calls]},
+                            usage=response.usage)
+            _accumulate_usage(usage, response.usage)
 
-        if not response.wants_tools:
-            final_text = response.text or ""
+            if not response.wants_tools:
+                final_text = response.text or ""
+                working.append({"role": "assistant", "content": final_text})
+                break
+
+            working.append(_assistant_tool_call_message(response))
+            tool_messages, events, findings = _process_tool_calls(
+                response, router, available_tools, loaded, tools_used, tool_context, turn
+            )
+            tool_findings.extend(findings)
+            for event in events:
+                emit(event)
+            working.extend(tool_messages)
+        else:
+            final_text = _GUARD_MESSAGE
             working.append({"role": "assistant", "content": final_text})
-            break
 
-        working.append(_assistant_tool_call_message(response))
-        tool_messages, events, findings = _process_tool_calls(
-            response, router, available_tools, loaded, tools_used, tool_context
-        )
-        tool_findings.extend(findings)
-        for event in events:
-            emit(event)
-        working.extend(tool_messages)
-    else:
-        final_text = _GUARD_MESSAGE
-        working.append({"role": "assistant", "content": final_text})
+        turn.outputs({"output": final_text},
+                     usage=usage, meta={"iterations": iterations, "tools_used": tools_used})
 
     emit({"type": "done", "iterations": iterations, "usage": usage})
     return TurnResult(
@@ -201,6 +231,7 @@ def run_turn_streaming(
     messages: list[dict[str, Any]],
     tier: ModelTier,
     tool_context: Optional[dict[str, Any]] = None,
+    tracer: Optional[Tracer] = None,
 ) -> Generator[dict[str, Any], None, TurnResult]:
     """Run one user turn, yielding events as they happen.
 
@@ -217,30 +248,40 @@ def run_turn_streaming(
     final_text = ""
     iterations = 0
 
-    while iterations < settings.max_iterations:
-        iterations += 1
-        # Forward the provider's delta events; capture the assembled response.
-        response: ProviderResponse = yield from provider.stream(
-            working, tier=tier, tools=available_tools
-        )
-        _accumulate_usage(usage, response.usage)
+    session_id = (tool_context or {}).get("session_id") or ""
+    turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
+    with turn:
+        while iterations < settings.max_iterations:
+            iterations += 1
+            # Forward the provider's delta events; capture the assembled response.
+            with turn.llm(_llm_span_name(tier), {"messages": working}) as llm:
+                response: ProviderResponse = yield from provider.stream(
+                    working, tier=tier, tools=available_tools
+                )
+                llm.outputs({"completion": response.text,
+                             "tool_calls": [t.name for t in response.tool_calls]},
+                            usage=response.usage)
+            _accumulate_usage(usage, response.usage)
 
-        if not response.wants_tools:
-            final_text = response.text or ""
+            if not response.wants_tools:
+                final_text = response.text or ""
+                working.append({"role": "assistant", "content": final_text})
+                break
+
+            working.append(_assistant_tool_call_message(response))
+            tool_messages, events, findings = _process_tool_calls(
+                response, router, available_tools, loaded, tools_used, tool_context, turn
+            )
+            tool_findings.extend(findings)
+            for event in events:
+                yield event
+            working.extend(tool_messages)
+        else:
+            final_text = _GUARD_MESSAGE
             working.append({"role": "assistant", "content": final_text})
-            break
 
-        working.append(_assistant_tool_call_message(response))
-        tool_messages, events, findings = _process_tool_calls(
-            response, router, available_tools, loaded, tools_used, tool_context
-        )
-        tool_findings.extend(findings)
-        for event in events:
-            yield event
-        working.extend(tool_messages)
-    else:
-        final_text = _GUARD_MESSAGE
-        working.append({"role": "assistant", "content": final_text})
+        turn.outputs({"output": final_text},
+                     usage=usage, meta={"iterations": iterations, "tools_used": tools_used})
 
     yield {"type": "done", "iterations": iterations, "usage": usage, "text": final_text}
     return TurnResult(

@@ -222,6 +222,24 @@ class RbacConfig(BaseModel):
     assistant_role: str = "admin"
 
 
+class LangSmithConfig(BaseModel):
+    """LangSmith tracing (opt-in; ``tracing: langsmith``). The API key is a secret
+    (``LANGSMITH_API_KEY``, set on the Secrets tab); everything here is plain config.
+
+    ``capture`` controls what leaves the process for LangSmith's cloud:
+      * ``full``     — prompts, completions, and tool I/O (best for building/debugging)
+      * ``metadata`` — only span names, timings, success, and token usage (conservative)
+    Left unset it follows ``DEVY_MODE``: **dev → full, prod → metadata** — so the same
+    image is thorough in dev and privacy-conservative in prod without a code change.
+    ``endpoint``/``project`` fall back to the ``LANGSMITH_ENDPOINT``/``LANGSMITH_PROJECT``
+    env vars when unset, matching LangSmith's standard setup.
+    """
+
+    project: str = "devy"
+    endpoint: str = "https://api.smith.langchain.com"
+    capture: Optional[Literal["full", "metadata"]] = None
+
+
 def _default_tiers() -> dict[str, ModelTier]:
     """Sensible starting tiers. Operators are expected to override these in
     ``config.yaml`` to match their own providers, costs, and security posture."""
@@ -295,6 +313,7 @@ class Settings(BaseSettings):
 
     # Tracing: "jsonl" (local, default), "langsmith", or "none"
     tracing: Literal["jsonl", "langsmith", "none"] = "jsonl"
+    langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
 
     def resolve_tier(self, tier: Optional[str] = None) -> ModelTier:
         """Resolve a tier name to its operator-configured model profile."""
@@ -359,6 +378,8 @@ def load_settings() -> Settings:
             data["auth"] = AuthConfig(**data["auth"])
         if "rbac" in data and isinstance(data["rbac"], dict):
             data["rbac"] = RbacConfig(**data["rbac"])
+        if "langsmith" in data and isinstance(data["langsmith"], dict):
+            data["langsmith"] = LangSmithConfig(**data["langsmith"])
         overrides = data
     settings = Settings(**overrides)
     # DEVY_MODE (.env) is the single deploy-mode knob; it wins over config.yaml so

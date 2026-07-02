@@ -168,6 +168,17 @@ tiers:
 # request_timeout: 120      # per-call provider timeout (s); a stall fails fast, never hangs the turn
 # tracing: jsonl            # jsonl | langsmith | none
 
+# --- LangSmith tracing (opt-in; set `tracing: langsmith` above) ---
+# A waterfall of each turn → its LLM calls → its tool calls. The API key is a
+# SECRET — set it on the admin Secrets tab (devy/provider/langsmith), NOT here.
+# `capture` decides what leaves the process for LangSmith's cloud; left unset it
+# follows DEVY_MODE (dev → full, prod → metadata). endpoint/project also honor the
+# LANGSMITH_ENDPOINT / LANGSMITH_PROJECT env vars when unset.
+# langsmith:
+#   project: devy                              # LangSmith project name
+#   endpoint: https://api.smith.langchain.com  # self-hosted? point here
+#   capture: full                              # full | metadata (omit → follows DEVY_MODE)
+
 # --- Conversation memory / compaction (Phase 7; defaults shown) ---
 # Sessions are two-channel: the user-facing transcript is stored losslessly, while
 # Devy's working context (a structured rolling summary + distilled tool findings)

@@ -57,6 +57,28 @@ Controls:
 - No telemetry is sent anywhere by default; agent tracing is local JSONL unless
   you opt into LangSmith.
 
+### LangSmith tracing (data egress)
+
+Setting `tracing: langsmith` sends a **waterfall** of each turn — its LLM calls
+and its tool calls — to LangSmith's cloud (`api.smith.langchain.com`, or your
+self-hosted endpoint). This is real data egress, so it's **off by default** and
+gated on both the setting and a key you set on the Secrets tab
+(`devy/provider/langsmith`).
+
+What leaves the process is controlled by `langsmith.capture`, which — left unset —
+**follows `DEVY_MODE`**:
+
+- **`dev` → `full`**: prompts, completions, and **tool outputs** (which can include
+  live host diagnostics and knowledge-base content). Best for building and
+  stress-testing the harness. Use only with a private LangSmith project.
+- **`prod` → `metadata`**: only span names, timings, success/failure, and token
+  usage — **no prompt, completion, or tool-output bodies** leave the process.
+
+Note the secret-redaction gate runs at *ingest*, not over live tool output — so in
+`full` mode, unredacted host/infra data in tool results will reach LangSmith. Prefer `metadata` (or leave tracing off) in any
+environment where that matters. Pin `langsmith.capture` explicitly to override the
+mode-derived default.
+
 ## Secrets management
 
 Every external credential (LLM/provider keys, GitHub PATs, per-host MCP tokens,

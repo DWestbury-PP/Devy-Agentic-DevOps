@@ -126,6 +126,7 @@
         <button id="tab-repos" class="tab">Repos</button>
         <button id="tab-knowledge" class="tab">Knowledge</button>
         <button id="tab-secrets" class="tab">Secrets</button>
+        <button id="tab-mcp" class="tab">MCP</button>
       </div>
 
       <!-- ===== Hosts page ===== -->
@@ -299,6 +300,35 @@
         </table>
         <div id="secrets-msg" class="msg"></div>
       </div><!-- /secrets-page -->
+
+      <!-- ===== MCP Servers page ===== -->
+      <div id="mcp-page" class="tab-page hidden">
+        <div class="row-between">
+          <div class="sub">MCP servers Devy mounts as tools (Grafana, CloudWatch, 3rd-party). Read-only by default; set each server's bearer token on the <b>Secrets</b> tab.</div>
+          <button id="mcp-add-toggle" class="btn">+ Add server</button>
+        </div>
+        <form id="mcp-form" class="hidden" autocomplete="off">
+          <div class="grid">
+            <input name="name" placeholder="Name (unique; tool prefix)" />
+            <input name="url" placeholder="https://…/mcp (streamable-HTTP)" />
+            <input name="category" placeholder="Category (optional; default: name)" />
+          </div>
+          <input name="description" placeholder="Description (optional; helps tool discovery)" style="width:100%;box-sizing:border-box;margin-top:8px" />
+          <div class="field">
+            <label class="chk"><input id="mcp-allow-writes" type="checkbox" /> Allow write tools (opt-in; default read-only)</label>
+            <button class="btn" type="submit">Save server</button>
+            <button id="mcp-cancel" class="btn ghost-btn" type="button">Cancel</button>
+          </div>
+        </form>
+        <div id="mcp-msg" class="msg"></div>
+        <table class="tbl">
+          <thead>
+            <tr><th>Server</th><th>Endpoint</th><th>Tools</th><th>Status</th><th>Enabled</th><th></th></tr>
+          </thead>
+          <tbody id="mcp-body"></tbody>
+        </table>
+        <div id="mcp-list-msg" class="msg"></div>
+      </div><!-- /mcp-page -->
     </section>
 
     <section id="disabled" class="card hidden">

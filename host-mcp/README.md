@@ -16,8 +16,9 @@ At the default `diagnostic` profile, the packaged allow-list exposes **host** an
 **Docker** diagnostics (all read-only, no shell):
 
 - **Host:** `disk`, `memory`, `cpu_load`, `os_info`, `network` (listening
-  sockets), `processes`, `top_snapshot`, and systemd log sweeps `journal` /
-  `journal_unit` / `journal_grep` (Linux).
+  sockets), `processes`, `top_snapshot`, and log sweeps `journal` / `journal_grep`
+  (the systemd journal on Linux, the unified `log show` on macOS) plus
+  `journal_unit` (systemd-specific).
 - **Docker** (needs access to the Docker socket): `docker_ps`, `docker_ps_all`,
   `docker_logs`, `docker_inspect`, `docker_stats`, `docker_top`, `docker_images`,
   `docker_system_df`.
@@ -25,6 +26,28 @@ At the default `diagnostic` profile, the packaged allow-list exposes **host** an
 Deliberately **absent**: anything that mutates or grants a shell —
 `docker exec/run/rm/stop`, arbitrary `cat`/`tail`, `dmesg`. The boundary is the
 allow-list itself, not the socket's mount mode.
+
+## One server, many operating systems
+
+The host MCP is **a single server that auto-detects its host OS** — deploy the
+same package on Linux or macOS and it adapts, with **no OS setting to configure**.
+Each check is either a portable command or a per-OS `argv` map, resolved at
+runtime from the host's reported OS (`platform.system()` — `Linux`, `Darwin`, …).
+For example:
+
+| Check | Linux | macOS |
+|---|---|---|
+| `memory` | `free -h` | `vm_stat` |
+| `os_info` | `uname -a` | `sw_vers` |
+| `network` | `ss -tuln` | `netstat -an -p tcp` |
+| `processes` / `top_snapshot` | `ps` / `top -bn1` | `ps` / `top -l 1` |
+| `journal` | `journalctl` | `log show` (unified log) |
+| `journal_grep` | `journalctl --grep` | `grep … /var/log/system.log` |
+
+A check with no variant for the detected OS (e.g. `journal_unit` and
+`systemctl_status`, which are systemd-specific) reports *"not supported on
+`<OS>`"* cleanly rather than running the wrong command. The `HOST_MCP_*` env vars
+configure the *deployment* (profile, auth, transport) — never the OS.
 
 ## Safety model
 

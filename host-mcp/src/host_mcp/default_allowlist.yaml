@@ -63,20 +63,21 @@ checks:
 
   journal:
     profile: diagnostic
-    description: "Recent systemd journal entries (Linux/systemd hosts)."
+    description: "Recent system log entries — systemd journal on Linux, the unified log (log show) on macOS."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}"]
+      Darwin: ["log", "show", "--last", "5m", "--style", "compact"]
     args:
       lines:
         type: int
         default: 100
         min: 1
         max: 1000
-        description: "Number of recent journal lines."
+        description: "Number of recent lines (Linux; on macOS the last few minutes are returned)."
 
   journal_unit:
     profile: diagnostic
-    description: "Recent journal entries for one systemd unit (log sweep)."
+    description: "Recent journal entries for one systemd unit (log sweep; Linux/systemd only)."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}", "-u", "{unit}"]
     args:
@@ -94,9 +95,10 @@ checks:
 
   journal_grep:
     profile: diagnostic
-    description: "Search the journal for a pattern (log sweep). Pattern is passed as a single argument, never a shell."
+    description: "Search recent system logs for a pattern — journald on Linux, /var/log/system.log on macOS. Pattern is passed as a single argument, never a shell."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}", "--grep", "{pattern}"]
+      Darwin: ["grep", "-i", "-m", "{lines}", "-e", "{pattern}", "/var/log/system.log"]
     args:
       pattern:
         type: string
@@ -183,7 +185,7 @@ checks:
   # ---- Elevated examples — NOT exposed at the default 'diagnostic' profile.
   systemctl_status:
     profile: elevated
-    description: "Status of a systemd service (Linux)."
+    description: "Status of a systemd service (Linux/systemd only)."
     platform:
       Linux: ["systemctl", "status", "--no-pager", "{unit}"]
     args:

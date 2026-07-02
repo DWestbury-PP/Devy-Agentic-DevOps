@@ -46,7 +46,9 @@ def test_me_requires_a_valid_token(admin_client):
     token = admin_client.post("/v1/admin/login", json={"password": "hunter2"}).json()["token"]
     ok = admin_client.get("/v1/admin/me", headers={"Authorization": f"Bearer {token}"})
     assert ok.status_code == 200
-    assert ok.json()["authenticated"] is True and ok.json()["scope"] == "admin"
+    # RBAC-1: password mode grants the admin role
+    assert ok.json()["authenticated"] is True and "admin" in ok.json()["roles"]
+    assert ok.json()["source"] == "password"
 
 
 def test_admin_plane_disabled_without_secrets(tmp_path, pool, pg_url, monkeypatch):

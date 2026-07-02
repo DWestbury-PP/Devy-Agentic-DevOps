@@ -20,7 +20,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from sse_starlette.sse import EventSourceResponse
 
@@ -68,7 +68,7 @@ from agentic_devops.proxy.schemas import (
     ToolInfo,
     UploadResult,
 )
-from agentic_devops.proxy.auth import admin_auth_from_env
+from agentic_devops.proxy.auth import Principal, build_authenticator
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
@@ -312,7 +312,7 @@ def create_app(
     provider = provider or ProviderClient(request_timeout=settings.request_timeout)
     sessions = PgSessionStore(pool)
     tracer = get_tracer(settings)
-    admin = admin_auth_from_env()
+    authenticator = build_authenticator(settings)
 
     app = FastAPI(title="Agentic DevOps — LLM-PROXY", version=__version__)
 
@@ -376,30 +376,45 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # ---- admin control plane (Phase 9) ----------------------------------------
-    def require_admin(authorization: Optional[str] = Header(default=None)) -> dict[str, Any]:
-        """Dependency guarding /v1/admin/* — the seam where SSO drops in later."""
-        if not admin.enabled:
-            raise HTTPException(status_code=503, detail="admin plane is not configured")
-        if not authorization or not authorization.lower().startswith("bearer "):
-            raise HTTPException(status_code=401, detail="missing admin token")
-        try:
-            return admin.verify_token(authorization.split(" ", 1)[1].strip())
-        except Exception as exc:  # noqa: BLE001 — any decode/expiry failure is a 401
-            raise HTTPException(status_code=401, detail="invalid or expired admin token") from exc
+    # ---- admin control plane (Phase 9 / RBAC-1) -------------------------------
+    def require_role(role: str):
+        """Dependency factory guarding the control plane by role. password mode →
+        the admin token grants ``admin``; jwt mode → roles from the IdP groups.
+        THE seam where SSO drops in (auth.mode: password | jwt)."""
+
+        def _dep(request: Request) -> Principal:
+            if not authenticator.enabled:
+                raise HTTPException(status_code=503, detail="admin plane is not configured")
+            token = authenticator.extract_token(request.headers.get(authenticator.header))
+            if not token:
+                raise HTTPException(status_code=401, detail="missing credentials")
+            try:
+                principal = authenticator.principal(token)
+            except Exception as exc:  # noqa: BLE001 — any decode/verify failure is a 401
+                raise HTTPException(status_code=401, detail="invalid or expired credentials") from exc
+            if not principal.has_role(role):
+                raise HTTPException(status_code=403, detail=f"requires role {role!r}")
+            return principal
+
+        return _dep
+
+    require_admin = require_role("admin")
 
     @app.post("/v1/admin/login", response_model=AdminToken)
     def admin_login(body: AdminLogin) -> AdminToken:
-        if not admin.enabled:
-            raise HTTPException(status_code=503, detail="admin plane is not configured")
-        if not admin.verify_password(body.password):
+        if not authenticator.login_enabled:
+            detail = ("login is disabled in jwt mode — authenticate via your SSO proxy"
+                      if authenticator.mode == "jwt" else "admin plane is not configured")
+            raise HTTPException(status_code=400 if authenticator.mode == "jwt" else 503, detail=detail)
+        if not authenticator.admin.verify_password(body.password):
             raise HTTPException(status_code=401, detail="invalid credentials")
-        token, ttl = admin.issue_token()
+        token, ttl = authenticator.admin.issue_token()
         return AdminToken(token=token, expires_in=ttl)
 
     @app.get("/v1/admin/me")
-    def admin_me(principal: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-        return {"authenticated": True, "sub": principal.get("sub"), "scope": principal.get("scope")}
+    def admin_me(principal: Principal = Depends(require_admin)) -> dict[str, Any]:
+        return {"authenticated": True, "id": principal.id, "email": principal.email,
+                "roles": sorted(principal.roles), "source": principal.source}
 
     # ---- host registry (admin) ----
     @app.get("/v1/admin/hosts", response_model=list[HostInfo])
@@ -673,7 +688,7 @@ def create_app(
         return {"ref": ref, "deleted": True}
 
     @app.post("/v1/admin/secrets/test", response_model=SecretTestResult)
-    async def test_secret(body: SecretRefBody, _: dict = Depends(require_admin)) -> SecretTestResult:
+    async def test_secret(body: SecretRefBody, principal: Principal = Depends(require_admin)) -> SecretTestResult:
         ref = body.ref
         category = _secret_category(ref)
         value = await run_in_threadpool(secrets.get, ref)
@@ -699,7 +714,7 @@ def create_app(
             ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")
-        secrets.audit("test", ref, ok, actor="admin", detail=detail[:120])
+        secrets.audit("test", ref, ok, actor=principal.actor, detail=detail[:120])
         return SecretTestResult(ok=ok, detail=detail)
 
     @app.get("/v1/admin/github/repos")
@@ -865,7 +880,7 @@ def create_app(
     async def upload_documents(
         corpus: str = Form(...),
         files: list[UploadFile] = File(...),
-        principal: dict[str, Any] = Depends(require_admin),
+        principal: Principal = Depends(require_admin),
     ) -> UploadResult:
         from agentic_devops.knowledge.enrich import doc_title, doc_type
         from agentic_devops.knowledge.ingest import content_hash
@@ -876,7 +891,7 @@ def create_app(
 
         from agentic_devops.knowledge.redaction import apply_redaction
 
-        uploaded_by = str(principal.get("sub") or "admin")
+        uploaded_by = principal.actor
         accepted: list[tuple[str, str, int]] = []
         quarantined: list = []  # registered failed, never stored unredacted
         for f in files:

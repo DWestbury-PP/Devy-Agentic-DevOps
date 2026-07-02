@@ -73,6 +73,27 @@ def admin_auth_from_env() -> AdminAuth:
     )
 
 
+# -- Roles → tool safety tiers (RBAC-2) -------------------------------------
+# Each role grants tool use up to a maximum safety tier. Ordered least→most.
+TIER_ORDER = {"read-only": 0, "diagnostic": 1, "elevated": 2}
+ROLE_TIERS = {"viewer": "read-only", "operator": "diagnostic", "admin": "elevated"}
+
+
+def max_tier_for_roles(roles: set[str]) -> str:
+    """The highest tool safety tier the given roles permit (default read-only)."""
+    best = "read-only"
+    for r in roles:
+        t = ROLE_TIERS.get(r)
+        if t and TIER_ORDER[t] > TIER_ORDER[best]:
+            best = t
+    return best
+
+
+def tier_allows(allowed: str, required: str) -> bool:
+    """True if a caller allowed up to ``allowed`` may call a tool of ``required``."""
+    return TIER_ORDER.get(required, 0) <= TIER_ORDER.get(allowed, 2)
+
+
 # -- Identity + roles (RBAC-1) ----------------------------------------------
 @dataclass
 class Principal:

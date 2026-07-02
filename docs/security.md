@@ -164,6 +164,12 @@ from the assistant endpoints** and **off unless explicitly configured**:
   *identifier*; the proxy resolves the secret server-side, so the model never sees it.
 - **Audit actor.** Secret operations are recorded with the caller's identity — the
   verified `email` in jwt mode (`admin`/`system` in password mode).
+- **Role-gated tools (RBAC-2).** Each role caps the tool **safety tier** the agent
+  may invoke on that caller's behalf: `viewer` → read-only, `operator` → +diagnostic
+  (host checks), `admin` → +elevated (e.g. opted-in MCP writes). The harness refuses
+  an over-tier tool with a clear message. On the chat plane, the tier comes from the
+  verified JWT role in jwt mode, or `rbac.assistant_role` (default `admin` =
+  unrestricted) when identity isn't verified — tighten it if you run chat without SSO.
 
 Generate the password-mode secrets with `agentic-devops admin set-password`; they
 live in `~/.config/agentic-devops/.env` (never committed).

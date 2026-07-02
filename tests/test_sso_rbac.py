@@ -117,3 +117,59 @@ def test_password_mode_still_grants_admin(tmp_path, pool, pg_url, monkeypatch):
     tok = c.post("/v1/admin/login", json={"password": "pw"}).json()["token"]
     me = c.get("/v1/admin/me", headers={"Authorization": f"Bearer {tok}"}).json()
     assert me["source"] == "password" and me["roles"] == ["admin"]
+
+
+# -- RBAC-2: role → tier + harness tool gating ------------------------------
+def test_role_tier_mapping():
+    from agentic_devops.proxy.auth import max_tier_for_roles, tier_allows
+
+    assert max_tier_for_roles({"viewer"}) == "read-only"
+    assert max_tier_for_roles({"operator"}) == "diagnostic"
+    assert max_tier_for_roles({"admin"}) == "elevated"
+    assert max_tier_for_roles({"viewer", "operator"}) == "diagnostic"  # highest wins
+    assert max_tier_for_roles(set()) == "read-only"  # unknown → most restrictive
+    assert tier_allows("diagnostic", "read-only") and not tier_allows("read-only", "diagnostic")
+
+
+class _FakeProvider:
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def complete(self, messages, tier, tools=None):
+        return self._responses.pop(0)
+
+
+def test_harness_gates_tool_by_tier():
+    from agentic_devops.config import ModelTier, Settings
+    from agentic_devops.proxy.harness import run_turn
+    from agentic_devops.proxy.providers import ProviderResponse, ToolCall
+    from agentic_devops.tools.base import ToolSpec
+    from agentic_devops.tools.router import ToolsRouter
+
+    executed: list[str] = []
+    router = ToolsRouter()
+    router.register(ToolSpec(
+        name="run_check", category="hosts", description="run a host check",
+        when_to_use="diagnostic", input_schema={"type": "object", "properties": {}},
+        handler=lambda a: (executed.append("run"), "ran")[1], safety_tier="diagnostic",
+    ))
+
+    def _turn(allowed):
+        executed.clear()
+        prov = _FakeProvider([
+            ProviderResponse(tool_calls=[ToolCall(id="c1", name="run_check", arguments={})]),
+            ProviderResponse(text="done"),
+        ])
+        return run_turn(
+            prov, router, Settings(max_iterations=4),
+            messages=[{"role": "user", "content": "go"}], tier=ModelTier(model="fake"),
+            tool_context={"allowed_tier": allowed},
+        )
+
+    # viewer (read-only) → the diagnostic tool is denied, never executed
+    r = _turn("read-only")
+    assert executed == [] and "run_check" in r.tools_used  # attempted but gated
+
+    # operator+ (diagnostic) → executes
+    _turn("diagnostic")
+    assert executed == ["run"]

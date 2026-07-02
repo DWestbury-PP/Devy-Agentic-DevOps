@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Generator, Optional
 
 from agentic_devops.config import ModelTier, Settings
+from agentic_devops.proxy.auth import tier_allows
 from agentic_devops.proxy.providers import ProviderClient, ProviderResponse
 from agentic_devops.tools.router import FIND_TOOLS_NAME, ToolNotFoundError, ToolsRouter
 
@@ -92,29 +93,40 @@ def _process_tool_calls(
             events.append({"type": "tools_found", "names": [s.name for s in specs]})
         else:
             tools_used.append(tc.name)
-            try:
-                content = str(router.execute(tc.name, tc.arguments, context=tool_context))
-                ok = True
-            except ToolNotFoundError:
+            # RBAC-2: gate by the caller's permitted tier (from tool_context). Absent
+            # → 'elevated' (unrestricted) so non-chat callers / tests aren't limited.
+            _spec = router.get_spec(tc.name)
+            _allowed = (tool_context or {}).get("allowed_tier", "elevated")
+            if _spec is not None and not tier_allows(_allowed, _spec.safety_tier):
                 content = (
-                    f"ERROR: tool {tc.name!r} is not available. "
-                    f"Use {FIND_TOOLS_NAME} to discover valid tools first."
+                    f"ERROR: tool {tc.name!r} requires the {_spec.safety_tier!r} permission "
+                    f"tier; your role allows up to {_allowed!r}. Ask an admin if you need it."
                 )
-                ok = False
-            except Exception as exc:  # surface tool failures to the model, don't crash
-                content = f"ERROR: tool {tc.name!r} failed: {exc}"
-                ok = False
-            events.append(
-                {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
-            )
-            findings.append(
-                {
-                    "tool": tc.name,
-                    "intent": json.dumps(tc.arguments, default=str)[:200],
-                    "result": content,
-                    "ok": ok,
-                }
-            )
+                events.append({"type": "tool_denied", "name": tc.name, "required": _spec.safety_tier})
+            else:
+                try:
+                    content = str(router.execute(tc.name, tc.arguments, context=tool_context))
+                    ok = True
+                except ToolNotFoundError:
+                    content = (
+                        f"ERROR: tool {tc.name!r} is not available. "
+                        f"Use {FIND_TOOLS_NAME} to discover valid tools first."
+                    )
+                    ok = False
+                except Exception as exc:  # surface tool failures to the model, don't crash
+                    content = f"ERROR: tool {tc.name!r} failed: {exc}"
+                    ok = False
+                events.append(
+                    {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
+                )
+                findings.append(
+                    {
+                        "tool": tc.name,
+                        "intent": json.dumps(tc.arguments, default=str)[:200],
+                        "result": content,
+                        "ok": ok,
+                    }
+                )
 
         messages.append(
             {"role": "tool", "tool_call_id": tc.id, "name": tc.name, "content": content}

@@ -55,6 +55,11 @@ secrets:
 #     devy-operators: operator
 #     devy-viewers: viewer
 #   default_role: viewer             # role for an authenticated user with no mapped group (optional)
+#   assistant_role: admin            # (RBAC-2) role assumed for chat callers whose identity isn't
+#                                    # verified (honor-system/dev). Default admin = unrestricted; in
+#                                    # jwt mode the real role is used. Tighten if running chat without SSO.
+# RBAC-2: each role caps the tool safety tier the agent may call —
+#   viewer → read-only · operator → +diagnostic (host checks) · admin → +elevated (writes).
 
 tiers:
   fast:

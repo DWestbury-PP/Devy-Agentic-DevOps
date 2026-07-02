@@ -44,7 +44,13 @@ function setUserId(v) {
 }
 function authHeaders() {
   const u = getUserId();
-  return u ? { "X-User-Id": u } : {};
+  const h = u ? { "X-User-Id": u } : {};
+  // Client IANA timezone → server does DST-correct local-time conversion (never the model).
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) h["X-Client-TZ"] = tz;
+  } catch (_) {}
+  return h;
 }
 
 /* ---------- DOM helpers ---------- */

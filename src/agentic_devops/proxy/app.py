@@ -1044,6 +1044,7 @@ def create_app(
         req: CompleteRequest,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_client_tz: Optional[str] = Header(default=None),
     ) -> CompleteResponse:
         tier = _resolve_tier(req.tier)
         user_id = req.user_id or x_user_id
@@ -1053,7 +1054,7 @@ def create_app(
             await run_in_threadpool(
                 sessions.compact_if_needed, session, provider, tier, settings
             )
-        messages = assemble_messages(session, req.prompt, req.context, req.system)
+        messages = assemble_messages(session, req.prompt, req.context, req.system, tz=x_client_tz)
 
         result = await run_in_threadpool(
             run_turn,
@@ -1095,13 +1096,14 @@ def create_app(
         req: ChatRequest,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_client_tz: Optional[str] = Header(default=None),
     ):
         tier = _resolve_tier(req.tier)
         user_id = req.user_id or x_user_id
         allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         await run_in_threadpool(sessions.compact_if_needed, session, provider, tier, settings)
-        messages = assemble_messages(session, req.message, req.context)
+        messages = assemble_messages(session, req.message, req.context, tz=x_client_tz)
 
         async def event_stream():
             queue: asyncio.Queue = asyncio.Queue()

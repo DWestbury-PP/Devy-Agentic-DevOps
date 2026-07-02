@@ -117,6 +117,10 @@ func (c *Client) Chat(message, sessionID, tier, context string, handler SSEHandl
 	req, _ := http.NewRequest(http.MethodPost, c.base+"/v1/chat", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	// Client IANA timezone → server does DST-correct local-time conversion.
+	if tz := time.Local.String(); tz != "" && tz != "Local" {
+		req.Header.Set("X-Client-TZ", tz)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err

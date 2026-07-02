@@ -120,6 +120,10 @@ class KnowledgeConfig(BaseModel):
     # tool can retrieve relevant past context (this + prior conversations). Set
     # false to store no conversation content for retrieval (privacy).
     history_enabled: bool = True
+    # Web search (extended retrieval): a native `web_search` tool via Tavily. Needs
+    # the Tavily API key (set on the Secrets tab / TAVILY_API_KEY). Set false to
+    # not register the tool at all.
+    web_search_enabled: bool = True
     # Evolving fact tier (Knowledge Memory, Phase A): the durable, bi-temporal
     # structured-fact store behind the `recall_facts` / `memory_add` tools. Shared
     # cross-conversation knowledge, distinct from per-user conversation history.

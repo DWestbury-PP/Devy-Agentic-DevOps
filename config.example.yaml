@@ -126,6 +126,8 @@ tiers:
 #   enabled: true
 #   history_enabled: true   # embed each exchange so the recall_history tool can
 #                           # search past conversations; set false to store none.
+#   web_search_enabled: true   # register the native `web_search` tool (Tavily);
+#                              # needs the Tavily key on the Secrets tab (TAVILY_API_KEY)
 #   facts_enabled: true     # the evolving fact tier (recall_facts / memory_add):
 #                           # durable, bi-temporal structured facts shared across
 #                           # conversations; set false to disable both tools.

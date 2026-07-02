@@ -253,13 +253,20 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
   text-transform: uppercase; letter-spacing: 1px;
   border-bottom: 1px solid var(--line-soft);
 }
-.tools-head .gear { color: var(--green-deep); }
+.tools-head .gear { color: var(--green-deep); display: inline-flex; }
+.tools-head .gear svg { width: 13px; height: 13px; }
 .tool { font-size: 12.5px; color: var(--fg-dim); padding: 4px 10px; }
+.tool .ticon { width: 14px; height: 14px; vertical-align: -3px; margin-right: 7px; color: var(--green-deep); }
 .tool .tname { color: var(--amber); }
-.tool.ok .tname { color: var(--green); }
-.tool.fail .tname { color: var(--red); }
+.tool.ok .ticon, .tool.ok .tname { color: var(--green); }
+.tool.fail .ticon, .tool.fail .tname { color: var(--red); }
 .tool details { margin-top: 3px; }
-.tool summary { cursor: pointer; color: var(--fg-faint); }
+.tool summary { cursor: pointer; color: var(--fg-faint); list-style: none;
+                display: inline-flex; align-items: center; gap: 4px; }
+.tool summary::-webkit-details-marker { display: none; }
+.tool summary .disc { width: 12px; height: 12px; color: var(--green-deep);
+                      transition: transform 0.15s ease; }
+.tool details[open] summary .disc { transform: rotate(90deg); }
 .tool pre {
   margin: 5px 0 2px; padding: 8px; background: var(--code-bg);
   border: 1px solid var(--line); border-radius: 6px; font-size: 12px;

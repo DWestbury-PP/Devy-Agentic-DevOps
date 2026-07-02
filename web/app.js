@@ -63,6 +63,8 @@ function el(tag, cls, text) {
 
 /* Inline Lucide icons (https://lucide.dev, ISC) — no emoji in the menus, and no
  * runtime dependency: just the path data, drawn with currentColor. */
+// Each value is either an array of path `d` strings, or a raw inner-SVG string
+// (verbatim Lucide body — for icons that use circles/rects/lines, not just paths).
 const ICON_PATHS = {
   pencil: [
     "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
@@ -71,6 +73,16 @@ const ICON_PATHS = {
   trash: ["M3 6h18", "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", "M10 11v6", "M14 11v6"],
   check: ["M20 6 9 17l-5-5"],
   x: ["M18 6 6 18", "M6 6l12 12"],
+  // Semantic tool-trail icons (Lucide, https://lucide.dev, ISC).
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  server: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  git: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
 };
 function icon(name) {
   const ns = "http://www.w3.org/2000/svg";
@@ -82,12 +94,29 @@ function icon(name) {
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
-  (ICON_PATHS[name] || []).forEach((d) => {
-    const p = document.createElementNS(ns, "path");
-    p.setAttribute("d", d);
-    svg.appendChild(p);
-  });
+  const spec = ICON_PATHS[name];
+  if (typeof spec === "string") {
+    svg.innerHTML = spec;  // raw Lucide body (our own static markup)
+  } else {
+    (spec || []).forEach((d) => {
+      const p = document.createElementNS(ns, "path");
+      p.setAttribute("d", d);
+      svg.appendChild(p);
+    });
+  }
   return svg;
+}
+
+// Map a tool name to a semantic icon, LangSmith-style (tool vs KB vs memory vs …).
+function iconForTool(name) {
+  if (name === "find_tools") return "search";
+  if (/^host_|^run_host|^host_details/.test(name)) return "server";
+  if (name === "search_knowledge" || name === "memory_index") return "book";
+  if (/^recall_|^memory_add/.test(name)) return "history";
+  if (/^repo_/.test(name)) return "git";
+  if (name === "web_search") return "globe";
+  if (name === "correlate_timeline") return "activity";
+  return "wrench";
 }
 const atBottom = () => screen.scrollHeight - screen.scrollTop - screen.clientHeight < 80;
 const scroll = () => { screen.scrollTop = screen.scrollHeight; };
@@ -176,7 +205,9 @@ function startTurn(promptText) {
   const tools = el("div", "tools");
   tools.style.display = "none";
   const head = el("div", "tools-head");
-  head.append(el("span", "gear", "⚙"), el("span", null, "tools"));
+  const gear = el("span", "gear");
+  gear.appendChild(icon("wrench"));
+  head.append(gear, el("span", null, "tools"));
   tools.appendChild(head);
   const stream = el("div", "stream");
   body.append(tools, stream);
@@ -186,8 +217,9 @@ function startTurn(promptText) {
 function addTool(ctx, name, detail) {
   ctx.tools.style.display = "";
   const node = el("div", "tool");
-  const glyph = name === "find_tools" ? "⊙ " : "▸ ";
-  node.appendChild(document.createTextNode(glyph));
+  const ic = icon(iconForTool(name));
+  ic.classList.add("ticon");
+  node.appendChild(ic);
   const tn = el("span", "tname", name);
   node.appendChild(tn);
   if (detail) node.appendChild(document.createTextNode("  " + detail));
@@ -254,8 +286,11 @@ async function send(message) {
           if (node) {
             node.classList.add(evt.data.ok ? "ok" : "fail");
             const det = el("details");
-            det.append(el("summary", null, evt.data.ok ? "result" : "error"),
-                       el("pre", null, evt.data.preview || ""));
+            const sum = el("summary");
+            const chev = icon("chevron");
+            chev.classList.add("disc");
+            sum.append(chev, document.createTextNode(evt.data.ok ? "result" : "error"));
+            det.append(sum, el("pre", null, evt.data.preview || ""));
             node.appendChild(det);
           }
         } else if (evt.type === "done") {

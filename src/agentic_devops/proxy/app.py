@@ -276,6 +276,13 @@ def create_app(
         _register_knowledge_tool(router, settings)
         _register_fact_tools(router, settings)
         _register_memory_index(router, settings)
+        if settings.knowledge.web_search_enabled:
+            from agentic_devops.tools.builtin.web import build_web_search_tool
+
+            try:
+                router.register(build_web_search_tool())
+            except ValueError:
+                logger.warning("web_search tool name clash, skipping")
         mem_store = _register_recall_tool(router, settings, pool)
         for spec in build_host_tools(host_store, host_mcp):
             try:
@@ -292,7 +299,7 @@ def create_app(
 
     # MCP Servers registry (Phase S-4): mount/refresh a registered server's tools
     # into the live router. Names can't collide with built-in categories.
-    RESERVED_CATEGORIES = {"knowledge", "memory", "diagnostics", "hosts", "repos", "mcp"}
+    RESERVED_CATEGORIES = {"knowledge", "memory", "diagnostics", "hosts", "repos", "mcp", "web"}
 
     def _mount_mcp_server(server: Any) -> tuple[str, int, int]:
         """(status, tool_count, write_count). Withdraws the server's existing tools

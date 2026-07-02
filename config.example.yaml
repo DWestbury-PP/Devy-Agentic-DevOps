@@ -37,6 +37,25 @@ secrets:
                            #       on the hot path; writes invalidate; rotation picked up within TTL. 0 = off.
   audit_enabled: true      # (S-3) append a value-free audit line per secret op to trace_dir/secrets-audit.jsonl
 
+# Admin-plane identity + roles (RBAC-1). Default is `password` mode (the existing
+# operator password → token). For production, put Devy behind an SSO edge proxy and
+# switch to `jwt`: Devy verifies the forwarded JWT against your IdP's JWKS and maps
+# IdP groups → roles. There is no in-app login in jwt mode.
+# auth:
+#   mode: jwt
+#   jwks_url: https://<your-idp>/.well-known/jwks.json
+#   issuer:  https://<your-idp>/
+#   audience: devy-admin
+#   header:  Authorization           # or a proxy header, e.g. Cf-Access-Jwt-Assertion
+#   email_claim: email
+#   groups_claim: groups
+# rbac:
+#   group_roles:                     # IdP group -> Devy role (admin | operator | viewer)
+#     devy-admins: admin
+#     devy-operators: operator
+#     devy-viewers: viewer
+#   default_role: viewer             # role for an authenticated user with no mapped group (optional)
+
 tiers:
   fast:
     model: ollama/llama3.1          # a local model via Ollama — cheap, private, quick

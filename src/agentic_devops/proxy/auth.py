@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 # 8 hours — short enough to limit a leaked token, long enough for a work session.
@@ -70,4 +70,141 @@ def admin_auth_from_env() -> AdminAuth:
     return AdminAuth(
         password_hash=os.environ.get("DEVY_ADMIN_PASSWORD_HASH"),
         secret=os.environ.get("DEVY_ADMIN_SECRET"),
+    )
+
+
+# -- Identity + roles (RBAC-1) ----------------------------------------------
+@dataclass
+class Principal:
+    """The authenticated caller. ``id`` is a stable identifier (email in jwt mode,
+    ``sub`` in password mode); ``roles`` gate the control plane."""
+
+    id: str
+    email: Optional[str]
+    roles: set[str]
+    source: str  # "password" | "jwt"
+    claims: dict[str, Any] = field(default_factory=dict)
+
+    def has_role(self, role: str) -> bool:
+        return role in self.roles
+
+    @property
+    def actor(self) -> str:
+        """Audit label — the email if we have it, else the id."""
+        return self.email or self.id
+
+
+@dataclass
+class JwtAuth:
+    """Verify a forward-auth JWT from an edge proxy against the IdP's JWKS.
+
+    Devy is *not* an OAuth client — an upstream (Cloudflare Access / Okta+ALB /
+    oauth2-proxy) authenticates and forwards the signed JWT; we verify signature +
+    issuer + audience and read identity from the claims. ``public_key`` is a test
+    seam (inject a key to avoid a JWKS fetch)."""
+
+    jwks_url: Optional[str] = None
+    public_key: Any = None
+    algorithms: tuple[str, ...] = ("RS256",)
+    issuer: Optional[str] = None
+    audience: Optional[str] = None
+    email_claim: str = "email"
+    groups_claim: str = "groups"
+    _jwk_client: Any = None
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.jwks_url or self.public_key)
+
+    def _key(self, token: str) -> Any:
+        if self.public_key is not None:
+            return self.public_key
+        if self.jwks_url:
+            if self._jwk_client is None:
+                from jwt import PyJWKClient
+
+                self._jwk_client = PyJWKClient(self.jwks_url)
+            return self._jwk_client.get_signing_key_from_jwt(token).key
+        raise RuntimeError("JwtAuth has no jwks_url or public_key configured")
+
+    def verify(self, token: str) -> dict[str, Any]:
+        import jwt
+
+        return jwt.decode(
+            token, self._key(token), algorithms=list(self.algorithms),
+            issuer=self.issuer, audience=self.audience,
+            options={"verify_aud": self.audience is not None},
+        )
+
+    def principal(self, token: str, group_roles: dict[str, str], default_role: Optional[str]) -> Principal:
+        claims = self.verify(token)
+        email = claims.get(self.email_claim)
+        groups = claims.get(self.groups_claim) or []
+        if isinstance(groups, str):
+            groups = [groups]
+        roles = {group_roles[g] for g in groups if g in group_roles}
+        if not roles and default_role:
+            roles = {default_role}
+        return Principal(
+            id=email or str(claims.get("sub", "unknown")), email=email,
+            roles=roles, source="jwt", claims=claims,
+        )
+
+
+@dataclass
+class Authenticator:
+    """Resolves a request's bearer/JWT into a :class:`Principal`, per ``auth.mode``.
+
+    THE seam the whole control plane depends on. password mode preserves the
+    existing admin flow (token → ``admin`` role); jwt mode verifies a forward-auth
+    JWT and maps IdP groups → roles."""
+
+    mode: str
+    admin: AdminAuth
+    jwt_auth: Optional[JwtAuth]
+    group_roles: dict[str, str]
+    default_role: Optional[str]
+    header: str = "Authorization"
+
+    @property
+    def enabled(self) -> bool:
+        return self.admin.enabled if self.mode == "password" else bool(self.jwt_auth and self.jwt_auth.configured)
+
+    @property
+    def login_enabled(self) -> bool:
+        return self.mode == "password" and self.admin.enabled
+
+    def extract_token(self, header_value: Optional[str]) -> Optional[str]:
+        if not header_value:
+            return None
+        if header_value.lower().startswith("bearer "):
+            return header_value.split(" ", 1)[1].strip()
+        return header_value.strip()
+
+    def principal(self, token: str) -> Principal:
+        """Verify a token → Principal. Raises on invalid/expired."""
+        if self.mode == "password":
+            claims = self.admin.verify_token(token)
+            return Principal(
+                id=str(claims.get("sub", "admin")), email=None,
+                roles={"admin"}, source="password", claims=claims,
+            )
+        assert self.jwt_auth is not None
+        return self.jwt_auth.principal(token, self.group_roles, self.default_role)
+
+
+def build_authenticator(settings: Any) -> Authenticator:
+    """Assemble the authenticator from env (password secrets) + config (jwt/rbac)."""
+    admin = admin_auth_from_env()
+    ac = settings.auth
+    jwt_auth = None
+    if ac.mode == "jwt":
+        jwt_auth = JwtAuth(
+            jwks_url=ac.jwks_url, algorithms=tuple(ac.algorithms), issuer=ac.issuer,
+            audience=ac.audience, email_claim=ac.email_claim, groups_claim=ac.groups_claim,
+        )
+    return Authenticator(
+        mode=ac.mode, admin=admin, jwt_auth=jwt_auth,
+        group_roles=dict(settings.rbac.group_roles), default_role=settings.rbac.default_role,
+        header=ac.header,
     )

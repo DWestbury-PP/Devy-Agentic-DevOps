@@ -135,21 +135,38 @@ directly to untrusted users.
 The privileged `/v1/admin/*` plane (host registry, document import) is **separate
 from the assistant endpoints** and **off unless explicitly configured**:
 
-- **Env-gated.** If `DEVY_ADMIN_PASSWORD_HASH` and `DEVY_ADMIN_SECRET` are unset,
-  every `/v1/admin/*` route returns `503`. The assistant plane runs fine with
-  admin disabled.
-- **Interim auth = the SSO seam.** Today it's a single operator password (bcrypt
-  hash) exchanged for a short-lived HS256 bearer token via `POST /v1/admin/login`.
-  This is a deliberate placeholder: the `require_admin` dependency is the **one
-  seam** where a real JWT verifier (Google/Okta) drops in — the same seam described
-  under [Identity](#identity).
-- **Secrets at rest.** Per-host MCP tokens in the registry are **Fernet-encrypted**
-  (`DEVY_ENCRYPTION_KEY`) and **never returned** by the API (only `has_token`). The
-  agent passes a *host identifier*; the proxy resolves and decrypts the token
-  server-side, so the model never sees it.
+- **Off unless configured.** In `password` mode, if `DEVY_ADMIN_PASSWORD_HASH` /
+  `DEVY_ADMIN_SECRET` are unset every `/v1/admin/*` route returns `503`. The
+  assistant plane runs fine with admin disabled.
+- **Two auth modes + roles (RBAC-1).** `auth.mode: password` (dev/interim) is a
+  single operator password (bcrypt) exchanged for a short-lived HS256 token via
+  `POST /v1/admin/login`; that token grants the `admin` role. `auth.mode: jwt`
+  (prod) verifies a **forward-auth JWT** from your edge proxy against the IdP
+  **JWKS** (issuer/audience/signature), reads `email` + `groups`, and maps groups
+  to Devy roles (`rbac.group_roles`). The `require_role(...)` dependency gates every
+  admin route (`403` if the role is missing, `401` if unauthenticated). In jwt mode
+  there is no login endpoint — identity comes from the proxy.
 
-Generate the secrets with `agentic-devops admin set-password` / `admin gen-key`;
-they live in `~/.config/agentic-devops/.env` (never committed).
+  ```yaml
+  auth:
+    mode: jwt
+    jwks_url: https://<your-idp>/.well-known/jwks.json
+    issuer:  https://<your-idp>/
+    audience: devy-admin
+    header:  Authorization        # or e.g. Cf-Access-Jwt-Assertion
+    groups_claim: groups
+  rbac:
+    group_roles: { devy-admins: admin, devy-operators: operator, devy-viewers: viewer }
+  ```
+- **Secrets at rest.** Connector/host tokens live in the **secrets manager** (see
+  [Secrets management](#secrets-management)) — the registry row holds only a
+  `secret_ref`, and the API returns `has_token`, never the value. The agent passes an
+  *identifier*; the proxy resolves the secret server-side, so the model never sees it.
+- **Audit actor.** Secret operations are recorded with the caller's identity — the
+  verified `email` in jwt mode (`admin`/`system` in password mode).
+
+Generate the password-mode secrets with `agentic-devops admin set-password`; they
+live in `~/.config/agentic-devops/.env` (never committed).
 
 ## Agent / prompt-injection posture
 

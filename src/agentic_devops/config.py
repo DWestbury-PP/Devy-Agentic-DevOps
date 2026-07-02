@@ -183,6 +183,36 @@ class SecretsConfig(BaseModel):
     audit_enabled: bool = True
 
 
+class AuthConfig(BaseModel):
+    """Admin-plane identity (Phase RBAC-1). Two modes:
+
+    - ``password`` (default, dev/interim) — the existing bcrypt admin password →
+      HS256 token; the token grants the ``admin`` role. Fully backward compatible.
+    - ``jwt`` (prod) — a forward-auth JWT from an edge proxy (Cloudflare Access /
+      Okta+ALB / oauth2-proxy) is verified against the IdP **JWKS**; ``email`` +
+      ``groups`` are read from the claims and groups are mapped to roles (see
+      ``rbac``). No OAuth flow runs in-app; there is no login endpoint in jwt mode.
+    """
+
+    mode: Literal["password", "jwt"] = "password"
+    # jwt mode:
+    jwks_url: Optional[str] = None          # IdP JWKS endpoint (RS256 verification)
+    issuer: Optional[str] = None            # expected `iss`
+    audience: Optional[str] = None          # expected `aud` (verified when set)
+    algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
+    header: str = "Authorization"           # header the proxy puts the JWT in (Bearer stripped)
+    email_claim: str = "email"
+    groups_claim: str = "groups"
+
+
+class RbacConfig(BaseModel):
+    """Map IdP group claims → Devy roles (Phase RBAC-1). The IdP is the source of
+    truth. Roles: ``admin`` (control plane), ``operator``, ``viewer``."""
+
+    group_roles: dict[str, str] = Field(default_factory=dict)  # IdP group -> devy role
+    default_role: Optional[str] = None      # role for an authenticated user with no mapped group
+
+
 def _default_tiers() -> dict[str, ModelTier]:
     """Sensible starting tiers. Operators are expected to override these in
     ``config.yaml`` to match their own providers, costs, and security posture."""
@@ -226,6 +256,10 @@ class Settings(BaseSettings):
 
     # Secrets backend (dev=LocalStack / prod=AWS SM). Mode also settable via DEVY_MODE.
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+
+    # Admin-plane identity + roles (RBAC-1). Defaults to password mode (backward compat).
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    rbac: RbacConfig = Field(default_factory=RbacConfig)
 
     # Harness behavior. max_iterations bounds tool-calling rounds per turn; an
     # adaptive RCA investigation needs room to gather across passes (raise it in
@@ -312,6 +346,10 @@ def load_settings() -> Settings:
             data["database"] = DatabaseConfig(**data["database"])
         if "secrets" in data and isinstance(data["secrets"], dict):
             data["secrets"] = SecretsConfig(**data["secrets"])
+        if "auth" in data and isinstance(data["auth"], dict):
+            data["auth"] = AuthConfig(**data["auth"])
+        if "rbac" in data and isinstance(data["rbac"], dict):
+            data["rbac"] = RbacConfig(**data["rbac"])
         overrides = data
     settings = Settings(**overrides)
     # DEVY_MODE (.env) is the single deploy-mode knob; it wins over config.yaml so

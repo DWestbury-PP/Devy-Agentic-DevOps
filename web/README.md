@@ -62,10 +62,14 @@ unlocks three tabs:
 - **Knowledge** — document import: upload Markdown into a corpus (chunked,
   enriched, embedded), watch ingest jobs, and list / delete documents and corpora.
 - **Secrets** — the unified credential inventory (Phase S-2): provider/service keys
-  (Anthropic, OpenAI, Tavily, LangSmith) + connector tokens (GitHub, hosts), each
-  with loaded-state and a live **Test**. Values are never shown; provider keys are
-  editable here in dev, read-only (test-only) in prod. Backed by the secrets manager
-  (LocalStack in dev, AWS SM in prod).
+  (Anthropic, OpenAI, Tavily, LangSmith) + connector tokens (GitHub, hosts, MCP), each
+  with loaded-state and a live **Test**. Values are never shown; editable here in dev,
+  read-only (test-only) in prod. Backed by the secrets manager (LocalStack in dev, AWS
+  SM in prod).
+- **MCP** — the MCP Servers registry (Phase S-4): register HTTP MCP tool sources
+  (Grafana, CloudWatch, 3rd-party). Devy mounts their tools into the router; read-only
+  by default (write tools opt-in + flagged). List with tool-count/status, Test, Refresh,
+  enable/disable, delete. Bearer tokens set on the Secrets tab.
 
 It reuses the same terminal theme and is **gated by the admin env secrets**
 (`DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET`) — if they're unset the plane

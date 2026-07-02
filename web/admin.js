@@ -26,7 +26,7 @@ function view(name) {
   if (name === "shell") showPage(currentPage);
 }
 
-const PAGES = ["hosts", "repos", "knowledge", "secrets"];
+const PAGES = ["hosts", "repos", "knowledge", "secrets", "mcp"];
 function showPage(name) {
   currentPage = name;
   PAGES.forEach((p) => {
@@ -37,6 +37,7 @@ function showPage(name) {
   else if (name === "repos") renderRepos();
   else if (name === "knowledge") renderKnowledge();
   else if (name === "secrets") renderSecrets();
+  else if (name === "mcp") renderMcp();
 }
 PAGES.forEach((p) => $(`tab-${p}`).addEventListener("click", () => showPage(p)));
 
@@ -873,6 +874,132 @@ async function clearSecret(ref) {
   });
   renderSecrets();
 }
+
+/* ---------- MCP Servers registry (Phase S-4b) ---------- */
+const mcpListMsg = (t, err) => { const m = $("mcp-list-msg"); m.className = "msg" + (err ? " err" : ""); m.textContent = t || ""; };
+const mcpMsg = (t, err) => { const m = $("mcp-msg"); m.className = "msg" + (err ? " err" : ""); m.textContent = t || ""; };
+
+async function renderMcp() {
+  const body = $("mcp-body");
+  if (!body) return;
+  let servers = [];
+  try {
+    const r = await fetch("/v1/admin/mcp-servers", { headers: authHeaders() });
+    if (!r.ok) return mcpListMsg(`Couldn't load MCP servers (${r.status}).`, true);
+    servers = await r.json();
+  } catch (_) {
+    return mcpListMsg("Couldn't reach the proxy.", true);
+  }
+  body.innerHTML = "";
+  if (!servers.length) return mcpListMsg("No MCP servers registered — add one above.");
+  mcpListMsg("");
+  servers.forEach((s) => body.appendChild(mcpRow(s)));
+}
+
+function mcpRow(s) {
+  const tr = el("tr");
+  const nm = el("td");
+  nm.appendChild(el("span", null, s.name));
+  if (s.description) { const d = el("span", "svc-env"); d.textContent = s.description; nm.appendChild(d); }
+  tr.appendChild(nm);
+  tr.appendChild(el("td", null, s.url));
+  const tools = el("td");
+  let tlabel = `${s.tool_count}`;
+  if (s.write_tool_count) tlabel += ` (+${s.write_tool_count} write${s.allow_writes ? "" : " blocked"})`;
+  const tspan = el("span", null, tlabel);
+  if (s.write_tool_count && !s.allow_writes) tspan.title = "write tools are flagged but not registered (enable 'Allow write tools' to use them)";
+  tools.appendChild(tspan);
+  tr.appendChild(tools);
+  const st = el("td");
+  const cls = s.last_status === "reachable" ? "reachable" : s.last_status === "unreachable" ? "unreachable" : "";
+  st.appendChild(el("span", "pill " + cls, s.last_status || "unknown"));
+  tr.appendChild(st);
+  const en = el("td");
+  const toggle = el("span", "pill " + (s.enabled ? "" : "inactive"), s.enabled ? "enabled" : "disabled");
+  toggle.style.cursor = "pointer";
+  toggle.title = "toggle enabled";
+  toggle.addEventListener("click", () => patchMcp(s.id, { enabled: !s.enabled }));
+  en.appendChild(toggle);
+  tr.appendChild(en);
+  const actions = el("td");
+  const wrap = el("div", "acts");
+  const test = el("button", "btn ghost-btn", "Test");
+  test.addEventListener("click", () => testMcp(s.id, test));
+  const refresh = el("button", "btn ghost-btn", "Refresh");
+  refresh.addEventListener("click", () => refreshMcp(s.id, refresh));
+  const del = el("button", "btn ghost-btn", "Delete");
+  del.addEventListener("click", () => confirmDeleteMcp(wrap, s.id));
+  wrap.append(test, refresh, del);
+  actions.appendChild(wrap);
+  tr.appendChild(actions);
+  return tr;
+}
+
+async function patchMcp(id, body) {
+  await fetch(`/v1/admin/mcp-servers/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  renderMcp();
+}
+
+async function testMcp(id, btn) {
+  btn.disabled = true; const label = btn.textContent; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch(`/v1/admin/mcp-servers/${id}/test`, { method: "POST", headers: authHeaders() });
+    const d = await r.json().catch(() => ({}));
+    mcpListMsg(`Test: ${d.status || "failed"}${d.checks ? ` — ${d.checks.length} tools` : ""}`, d.status !== "reachable");
+  } catch (_) { mcpListMsg("Couldn't reach the proxy.", true); }
+  finally { btn.disabled = false; btn.textContent = label; renderMcp(); }
+}
+
+async function refreshMcp(id, btn) {
+  btn.disabled = true; const label = btn.textContent; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch(`/v1/admin/mcp-servers/${id}/refresh`, { method: "POST", headers: authHeaders() });
+    const d = await r.json().catch(() => ({}));
+    mcpListMsg(`Refreshed: ${d.tool_count ?? 0} tools (${d.last_status || "unknown"}).`, d.last_status === "unreachable");
+  } catch (_) { mcpListMsg("Couldn't reach the proxy.", true); }
+  finally { btn.disabled = false; btn.textContent = label; renderMcp(); }
+}
+
+function confirmDeleteMcp(wrap, id) {
+  wrap.innerHTML = "";
+  const yes = el("button", "btn", "Confirm");
+  yes.addEventListener("click", async () => {
+    await fetch(`/v1/admin/mcp-servers/${id}`, { method: "DELETE", headers: authHeaders() });
+    renderMcp();
+  });
+  const no = el("button", "btn ghost-btn", "Cancel");
+  no.addEventListener("click", renderMcp);
+  wrap.append(yes, no);
+}
+
+$("mcp-add-toggle").addEventListener("click", () => $("mcp-form").classList.toggle("hidden"));
+$("mcp-cancel").addEventListener("click", () => { $("mcp-form").reset(); hide("mcp-form"); });
+
+$("mcp-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = {};
+  for (const [k, v] of fd.entries()) { const val = String(v).trim(); if (val) body[k] = val; }
+  body.allow_writes = $("mcp-allow-writes").checked;
+  if (!body.name || !body.url) return mcpMsg("Name and URL are required.", true);
+  mcpMsg("Registering + mounting tools…");
+  try {
+    const r = await fetch("/v1/admin/mcp-servers", {
+      method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return mcpMsg(`Couldn't add server: ${d.detail || r.status}`, true);
+    let note = `Added ${d.name}: ${d.tool_count} tools (${d.last_status})`;
+    if (d.write_tool_count) note += `, ${d.write_tool_count} write tool(s) ${d.allow_writes ? "enabled" : "flagged"}`;
+    if (d.last_status !== "reachable") note += " — set its bearer token on the Secrets tab, then Refresh.";
+    mcpMsg(note + ".");
+    e.target.reset(); hide("mcp-form"); renderMcp();
+  } catch (_) { mcpMsg("Couldn't reach the proxy.", true); }
+});
 
 /* ---------- sortable tables ----------
  * Click a header to sort the rows by that column (toggle asc/desc); numeric

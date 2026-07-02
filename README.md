@@ -210,42 +210,47 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
 - **Secret redaction at ingest** (the gate): high-confidence credentials are
   redacted inline and ambiguous high-entropy blobs are **fail-closed quarantined**,
   before any content reaches the database.
-- **Connectors — read-only by design**: a **GitHub** connector (encrypted read-only
-  PAT → repo discovery, `repo_*` code/diff/history tools, and Markdown crawl into the
-  KB), plus **LLM doc generation** — Devy reads a repo's *code* and writes OKF
-  architecture docs (diff-driven, redacted-before-disk, ingested per repo).
+- **Secrets subsystem**: one **AWS Secrets Manager** API surface everywhere —
+  LocalStack in dev, real AWS SM in prod (instance IAM role, no key at rest). Nothing
+  secret in the DB (rows hold a `secret_ref`); short-TTL resolve cache + a value-free
+  audit trail. A unified **Secrets / Connections** admin tab sets + live-tests every
+  credential (LLM keys, GitHub PAT, host & MCP tokens).
+- **Identity & access**: **SSO** via forward-auth JWT (verified against the IdP JWKS)
+  with **RBAC** — IdP groups → roles (admin / operator / viewer) gating the control
+  plane *and* the tool safety tier the agent may call (read-only < diagnostic <
+  elevated). Password mode remains for dev.
+- **Connectors — read-only by design**: a **GitHub** connector (repo discovery,
+  `repo_*` code/diff/history tools, Markdown crawl) + **LLM doc generation** (Devy
+  reads a repo's *code* → OKF architecture docs, diff-driven, redacted-before-disk);
+  an **MCP Servers registry** to mount external HTTP MCP tool sources (read-only by
+  default, write tools opt-in); and native **web search** (Tavily).
 - **Incident RCA** as an adaptive mode of reasoning + a `correlate_timeline` helper.
 - **Surfaces**: web chat (with history slide-out), native `ask` TUI, one-shot HTTP.
 - **Persistence**: Postgres + pgvector (bundled or managed/RDS), self-bootstrapping.
 - **Conversation memory**: two-channel history + token-triggered structured
   compaction, and `recall_history` for cross-conversation recall.
-- **Admin control plane** (`/v1/admin/*` + admin UI, behind an interim password):
-  a DB-backed **host registry** (the fleet Devy reaches via host MCP, with
-  per-host tokens encrypted at rest), **document import** (UI upload → async,
-  enriched ingestion into the hybrid knowledge base), and **GitHub repos + doc
-  generation** management.
+- **Admin control plane** (`/v1/admin/*` + admin UI): **Hosts · Repos · Knowledge ·
+  Secrets · MCP** — host registry, GitHub repos + doc generation, document import,
+  credential inventory, and MCP-server management.
 
 **Next** — a dependency-ordered chain from *foundation* → *expanded reach* → *the
 leap from observing to acting*. Full breakdown (with the "why it builds on the last"
 for each): **[Roadmap](docs/plans/roadmap.md)**.
 
-1. **Identity & access** — real **SSO** (Google / Cloudflare+Okta JWT) replacing the
-   interim admin password, plus **RBAC** (who may admin / use `elevated` / see which
-   corpora). The auth verifier and identity seams are already in place.
-2. **Observability & evaluation** — **LangSmith** waterfall tracing of harness/LLM
+1. **Observability & evaluation** — **LangSmith** waterfall tracing of harness/LLM
    calls, and a golden-set eval + feedback harness as a quality gate.
-3. **Extended retrieval** — new `find_tools` backends fused into hybrid search: file,
-   structured/JSONB, web (Tavily/Brave), optional graph; plus scheduled re-ingest.
-4. **Reach** — hardened **bring-your-own MCP**, and **read-only AWS connectors**
-   (building on the GitHub connector): bulk infra doc-gen plus interactive
-   **CloudWatch / CloudTrail** for RCA, and AWS auto-discovery into the host registry.
-5. **DB-broker MCP** — a fixed, allow-listed query plane (the read-side twin of the
+2. **Extended retrieval** — more `find_tools` backends fused into hybrid search: file,
+   structured/JSONB, optional graph; plus scheduled re-ingest. (Web search shipped.)
+3. **Reach** — **read-only AWS connectors** (building on the GitHub connector +
+   MCP registry): bulk infra doc-gen plus interactive **CloudWatch / CloudTrail** for
+   RCA, and AWS auto-discovery into the host registry; plus a **Grafana** MCP.
+4. **DB-broker MCP** — a fixed, allow-listed query plane (the read-side twin of the
    host MCP) — never raw database access.
-6. **Hosting hardening** — secrets backend (Vault / AWS Secrets Manager), cost/rate
+5. **Hosting hardening** — external secrets rotation, cost/rate
    budgets, and a unified, exportable audit trail.
-7. **Guarded actions** — a safe write path: Devy *proposes* a remediation, a human
+6. **Guarded actions** — a safe write path: Devy *proposes* a remediation, a human
    *approves* it in the UI (gated by profile + RBAC, fully audited).
-8. **Proactive & ChatOps** — alert-webhook-triggered auto-RCA and a Slack/Teams
+7. **Proactive & ChatOps** — alert-webhook-triggered auto-RCA and a Slack/Teams
    surface, so Devy lives in the incident channel and reacts on its own.
 
 ## License & attribution

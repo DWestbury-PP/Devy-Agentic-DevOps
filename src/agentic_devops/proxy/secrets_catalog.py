@@ -51,7 +51,7 @@ def settable_refs(namespace: str = "devy") -> set[str]:
 
 
 def build_catalog(
-    namespace: str, secrets: Any, github_store: Any, host_store: Any,
+    namespace: str, secrets: Any, github_store: Any, host_store: Any, mcp_server_store: Any = None,
 ) -> list[dict[str, Any]]:
     """Assemble the full inventory with live loaded-state (value never included)."""
     entries: list[dict[str, Any]] = []
@@ -77,6 +77,14 @@ def build_catalog(
             "service": f"host:{h.fqdn}", "label": f"Host · {h.fqdn}",
             "ref": h.secret_ref, "category": "host", "env": None,
             "loaded": secrets.exists(h.secret_ref), "editable": secrets.writable, "testable": True,
+        })
+    for m in (mcp_server_store.list() if mcp_server_store is not None else []):
+        if not m.secret_ref:
+            continue
+        entries.append({
+            "service": f"mcp:{m.name}", "label": f"MCP · {m.name}",
+            "ref": m.secret_ref, "category": "mcp", "env": None,
+            "loaded": secrets.exists(m.secret_ref), "editable": secrets.writable, "testable": True,
         })
     return entries
 

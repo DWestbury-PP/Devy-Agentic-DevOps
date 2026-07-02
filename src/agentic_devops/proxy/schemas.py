@@ -278,6 +278,42 @@ class UploadResult(BaseModel):
     documents: list[DocumentInfo] = Field(default_factory=list)
 
 
+# -- MCP Servers registry (Phase S-4) ---------------------------------------
+class MCPServerCreate(BaseModel):
+    name: str                              # unique; becomes the tool prefix + category
+    url: str                               # streamable-HTTP MCP endpoint
+    category: Optional[str] = None
+    description: Optional[str] = None
+    allow_writes: bool = False             # opt-in to register mutating tools
+    enabled: bool = True
+    secret_ref: Optional[str] = None       # override the manager name for the bearer token
+
+
+class MCPServerUpdate(BaseModel):
+    url: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    allow_writes: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class MCPServerInfo(BaseModel):
+    id: str
+    name: str
+    url: str
+    secret_ref: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    allow_writes: bool = False
+    enabled: bool = True
+    last_status: Optional[str] = None
+    tool_count: int = 0
+    write_tool_count: int = 0
+    has_token: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 # -- Secrets / Connections (Phase S-2) --------------------------------------
 class SecretEntry(BaseModel):
     """One credential in the inventory — never the value, only loaded-state."""

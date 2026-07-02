@@ -32,6 +32,25 @@ class ToolsRouter:
             raise ValueError(f"{FIND_TOOLS_NAME!r} is reserved for discovery")
         self._tools[spec.name] = spec
 
+    def register_or_replace(self, spec: ToolSpec) -> None:
+        """Register, overwriting any existing tool with the same name (used when a
+        dynamic source — e.g. an MCP server — is refreshed)."""
+        if spec.name == FIND_TOOLS_NAME:
+            raise ValueError(f"{FIND_TOOLS_NAME!r} is reserved for discovery")
+        self._tools[spec.name] = spec
+
+    def unregister(self, name: str) -> bool:
+        """Withdraw a tool by name. Returns True if it existed."""
+        return self._tools.pop(name, None) is not None
+
+    def unregister_category(self, category: str) -> int:
+        """Withdraw all tools in a category (a whole MCP server's tools on
+        disable/delete/refresh). Returns how many were removed."""
+        names = [n for n, s in self._tools.items() if s.category == category]
+        for n in names:
+            del self._tools[n]
+        return len(names)
+
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 

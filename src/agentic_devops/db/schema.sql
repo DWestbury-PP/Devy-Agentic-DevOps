@@ -144,6 +144,28 @@ CREATE TABLE IF NOT EXISTS hosts (
 );
 CREATE INDEX IF NOT EXISTS idx_hosts_active ON hosts (active);
 
+-- MCP Servers registry (Phase S-4): general MCP tool sources (Grafana, CloudWatch,
+-- 3rd-party servers) Devy mounts as tools. Distinct from the `hosts` registry
+-- (diagnostic targets). HTTP transport, called on-demand; tool schemas captured at
+-- register/refresh and normalized into the tools-router. `secret_ref` is the NAME of
+-- the auth token in the secrets manager (never the value). Read-only by default;
+-- `allow_writes` opts a server's mutating tools in.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL UNIQUE,   -- tool prefix + category
+    url              TEXT NOT NULL,          -- streamable-HTTP MCP endpoint
+    secret_ref       TEXT,                   -- name of the bearer token in the secrets manager
+    category         TEXT,                   -- tools-router category (default: name)
+    description      TEXT,                   -- operator note / find_tools context
+    allow_writes     BOOLEAN NOT NULL DEFAULT FALSE,  -- opt-in to register mutating tools
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    last_status      TEXT,                   -- reachable | unreachable | unknown
+    tool_count       INTEGER NOT NULL DEFAULT 0,
+    write_tool_count INTEGER NOT NULL DEFAULT 0,  -- mutating tools seen (flagged)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- GitHub connector (Phase D-1): registered GitHub credentials Devy can use to
 -- discover + read repos (read-only). Credential-centric: one read-only PAT sees
 -- all of an account's repos (repos are discovered live via the API, not pre-

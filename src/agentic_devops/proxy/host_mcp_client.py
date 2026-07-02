@@ -49,6 +49,14 @@ class HostMCPClient:
         except Exception:  # noqa: BLE001
             return []
 
+    def list_tools_detail(self, url: str, token: Optional[str]) -> list[dict[str, Any]]:
+        """Full tool schemas (name/description/input_schema/annotations) — used by
+        the MCP Servers registry to normalize a server's tools into ToolSpecs."""
+        try:
+            return self._run(self._list_detail(url, token), _LIST_TIMEOUT + 5)
+        except Exception:  # noqa: BLE001
+            return []
+
     # -- async internals ----------------------------------------------------
     # The session is opened AND closed inline within one coroutine (one task) —
     # a generator + early-return would close the anyio cancel scope in a
@@ -74,3 +82,24 @@ class HostMCPClient:
                 await session.initialize()
                 tools = await asyncio.wait_for(session.list_tools(), _LIST_TIMEOUT)
                 return [t.name for t in tools.tools]
+
+    async def _list_detail(self, url: str, token: Optional[str]) -> list[dict[str, Any]]:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        async with streamablehttp_client(url, headers=headers) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await asyncio.wait_for(session.list_tools(), _LIST_TIMEOUT)
+                out: list[dict[str, Any]] = []
+                for t in tools.tools:
+                    ann = getattr(t, "annotations", None)
+                    out.append({
+                        "name": t.name,
+                        "description": t.description or "",
+                        "input_schema": t.inputSchema or {"type": "object", "properties": {}},
+                        "read_only_hint": getattr(ann, "readOnlyHint", None) if ann else None,
+                        "destructive_hint": getattr(ann, "destructiveHint", None) if ann else None,
+                    })
+                return out

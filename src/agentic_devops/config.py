@@ -211,6 +211,11 @@ class RbacConfig(BaseModel):
 
     group_roles: dict[str, str] = Field(default_factory=dict)  # IdP group -> devy role
     default_role: Optional[str] = None      # role for an authenticated user with no mapped group
+    # (RBAC-2) Role assumed for assistant-plane (chat) callers whose identity ISN'T
+    # verified — i.e. honor-system / password mode. Defaults to `admin` (unrestricted,
+    # preserves current behaviour); in jwt mode the real role from the JWT is used.
+    # Tighten this if you run the chat plane without SSO in a shared setting.
+    assistant_role: str = "admin"
 
 
 def _default_tiers() -> dict[str, ModelTier]:

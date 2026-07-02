@@ -68,7 +68,7 @@ from agentic_devops.proxy.schemas import (
     ToolInfo,
     UploadResult,
 )
-from agentic_devops.proxy.auth import Principal, build_authenticator
+from agentic_devops.proxy.auth import Principal, build_authenticator, max_tier_for_roles
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
@@ -399,6 +399,22 @@ def create_app(
         return _dep
 
     require_admin = require_role("admin")
+
+    def _allowed_tier(request: Request) -> str:
+        """The max tool safety tier the chat caller may invoke (RBAC-2). jwt mode →
+        the verified role from the forwarded JWT; otherwise the configured
+        assistant_role (honor-system / dev — default admin = unrestricted)."""
+        roles: Optional[set[str]] = None
+        if authenticator.mode == "jwt" and authenticator.enabled:
+            token = authenticator.extract_token(request.headers.get(authenticator.header))
+            if token:
+                try:
+                    roles = authenticator.principal(token).roles
+                except Exception:  # noqa: BLE001 — unverifiable token → no roles (read-only)
+                    roles = set()
+        if roles is None:
+            roles = {settings.rbac.assistant_role}
+        return max_tier_for_roles(roles)
 
     @app.post("/v1/admin/login", response_model=AdminToken)
     def admin_login(body: AdminLogin) -> AdminToken:
@@ -1019,10 +1035,12 @@ def create_app(
     @app.post("/v1/complete", response_model=CompleteResponse)
     async def complete(
         req: CompleteRequest,
+        request: Request,
         x_user_id: Optional[str] = Header(default=None),
     ) -> CompleteResponse:
         tier = _resolve_tier(req.tier)
         user_id = req.user_id or x_user_id
+        allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         if req.session_id:
             await run_in_threadpool(
@@ -1038,7 +1056,7 @@ def create_app(
             messages,
             tier,
             lambda e: tracer.event(session.id, e),
-            {"user_id": user_id, "session_id": session.id},
+            {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
         )
 
         text = result.text
@@ -1068,10 +1086,12 @@ def create_app(
     @app.post("/v1/chat")
     async def chat(
         req: ChatRequest,
+        request: Request,
         x_user_id: Optional[str] = Header(default=None),
     ):
         tier = _resolve_tier(req.tier)
         user_id = req.user_id or x_user_id
+        allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         await run_in_threadpool(sessions.compact_if_needed, session, provider, tier, settings)
         messages = assemble_messages(session, req.message, req.context)
@@ -1084,7 +1104,7 @@ def create_app(
             def worker() -> None:
                 gen = run_turn_streaming(
                     provider, router, settings, messages, tier,
-                    {"user_id": user_id, "session_id": session.id},
+                    {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
                 )
                 try:
                     while True:

@@ -63,6 +63,9 @@ class ToolsRouter:
     def all_specs(self) -> list[ToolSpec]:
         return list(self._tools.values())
 
+    def get_spec(self, name: str) -> Optional[ToolSpec]:
+        return self._tools.get(name)
+
     # -- discovery ----------------------------------------------------------
     def find(self, intent: Optional[str] = None, category: Optional[str] = None) -> list[ToolSpec]:
         """Match registered tools by free-text intent and/or category.

@@ -1,5 +1,6 @@
 import yaml
 
+import host_mcp.allowlist as al_mod
 from host_mcp.allowlist import Allowlist
 from host_mcp.config import DEFAULT_ALLOWLIST
 
@@ -80,10 +81,39 @@ def test_docker_inspect_and_top_require_valid_container():
         assert argv[-1] == "web"  # substituted as a single, final token
 
 
+def test_journal_is_cross_os(monkeypatch):
+    # The server auto-detects the OS (platform.system()) and picks the right argv:
+    # journald on Linux, the unified log (`log show`) on macOS — same check, one server.
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("journal", {})
+    assert err is None and argv[0] == "journalctl"
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("journal", {})
+    assert err is None and argv[:2] == ["log", "show"]
+
+
+def test_journal_grep_cross_os_substitutes_pattern(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("journal_grep", {"pattern": "panic", "lines": 50})
+    assert err is None
+    assert argv[0] == "grep" and "/var/log/system.log" in argv
+    assert "50" in argv                              # -m {lines} (max matches)
+    assert argv[argv.index("-e") + 1] == "panic"     # pattern via -e, its own token
+
+
+def test_journal_unit_stays_linux_only(monkeypatch):
+    # Genuinely systemd-specific checks report cleanly on macOS rather than misfiring.
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    _, err = al.build_argv("journal_unit", {"unit": "nginx.service"})
+    assert err and "not supported" in err
+
+
 def test_journal_grep_pattern_constraint():
-    # journal_* are Linux-only (platform-gated), so test the pattern constraint
-    # directly on the ArgSpec — platform-independent and the security-relevant
-    # bit. Single-argv-token substitution is covered by the docker_* tests.
+    # Test the pattern constraint directly on the ArgSpec — platform-independent and
+    # the security-relevant bit. Single-argv-token substitution is covered elsewhere.
     spec = _allowlist("diagnostic")._checks["journal_grep"].args["pattern"]
     # shell metacharacters are fine as DATA — they only ever become one argv
     # token, never a shell command.

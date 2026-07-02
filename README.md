@@ -128,10 +128,11 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
 ## What Devy can do
 
 - **Inspect live systems safely.** Host and Docker diagnostics (disk, memory,
-  CPU, processes, sockets, systemd logs, container status/logs/stats) through the
+  CPU, processes, sockets, system logs, container status/logs/stats) through the
   **[host MCP](host-mcp/README.md)** — a declarative, **profile-gated allow-list
   with no shell access**, which is what makes pointing it at a *production* host
-  adoptable. → [Security](docs/security.md)
+  adoptable. One server, **cross-OS aware** (auto-detects Linux vs macOS and runs
+  the right command — no OS config). → [Security](docs/security.md)
 - **Ground answers in your docs.** Ingest runbooks, postmortems, and architecture
   docs; Devy retrieves and **cites** them via a `search_knowledge` tool. →
   [Knowledge](docs/knowledge.md)

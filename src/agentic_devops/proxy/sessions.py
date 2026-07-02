@@ -118,10 +118,10 @@ class Session:
     updated_at: float = field(default_factory=time.time)
 
     def add_user(self, content: str) -> None:
-        self.messages.append({"role": "user", "content": content})
+        self.messages.append({"role": "user", "content": content, "ts": time.time()})
 
     def add_assistant(self, content: str) -> None:
-        self.messages.append({"role": "assistant", "content": content})
+        self.messages.append({"role": "assistant", "content": content, "ts": time.time()})
         self.updated_at = time.time()
 
     def add_findings(self, findings: list[dict[str, Any]], cap: int) -> None:
@@ -152,7 +152,12 @@ class Session:
             ctx.append(
                 {"role": "system", "content": f"Summary of earlier conversation:\n{summary_text}"}
             )
-        ctx.extend(self.messages[2 * self.compacted_turns :])
+        # Strip the per-message ``ts`` (a display-channel annotation, see add_user)
+        # so the provider only ever sees role/content — never an unknown key.
+        ctx.extend(
+            {k: v for k, v in m.items() if k != "ts"}
+            for m in self.messages[2 * self.compacted_turns :]
+        )
         findings_text = render_findings(self.recent_findings())
         if findings_text:
             ctx.append(

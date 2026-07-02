@@ -18,5 +18,6 @@ RUN set -eux; \
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY index.html app.js styles.css admin.html admin.js /usr/share/nginx/html/
+COPY favicon.svg favicon.ico favicon-32.png apple-touch-icon.png /usr/share/nginx/html/
 COPY --from=vendor /vendor /usr/share/nginx/html/vendor
 EXPOSE 8080

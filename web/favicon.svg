@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Devy">
+  <title>Devy</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16201b"/>
+      <stop offset="1" stop-color="#0a0e0c"/>
+    </linearGradient>
+  </defs>
+  <!-- dark terminal tile -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#tile)" stroke="#2c8a5d" stroke-width="1.5"/>
+  <!-- prompt chevron + cursor: the CLI/agent mark, in Devy green -->
+  <polyline points="10,9.5 16.5,16 10,22.5" fill="none" stroke="#46c98a"
+            stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="17" y="19.9" width="8" height="3" rx="1.5" fill="#46c98a"/>
+</svg>

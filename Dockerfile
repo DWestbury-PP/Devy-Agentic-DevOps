@@ -18,7 +18,7 @@ RUN apt-get update \
 # Build the package. hatchling reads README.md (declared as the project readme).
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[langsmith]"
 
 # Config, .env, sessions, and traces live under AGENTIC_DEVOPS_HOME (mounted).
 VOLUME ["/config"]

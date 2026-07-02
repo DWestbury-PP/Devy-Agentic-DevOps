@@ -1065,6 +1065,7 @@ def create_app(
             tier,
             lambda e: tracer.event(session.id, e),
             {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
+            tracer,
         )
 
         text = result.text
@@ -1114,6 +1115,7 @@ def create_app(
                 gen = run_turn_streaming(
                     provider, router, settings, messages, tier,
                     {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
+                    tracer,
                 )
                 try:
                     while True:

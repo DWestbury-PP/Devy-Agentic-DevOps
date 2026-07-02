@@ -22,10 +22,32 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger("agentic_devops.secrets")
+
+
+class SecretAudit:
+    """Append-only, value-free audit trail of secret operations (Phase S-3).
+
+    One JSONL line per set/delete/test/resolve — the "who touched which secret
+    when" trail SecOps expects. The secret VALUE is never recorded (only the ref)."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def record(self, action: str, ref: str, ok: bool, *, actor: str = "system", detail: str = "") -> None:
+        entry: dict[str, Any] = {"ts": time.time(), "action": action, "ref": ref, "ok": ok, "actor": actor}
+        if detail:
+            entry["detail"] = detail
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except Exception as exc:  # noqa: BLE001 — auditing must never break the request
+            logger.warning("secret audit write failed: %s", exc)
 
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -63,20 +85,53 @@ class SecretsProvider:
     against an in-memory double and the app against boto3 — same code either way.
     """
 
-    def __init__(self, client: Any, *, writable: bool, store_file: Optional[Path] = None) -> None:
+    def __init__(
+        self, client: Any, *, writable: bool, store_file: Optional[Path] = None,
+        cache_ttl: float = 0.0, clock: Optional[Callable[[], float]] = None,
+        audit: Optional[SecretAudit] = None,
+    ) -> None:
         self._client = client
         self._writable = writable
         self._store_file = store_file
         # Mirror used solely to persist the DEV write-through file; reads never use it.
         self._mirror: dict[str, str] = {}
+        # Short-TTL resolve cache (Phase S-3): bounds AWS SM calls on the hot path.
+        self._cache_ttl = cache_ttl
+        self._clock = clock or time.monotonic
+        self._cache: dict[str, tuple[float, Optional[str]]] = {}  # ref -> (expires_at, value)
+        self._audit = audit
 
     @property
     def writable(self) -> bool:
         return self._writable
 
+    def audit(self, action: str, ref: str, ok: bool, *, actor: str = "system", detail: str = "") -> None:
+        """Record a secret operation to the audit trail (used by the test endpoint)."""
+        if self._audit is not None:
+            self._audit.record(action, ref, ok, actor=actor, detail=detail)
+
+    def invalidate(self, ref: Optional[str] = None) -> None:
+        """Drop a cache entry (or the whole cache) — e.g. after an external rotation."""
+        if ref is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(ref, None)
+
     # -- read -----------------------------------------------------------------
     def get(self, ref: str) -> Optional[str]:
-        """The secret value, or None if absent/unreachable (never raises)."""
+        """The secret value, or None if absent/unreachable (never raises). Served
+        from the short-TTL cache when warm; a fetch (cache miss) is audited."""
+        if self._cache_ttl > 0:
+            hit = self._cache.get(ref)
+            if hit is not None and hit[0] > self._clock():
+                return hit[1]
+        value = self._fetch(ref)
+        self.audit("resolve", ref, value is not None)
+        if self._cache_ttl > 0:
+            self._cache[ref] = (self._clock() + self._cache_ttl, value)
+        return value
+
+    def _fetch(self, ref: str) -> Optional[str]:
         try:
             resp = self._client.get_secret_value(SecretId=ref)
             return resp.get("SecretString")
@@ -114,7 +169,9 @@ class SecretsProvider:
         except self._exists_error():
             self._client.put_secret_value(SecretId=ref, SecretString=value)
         self._mirror[ref] = value
+        self._cache.pop(ref, None)  # a fresh write must not read a stale cache
         self._persist()
+        self.audit("set", ref, True)
 
     def delete(self, ref: str) -> None:
         if not self._writable:
@@ -124,7 +181,9 @@ class SecretsProvider:
         except self._not_found():
             pass
         self._mirror.pop(ref, None)
+        self._cache.pop(ref, None)
         self._persist()
+        self.audit("delete", ref, True)
 
     # -- DEV persistence ------------------------------------------------------
     def rehydrate(self) -> int:
@@ -190,7 +249,13 @@ def build_secrets_provider(settings: Any) -> SecretsProvider:
 
     writable = sc.mode == "dev"
     store_file = Path(sc.store_file).expanduser() if (writable and sc.store_file) else None
-    provider = SecretsProvider(client, writable=writable, store_file=store_file)
+    audit = None
+    if sc.audit_enabled:
+        audit = SecretAudit(Path(settings.trace_dir) / "secrets-audit.jsonl")
+    provider = SecretsProvider(
+        client, writable=writable, store_file=store_file,
+        cache_ttl=sc.cache_ttl, audit=audit,
+    )
     if writable:
         loaded = provider.rehydrate()
         if loaded:

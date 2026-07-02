@@ -33,6 +33,9 @@ secrets:
   # store_file: ~/.config/agentic-devops/secrets-store.json  # dev write-through so UI-set secrets
   #                                        # survive restarts (LocalStack Community doesn't persist).
   # In prod, boto3 uses the default credential chain (instance IAM role) — no keys at rest.
+  cache_ttl: 60            # (S-3) cache resolved values N seconds — bounds AWS SM calls/latency/cost
+                           #       on the hot path; writes invalidate; rotation picked up within TTL. 0 = off.
+  audit_enabled: true      # (S-3) append a value-free audit line per secret op to trace_dir/secrets-audit.jsonl
 
 tiers:
   fast:

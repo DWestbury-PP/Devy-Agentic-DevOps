@@ -699,6 +699,7 @@ def create_app(
             ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")
+        secrets.audit("test", ref, ok, actor="admin", detail=detail[:120])
         return SecretTestResult(ok=ok, detail=detail)
 
     @app.get("/v1/admin/github/repos")

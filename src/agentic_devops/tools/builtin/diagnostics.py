@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -97,12 +98,25 @@ def _build_argv(check: str, args: dict[str, Any]) -> tuple[Optional[list[str]], 
         return ["docker", "logs", "--tail", str(tail), "--since", since, container], None
 
     if check == "recent_syslog":
+        # Be mindful of the host: macOS uses the unified log, modern Linux uses the
+        # systemd journal, older Linux uses /var/log files. Pick what's actually there.
         if platform.system() == "Darwin":
-            return ["log", "show", "--last", "5m", "--style", "compact"], None
+            if shutil.which("log"):
+                return ["log", "show", "--last", "5m", "--style", "compact"], None
+            if Path("/var/log/system.log").exists():
+                return ["tail", "-n", "100", "/var/log/system.log"], None
+            return None, "no readable macOS system log — tried `log show` and /var/log/system.log"
+        if shutil.which("journalctl"):
+            return ["journalctl", "--no-pager", "-n", "100"], None
         for candidate in ("/var/log/syslog", "/var/log/messages"):
             if Path(candidate).exists():
                 return ["tail", "-n", "100", candidate], None
-        return None, "no readable system log found (/var/log/syslog or /var/log/messages)"
+        return None, (
+            "no system log reachable from this environment — tried journalctl, "
+            "/var/log/syslog, /var/log/messages. A containerized proxy has no host "
+            "syslog; run the host MCP on the target host (or a host with systemd) for "
+            "real host logs."
+        )
 
     return None, None  # unreachable for allowed checks
 
@@ -131,6 +145,19 @@ def build_diagnostics_tool(audit_path: Optional[Path] = None) -> ToolSpec:
         if error is not None:
             _audit({"ts": time.time(), "check": check, "args": args, "error": error})
             return f"ERROR: {error}"
+
+        # A containerized proxy has no Docker CLI (the host MCP is the Docker surface,
+        # via its mounted socket). Fail with an actionable pointer instead of a bare
+        # "command not found" so the agent can reach for the right tool.
+        if argv and argv[0] == "docker" and shutil.which("docker") is None:
+            msg = (
+                "the Docker CLI isn't available in this environment. If the proxy is "
+                "containerized, use the host MCP's Docker checks (e.g. host_docker_ps, "
+                "host_docker_logs), which read the mounted Docker socket; otherwise "
+                "install Docker on the host running the proxy."
+            )
+            _audit({"ts": time.time(), "check": check, "args": args, "error": msg})
+            return f"ERROR: {msg}"
 
         started = time.monotonic()
         returncode, output = _run(argv)  # type: ignore[arg-type]

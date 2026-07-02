@@ -1,5 +1,6 @@
 import json
 
+from agentic_devops.tools.builtin import diagnostics as d
 from agentic_devops.tools.builtin.diagnostics import ALLOWED_CHECKS, build_diagnostics_tool
 
 
@@ -29,6 +30,35 @@ def test_docker_logs_rejects_bad_since():
     tool = build_diagnostics_tool()
     out = tool.handler({"check": "docker_logs", "container": "web", "since": "; reboot"})
     assert out.startswith("ERROR")
+
+
+def test_recent_syslog_prefers_journalctl_on_linux(monkeypatch):
+    monkeypatch.setattr(d.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(d.shutil, "which", lambda cmd: "/usr/bin/journalctl" if cmd == "journalctl" else None)
+    argv, err = d._build_argv("recent_syslog", {})
+    assert err is None and argv[0] == "journalctl"
+
+
+def test_recent_syslog_darwin_uses_log_show(monkeypatch):
+    monkeypatch.setattr(d.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(d.shutil, "which", lambda cmd: "/usr/bin/log" if cmd == "log" else None)
+    argv, err = d._build_argv("recent_syslog", {})
+    assert err is None and argv[:2] == ["log", "show"]
+
+
+def test_recent_syslog_reports_when_no_source(monkeypatch):
+    monkeypatch.setattr(d.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(d.shutil, "which", lambda cmd: None)
+    monkeypatch.setattr(d, "Path", lambda p: type("P", (), {"exists": lambda self: False})())
+    argv, err = d._build_argv("recent_syslog", {})
+    assert argv is None
+    assert "journalctl" in err and "host MCP" in err
+
+
+def test_docker_ps_without_cli_points_to_host_mcp(monkeypatch):
+    monkeypatch.setattr(d.shutil, "which", lambda cmd: None)  # no docker on PATH
+    out = d.build_diagnostics_tool().handler({"check": "docker_ps"})
+    assert out.startswith("ERROR") and "host_docker_ps" in out
 
 
 def test_audit_log_written(tmp_path):

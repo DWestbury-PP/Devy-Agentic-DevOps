@@ -173,6 +173,14 @@ class SecretsConfig(BaseModel):
     secret_key: Optional[str] = None
     # Secret-name prefix/namespace in the manager.
     namespace: str = "devy"
+    # Prod hardening (Phase S-3). Short-TTL cache for resolved values so a busy
+    # resolve path (per tool call) doesn't hit AWS SM every time — bounds latency,
+    # cost, and rate limits. Writes invalidate the entry; a rotated secret is picked
+    # up within the TTL. 0 disables caching (always re-fetch).
+    cache_ttl: float = 60.0
+    # Append a structured (value-free) audit line per secret op (set/delete/test/
+    # resolve-on-fetch) to `trace_dir/secrets-audit.jsonl` — the SecOps access trail.
+    audit_enabled: bool = True
 
 
 def _default_tiers() -> dict[str, ModelTier]:

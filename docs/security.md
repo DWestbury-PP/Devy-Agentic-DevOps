@@ -57,6 +57,61 @@ Controls:
 - No telemetry is sent anywhere by default; agent tracing is local JSONL unless
   you opt into LangSmith.
 
+## Secrets management
+
+Every external credential (LLM/provider keys, GitHub PATs, per-host MCP tokens,
+MCP-server bearer tokens) resolves through **one AWS Secrets Manager API surface**
+— LocalStack in `dev`, real AWS SM in `prod`. The single knob is `DEVY_MODE`.
+
+- **Nothing secret lives in Devy's database.** Registry rows (`hosts`,
+  `github_accounts`, `mcp_servers`) hold only a **`secret_ref`** — the *name* of
+  the secret in the manager, never the value. The API returns loaded-state
+  (`has_token`) and a live **Test**, never the value.
+- **`prod` posture (the defensible one):** the app authenticates to AWS SM via the
+  ambient **instance IAM role** — there is **no bootstrap key at rest**. Secrets are
+  **provisioned out-of-band** by your IaC; the admin UI is **test-only** (writes
+  return `403`, enforced server-side).
+- **`dev` posture:** a bundled LocalStack stands in for AWS SM so the resolve path
+  is identical to prod. The admin UI can set/test; writes mirror to a local file and
+  re-hydrate LocalStack on boot (it doesn't persist). This is a convenience, **not**
+  a stronger boundary — a local secret is readable by whoever owns the host.
+- **Caching + rotation:** resolved values are cached for `secrets.cache_ttl`
+  seconds (default 60) to bound AWS SM calls/latency/cost on the hot path; writes
+  invalidate, and an externally-rotated secret is picked up within the TTL.
+- **Audit trail:** with `secrets.audit_enabled` (default on), every secret op
+  (set / delete / test / resolve-on-fetch) appends a **value-free** line to
+  `trace_dir/secrets-audit.jsonl` — the "who touched which secret when" record.
+
+**Least-privilege IAM policy** (attach to Devy's instance/task role) — read-only,
+scoped to the `devy/*` namespace:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
+    "Resource": "arn:aws:secretsmanager:*:*:secret:devy/*"
+  }]
+}
+```
+
+Devy never needs `CreateSecret`/`PutSecretValue` in prod — provision out-of-band:
+
+```hcl
+resource "aws_secretsmanager_secret" "github_home" {
+  name = "devy/github/home"
+}
+resource "aws_secretsmanager_secret_version" "github_home" {
+  secret_id     = aws_secretsmanager_secret.github_home.id
+  secret_string = var.github_home_pat   # from your TF vars / a secrets pipeline
+}
+```
+
+Register the connector (metadata only) in the admin UI, then **Test** it — Devy
+resolves `devy/github/home` from AWS SM via the role. Ref naming:
+`devy/provider/<svc>`, `devy/github/<label>`, `devy/host/<fqdn>`, `devy/mcp/<name>`.
+
 ## Identity
 
 > **The honor-system `user_id` is scoping, not authentication.** Treat the

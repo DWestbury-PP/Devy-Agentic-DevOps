@@ -82,3 +82,62 @@ def test_ref_helpers_sanitize_and_namespace():
 
 def test_health_reflects_reachability():
     assert make_fake_secrets().health() is True
+
+
+# -- prod hardening: TTL cache + audit (Phase S-3) --------------------------
+class _CountingSM(_FakeSMClient):
+    def __init__(self):
+        super().__init__()
+        self.gets = 0
+
+    def get_secret_value(self, SecretId):
+        self.gets += 1
+        return super().get_secret_value(SecretId)
+
+
+def test_ttl_cache_serves_within_window_and_refetches_after():
+    clock = [0.0]
+    client = _CountingSM()
+    client._d["devy/x"] = "v1"
+    s = SecretsProvider(client, writable=True, cache_ttl=100, clock=lambda: clock[0])
+    assert s.get("devy/x") == "v1" and client.gets == 1
+    client._d["devy/x"] = "v2"          # change underlying store directly (no invalidation)
+    assert s.get("devy/x") == "v1" and client.gets == 1   # served from cache
+    clock[0] = 101                       # TTL expires
+    assert s.get("devy/x") == "v2" and client.gets == 2   # re-fetched
+
+
+def test_set_and_delete_invalidate_cache():
+    client = _CountingSM()
+    s = SecretsProvider(client, writable=True, cache_ttl=100)
+    s.set("devy/x", "v1")
+    assert s.get("devy/x") == "v1"       # cached
+    s.set("devy/x", "v2")                # write invalidates
+    assert s.get("devy/x") == "v2"
+    s.delete("devy/x")
+    assert s.get("devy/x") is None
+
+
+def test_zero_ttl_always_refetches():
+    client = _CountingSM()
+    client._d["devy/x"] = "v"
+    s = SecretsProvider(client, writable=True, cache_ttl=0)
+    s.get("devy/x"); s.get("devy/x")
+    assert client.gets == 2
+
+
+def test_audit_records_ops_without_value(tmp_path):
+    from agentic_devops.proxy.secrets import SecretAudit
+
+    audit = SecretAudit(tmp_path / "secrets-audit.jsonl")
+    s = SecretsProvider(_FakeSMClient(), writable=True, audit=audit)
+    s.set("devy/github/home", "ghp_supersecret")
+    s.get("devy/github/home")
+    s.delete("devy/github/home")
+    lines = [json.loads(x) for x in (tmp_path / "secrets-audit.jsonl").read_text().splitlines()]
+    actions = {(e["action"], e["ref"]) for e in lines}
+    assert ("set", "devy/github/home") in actions
+    assert ("resolve", "devy/github/home") in actions
+    assert ("delete", "devy/github/home") in actions
+    # the value is NEVER in the audit trail
+    assert "ghp_supersecret" not in (tmp_path / "secrets-audit.jsonl").read_text()

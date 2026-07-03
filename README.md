@@ -74,12 +74,13 @@ Devy is a platform; these are its plug points. Each is documented in
 | **Tools** (eyes & hands) | Register a `ToolSpec`; the agent discovers it by intent via `find_tools` | [Tools & MCP](docs/extending.md#tools) |
 | **Remote hosts** | Deploy the safe-allowlist **host MCP** (no shell, profile-gated) | [host-mcp/](host-mcp/README.md) |
 | **Any in-house system** | Mount any **MCP server** (stdio or authenticated HTTP) | [Extending → MCP](docs/extending.md#mcp-servers) |
-| **Observability** | Bring-your-own Grafana / CloudWatch / CloudTrail MCP | [Extending → Observability](docs/extending.md#observability) |
+| **Observability** | Built-in **LangSmith** tracing; bring-your-own Grafana / CloudWatch / CloudTrail MCP | [Extending → Observability](docs/extending.md#observability) |
 | **Models** | Map `fast`/`balanced`/`deep` tiers to any LiteLLM provider | [Configuration](docs/configuration.md#model-tiers) |
 | **Knowledge** | Ingest your docs/runbooks; swap the embedder | [Knowledge](docs/knowledge.md) |
 | **Storage** | Bundled Postgres or a managed instance (RDS/Aurora) | [Deployment](docs/deployment.md) |
+| **Secrets** | Vault-backed (AWS Secrets Manager / LocalStack); the DB stores only references | [Security](docs/security.md#secrets-management) |
 | **Surfaces** | Build a new client against the HTTP/SSE API | [API reference](docs/api.md) |
-| **Identity / auth** | Honor-system now; a JWT/SSO seam is in place | [Security](docs/security.md#identity) |
+| **Identity / auth** | **SSO + RBAC** via forward-auth JWT (roles → control plane + tool tiers); password mode for dev | [Security](docs/security.md#identity) |
 
 ## Quickstart
 
@@ -133,8 +134,10 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
   with no shell access**, which is what makes pointing it at a *production* host
   adoptable. One server, **cross-OS aware** (auto-detects Linux vs macOS and runs
   the right command — no OS config). → [Security](docs/security.md)
-- **Ground answers in your docs.** Ingest runbooks, postmortems, and architecture
-  docs; Devy retrieves and **cites** them via a `search_knowledge` tool. →
+- **Ground answers in your docs — and the live web.** Ingest runbooks,
+  postmortems, and architecture docs; Devy retrieves and **cites** them via a
+  `search_knowledge` tool. When the answer isn't in your KB, a native **web
+  search** (Tavily) pulls current docs, CVEs, and error messages. →
   [Knowledge](docs/knowledge.md)
 - **Investigate incidents (RCA).** Root-cause analysis as adaptive detective work
   — survey reachable data, gather just enough, follow the evidence, build a
@@ -143,6 +146,16 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
 - **Remember across conversations.** Two-channel memory (a lossless transcript +
   a compact, token-triggered working summary) and a `recall_history` tool that
   pulls back specifics — within a chat or across prior ones. → [Memory](docs/memory.md)
+- **Secure and governable by default.** Every credential lives in a **secret
+  vault** (the AWS Secrets Manager API — LocalStack in dev, real ASM in prod);
+  the database stores only *references*, never values. **SSO + RBAC**
+  (forward-auth JWT → admin / operator / viewer) gates both the control plane and
+  the tool-safety tier the agent may call, and **secrets are redacted at ingest**
+  before anything reaches the store. → [Security](docs/security.md)
+- **See inside every turn.** Opt-in **LangSmith** tracing renders each turn as a
+  waterfall — the turn → its LLM calls → its tool calls — with token usage and
+  timings, for debugging and auditing the agent loop (full detail in dev,
+  metadata-only in prod). → [Configuration](docs/configuration.md)
 - **Meet you where you work.** A terminal-themed [web chat](web/README.md) with a
   conversation-history slide-out, a native Go [`ask` TUI](tui/README.md), and a
   one-shot HTTP endpoint for scripting. → [API](docs/api.md)
@@ -225,6 +238,9 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
   reads a repo's *code* → OKF architecture docs, diff-driven, redacted-before-disk);
   an **MCP Servers registry** to mount external HTTP MCP tool sources (read-only by
   default, write tools opt-in); and native **web search** (Tavily).
+- **Observability**: opt-in **LangSmith** waterfall tracing of every turn — LLM
+  and tool spans with token usage and timings; payload verbosity gated by mode
+  (dev = full I/O, prod = metadata-only, following `DEVY_MODE`).
 - **Incident RCA** as an adaptive mode of reasoning + a `correlate_timeline` helper.
 - **Surfaces**: web chat (with history slide-out), native `ask` TUI, one-shot HTTP.
 - **Persistence**: Postgres + pgvector (bundled or managed/RDS), self-bootstrapping.
@@ -238,8 +254,8 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
 leap from observing to acting*. Full breakdown (with the "why it builds on the last"
 for each): **[Roadmap](docs/plans/roadmap.md)**.
 
-1. **Observability & evaluation** — **LangSmith** waterfall tracing of harness/LLM
-   calls, and a golden-set eval + feedback harness as a quality gate.
+1. **Evaluation** — a golden-set eval + feedback harness as a quality gate, built
+   on the LangSmith tracing that already ships.
 2. **Extended retrieval** — more `find_tools` backends fused into hybrid search: file,
    structured/JSONB, optional graph; plus scheduled re-ingest. (Web search shipped.)
 3. **Reach** — **read-only AWS connectors** (building on the GitHub connector +

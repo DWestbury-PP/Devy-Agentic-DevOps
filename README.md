@@ -177,6 +177,16 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
   → <a href="docs/api.md">Admin API</a></em>
 </p>
 
+<p align="center">
+  <img src="assets/devy-secrets.png" width="820"
+       alt="The admin Secrets tab: a table of the credentials Devy uses (Anthropic, OpenAI, Tavily web search, LangSmith tracing, a GitHub connector), each shown as a vault reference like devy/provider/anthropic with a 'loaded' status and Test / Update / Clear actions — no secret values displayed." />
+  <br />
+  <em>Vault-backed <strong>Secrets</strong> — every credential (LLM keys, web search,
+  tracing, host &amp; connector tokens) lives in the secrets manager and is set and
+  live-tested here; the database stores only references, never values.
+  → <a href="docs/security.md">Security</a></em>
+</p>
+
 ### Try the RCA demo
 
 ```bash

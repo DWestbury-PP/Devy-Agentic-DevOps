@@ -129,6 +129,26 @@ function note(html, cls) {
   return n;
 }
 
+function greet() {
+  const ok = statusDot.classList.contains("ok");
+  note(
+    "Hi, I'm <strong>Devy</strong> — your DevOps &amp; SRE co-pilot. Ask me about your " +
+    "systems and I'll discover the right tools, pull live data and runbooks, and explain " +
+    "what's going on — grounded in real data, not guesses." +
+    (ok ? "" : "<br><br><span class='err'>Proxy unreachable — start it with <code>docker compose up -d</code>.</span>"),
+    "welcome"
+  );
+}
+
+// Start a fresh chat: clear the view outright (not a scrollback divider) and reset state.
+function newConversation() {
+  state.sessionId = null;
+  state.transcript = [];
+  screen.replaceChildren();
+  greet();
+  input.focus();
+}
+
 /* ---------- markdown / mermaid ---------- */
 let mermaidReady = false;
 function initMermaid() {
@@ -421,7 +441,7 @@ async function handleCommand(line) {
       );
       break;
     }
-    case "new": state.sessionId = null; state.transcript = []; note("— new conversation —"); break;
+    case "new": newConversation(); break;
     case "clear": screen.innerHTML = ""; break;
     default: {
       await ensureTools();
@@ -464,7 +484,7 @@ input.addEventListener("keydown", (e) => {
 });
 composer.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
 tierSelect.addEventListener("change", () => { state.tier = tierSelect.value; });
-newBtn.addEventListener("click", () => { state.sessionId = null; state.transcript = []; note("— new conversation —"); input.focus(); });
+newBtn.addEventListener("click", newConversation);
 
 /* ---------- history slide-out ---------- */
 function relTime(iso) {
@@ -611,14 +631,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawer.c
 /* ---------- boot ---------- */
 async function boot() {
   await loadTiers();
-  const ok = statusDot.classList.contains("ok");
-  note(
-    "Hi, I'm <strong>Devy</strong> — your DevOps &amp; SRE co-pilot. Ask me about your " +
-    "systems and I'll discover the right tools, pull live data and runbooks, and explain " +
-    "what's going on — grounded in real data, not guesses." +
-    (ok ? "" : "<br><br><span class='err'>Proxy unreachable — start it with <code>docker compose up -d</code>.</span>"),
-    "welcome"
-  );
+  greet();
   input.focus();
 }
 boot();

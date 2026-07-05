@@ -46,6 +46,18 @@ checks:
       Linux: ["ss", "-tuln"]
       Darwin: ["netstat", "-an", "-p", "tcp"]
 
+  reboot_history:
+    profile: read-only
+    description: "Recent reboot / shutdown history (last reboot) — when the host last restarted and whether shutdowns were clean. Portable: `last -n {lines} reboot` on both Linux and macOS."
+    argv: ["last", "-n", "{lines}", "reboot"]
+    args:
+      lines:
+        type: int
+        default: 10
+        min: 1
+        max: 100
+        description: "Number of recent reboot/shutdown records to return."
+
   # ---- Host: diagnostic -------------------------------------------------
   processes:
     profile: diagnostic

@@ -261,15 +261,31 @@ def create_app(
     mcp_manager: Optional[MCPManager] = None
     if router is None:
         router = ToolsRouter()
-        register_builtin_tools(router, audit_path=settings.trace_dir / "diagnostics-audit.jsonl")
+        # Mount configured MCP servers first so we know whether a real *host*
+        # surface is present before registering the native diagnostics builtin.
+        mcp_specs = []
         if settings.mcp_servers:
             mcp_manager = MCPManager(settings.mcp_servers)
             mcp_manager.start()
-            for spec in mcp_manager.tool_specs():
-                try:
-                    router.register(spec)
-                except ValueError:
-                    logger.warning("MCP tool name clash, skipping: %s", spec.name)
+            mcp_specs = mcp_manager.tool_specs()
+        # A mounted MCP server in the reserved `host` category IS the target-host
+        # surface (e.g. the deployable host MCP). When one is present the proxy is
+        # typically containerized and its own diagnostics only see the container —
+        # so re-scope the builtin to the container and let the `host_*` tools own
+        # host questions. Deployed natively on a host (no host MCP), it stays the
+        # host-diagnostics surface.
+        host_mcp_mounted = any(getattr(s, "category", None) == "host" for s in mcp_specs)
+        register_builtin_tools(
+            router,
+            audit_path=settings.trace_dir / "diagnostics-audit.jsonl",
+            container_scoped=host_mcp_mounted,
+        )
+        for spec in mcp_specs:
+            try:
+                router.register(spec)
+            except ValueError:
+                logger.warning("MCP tool name clash, skipping: %s", spec.name)
+        if mcp_manager is not None:
             for err in mcp_manager.errors:
                 logger.warning("MCP mount issue: %s", err)
 

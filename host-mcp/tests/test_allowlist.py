@@ -111,6 +111,24 @@ def test_journal_unit_stays_linux_only(monkeypatch):
     assert err and "not supported" in err
 
 
+def test_reboot_history_is_read_only_and_portable(monkeypatch):
+    # Reboot history is a read-only check exposed even at the lowest profile, and
+    # its `last -n N reboot` argv is identical on Linux and macOS (both accept -n).
+    ro = {c.name for c in _allowlist("read-only").available_checks()}
+    assert "reboot_history" in ro
+    al = _allowlist("read-only")
+    for osname in ("Linux", "Darwin"):
+        monkeypatch.setattr(al_mod.platform, "system", lambda os=osname: os)
+        argv, err = al.build_argv("reboot_history", {"lines": 5})
+        assert err is None
+        assert argv == ["last", "-n", "5", "reboot"]
+    # default + clamp
+    argv, err = al.build_argv("reboot_history", {})
+    assert err is None and argv == ["last", "-n", "10", "reboot"]
+    argv, err = al.build_argv("reboot_history", {"lines": 99999})
+    assert err is None and "100" in argv  # clamped to max
+
+
 def test_journal_grep_pattern_constraint():
     # Test the pattern constraint directly on the ArgSpec — platform-independent and
     # the security-relevant bit. Single-argv-token substitution is covered elsewhere.

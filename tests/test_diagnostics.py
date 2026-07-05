@@ -61,6 +61,37 @@ def test_docker_ps_without_cli_points_to_host_mcp(monkeypatch):
     assert out.startswith("ERROR") and "host_docker_ps" in out
 
 
+def test_default_is_the_host_diagnostics_surface():
+    tool = build_diagnostics_tool()
+    assert tool.name == "host_diagnostics"
+    assert tool.category == "host-diagnostics"
+
+
+def test_container_scoped_yields_to_mounted_host_surface():
+    # When a host MCP is mounted the builtin re-scopes to the proxy's own
+    # container: distinct name + category (so find_tools no longer offers it as a
+    # 'host' surface), and its text hands host questions to the host_* tools.
+    tool = build_diagnostics_tool(container_scoped=True)
+    assert tool.name == "proxy_self_diagnostics"
+    assert tool.category == "proxy-diagnostics"
+    assert tool.category != "host-diagnostics"
+    blurb = (tool.description + " " + tool.when_to_use).lower()
+    assert "not the target host" in blurb or "not for the host" in blurb
+    assert "host_reboot_history" in tool.description or "host_journal" in tool.description
+    # the checks still run — it's a real (container) diagnostics tool
+    assert tool.handler({"check": "disk"}).startswith("$ df -h")
+
+
+def test_recent_syslog_error_names_mounted_host_tools(monkeypatch):
+    # In-container syslog failure should point at the mounted host tools by name.
+    monkeypatch.setattr(d.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(d.shutil, "which", lambda cmd: None)  # no journalctl
+    monkeypatch.setattr(d.Path, "exists", lambda self: False)  # no /var/log files
+    out = d.build_diagnostics_tool().handler({"check": "recent_syslog"})
+    assert out.startswith("ERROR")
+    assert "host_journal" in out and "host_reboot_history" in out
+
+
 def test_audit_log_written(tmp_path):
     audit = tmp_path / "audit.jsonl"
     tool = build_diagnostics_tool(audit_path=audit)

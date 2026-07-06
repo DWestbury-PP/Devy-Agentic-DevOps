@@ -129,6 +129,74 @@ def test_reboot_history_is_read_only_and_portable(monkeypatch):
     assert err is None and "100" in argv  # clamped to max
 
 
+def test_log_query_is_macos_only_and_passes_predicate_as_one_token(monkeypatch):
+    al = _allowlist()
+    # macOS: predicate + window substituted as whole tokens (no shell, no split).
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv(
+        "log_query",
+        {"predicate": 'eventMessage CONTAINS[c] "shutdown"', "window": "2d"},
+    )
+    assert err is None
+    assert argv[:3] == ["log", "show", "--last"]
+    assert "2d" in argv
+    # the whole predicate is exactly one argv element — never split into flags
+    assert 'eventMessage CONTAINS[c] "shutdown"' in argv
+    assert argv[argv.index("--predicate") + 1] == 'eventMessage CONTAINS[c] "shutdown"'
+    assert argv[-2:] == ["--style", "compact"]
+    # Linux: not a systemd concept — report cleanly, don't misfire.
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    _, err = al.build_argv("log_query", {"predicate": 'process == "kernel"'})
+    assert err and "not supported" in err
+
+
+def test_log_query_predicate_and_window_constraints():
+    checks = _allowlist("diagnostic")._checks["log_query"].args
+    # newline / over-length predicates rejected
+    _, err = checks["predicate"].validate("predicate", "a\nb")
+    assert err
+    _, err = checks["predicate"].validate("predicate", "x" * 300)
+    assert err
+    # quotes/brackets are fine as DATA (one argv token, never a shell)
+    val, err = checks["predicate"].validate("predicate", 'eventMessage CONTAINS[c] "panic"')
+    assert err is None and val == 'eventMessage CONTAINS[c] "panic"'
+    # window must look like 30m / 2h / 3d
+    _, err = checks["window"].validate("window", "yesterday")
+    assert err
+    val, err = checks["window"].validate("window", "3d")
+    assert err is None and val == "3d"
+
+
+def test_log_query_declares_a_longer_timeout():
+    # `log show` needs more than the 20s default for wide windows.
+    assert _allowlist("diagnostic")._checks["log_query"].timeout == 90
+
+
+def test_run_honours_per_check_timeout(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        raise al_mod.subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(al_mod.subprocess, "run", fake_run)
+    out = _allowlist().run("log_query", {"predicate": 'eventMessage CONTAINS[c] "x"'})
+    assert captured["timeout"] == 90        # per-check override, not the 20s default
+    assert "timed out after 90s" in out
+
+
+def test_panic_reports_macos_only(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("panic_reports", {})
+    assert err is None
+    assert argv == ["ls", "-lt", "/Library/Logs/DiagnosticReports"]
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    _, err = al.build_argv("panic_reports", {})
+    assert err and "not supported" in err
+
+
 def test_journal_grep_pattern_constraint():
     # Test the pattern constraint directly on the ArgSpec — platform-independent and
     # the security-relevant bit. Single-argv-token substitution is covered elsewhere.

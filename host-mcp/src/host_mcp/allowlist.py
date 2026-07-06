@@ -84,6 +84,10 @@ class Check:
     argv: Optional[list[str]] = None
     platform: Optional[dict[str, list[str]]] = None
     args: dict[str, ArgSpec] = field(default_factory=dict)
+    # Optional per-check subprocess timeout (seconds). A few checks (notably the
+    # macOS unified-log query, `log show`) legitimately take longer than the
+    # 20s default when scanning a wide time window.
+    timeout: Optional[int] = None
 
     def base_argv(self) -> Optional[list[str]]:
         if self.platform:
@@ -136,6 +140,7 @@ class Allowlist:
                 argv=raw.get("argv"),
                 platform=raw.get("platform"),
                 args=args,
+                timeout=raw.get("timeout"),
             )
         profile = active_profile or data.get("profile", "diagnostic")
         return cls(checks, active_profile=profile, audit_path=audit_path)
@@ -178,6 +183,10 @@ class Allowlist:
         if error:
             self._audit({"ts": time.time(), "check": name, "args": args, "error": error})
             return f"ERROR: {error}"
+
+        check = self._checks.get(name)
+        if check is not None and check.timeout:
+            timeout = check.timeout
 
         started = time.monotonic()
         try:

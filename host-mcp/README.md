@@ -43,11 +43,24 @@ For example:
 | `processes` / `top_snapshot` | `ps` / `top -bn1` | `ps` / `top -l 1` |
 | `journal` | `journalctl` | `log show` (unified log) |
 | `journal_grep` | `journalctl --grep` | `grep … /var/log/system.log` |
+| `reboot_history` | `last -n N reboot` | `last -n N reboot` |
 
-A check with no variant for the detected OS (e.g. `journal_unit` and
-`systemctl_status`, which are systemd-specific) reports *"not supported on
-`<OS>`"* cleanly rather than running the wrong command. The `HOST_MCP_*` env vars
-configure the *deployment* (profile, auth, transport) — never the OS.
+A check with no variant for the detected OS reports *"not supported on `<OS>`"*
+cleanly rather than running the wrong command — this covers both the
+systemd-specific checks on macOS (`journal_unit`, `systemctl_status`) **and** the
+macOS-specific checks on Linux (`log_query`, `panic_reports`, below). The
+`HOST_MCP_*` env vars configure the *deployment* (profile, auth, transport) —
+never the OS.
+
+**macOS deep diagnostics.** `journal_grep` on macOS only sees `/var/log/system.log`
+(short retention). For historical / richer queries — the authoritative source for
+shutdown cause, power, sleep/wake, and kernel events — two macOS-only checks tap
+the unified log binary store and crash reports:
+
+| Check | Command | Use |
+|---|---|---|
+| `log_query` | `log show --last <window> --predicate <NSPredicate> --style compact` | Query the unified log over a time window (e.g. `eventMessage CONTAINS[c] "shutdown"`). Longer retention than `system.log`; 90s timeout since wide windows are slow. |
+| `panic_reports` | `ls -lt /Library/Logs/DiagnosticReports` | List kernel-panic / crash reports newest-first — a `*.panic`/`*.ips` near a reboot signals an unclean shutdown. |
 
 ## Safety model
 
@@ -114,3 +127,31 @@ group) for the `docker_*` checks; no extra privilege is needed for the rest.
 pipx install agentic-devops-host-mcp        # or pip install into a venv
 HOST_MCP_TRANSPORT=http HOST_MCP_TOKEN=… agentic-devops-host-mcp
 ```
+
+#### macOS dev host + containerized proxy
+
+macOS can't run Linux containers natively, so a *containerized* host-mcp only ever
+sees a Linux VM — its host checks (and `log show`) can't reach the real Mac. Run
+the host MCP **natively on the Mac** instead, and have the containerized proxy dial
+it over the Docker gateway:
+
+```bash
+# 1. run the native sidecar (Darwin process → real `log show` / `last reboot`)
+HOST_MCP_TRANSPORT=http HOST_MCP_PORT=8781 HOST_MCP_TOKEN=… agentic-devops-host-mcp
+# 2. point the proxy's mcp_servers url at the host gateway
+#    url: http://host.docker.internal:8781/mcp
+```
+
+For a durable sidecar that starts at login, use the launchd LaunchAgent in
+[`deploy/`](deploy/) — it runs [`run-native-macos.sh`](deploy/run-native-macos.sh)
+(which reads `HOST_MCP_TOKEN` from the repo `.env`) and keeps it alive:
+
+```bash
+sed "s#__REPO__#$PWD#g" host-mcp/deploy/com.agentic-devops.host-mcp.plist.example \
+  > ~/Library/LaunchAgents/com.agentic-devops.host-mcp.plist
+launchctl load ~/Library/LaunchAgents/com.agentic-devops.host-mcp.plist
+```
+
+> When a host MCP is mounted, the proxy's own `host_diagnostics` builtin re-scopes
+> to the container (as `proxy_self_diagnostics`) so the mounted `host_*` tools are
+> the single, unambiguous host surface.

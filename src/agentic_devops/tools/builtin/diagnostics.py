@@ -114,17 +114,29 @@ def _build_argv(check: str, args: dict[str, Any]) -> tuple[Optional[list[str]], 
         return None, (
             "no system log reachable from this environment — tried journalctl, "
             "/var/log/syslog, /var/log/messages. A containerized proxy has no host "
-            "syslog; run the host MCP on the target host (or a host with systemd) for "
-            "real host logs."
+            "syslog. If a host MCP is mounted, use its host tools instead — "
+            "host_journal (recent system logs) or host_reboot_history (reboot / "
+            "shutdown history), discoverable via find_tools(category='host'). "
+            "Otherwise run the host MCP on the target host (or a host with systemd)."
         )
 
     return None, None  # unreachable for allowed checks
 
 
-def build_diagnostics_tool(audit_path: Optional[Path] = None) -> ToolSpec:
+def build_diagnostics_tool(
+    audit_path: Optional[Path] = None, *, container_scoped: bool = False
+) -> ToolSpec:
     """Construct the host-diagnostics ToolSpec.
 
     ``audit_path`` (optional) is a JSONL file every invocation is appended to.
+
+    ``container_scoped`` re-scopes the tool when a real host MCP is mounted (the
+    common containerized-proxy deployment). In that mode this builtin can only
+    see the *proxy's own container*, not the target host — so it stops
+    advertising itself as a host surface (distinct name/category/text) and the
+    mounted ``host_*`` tools become the single, unambiguous host surface that
+    ``find_tools`` routes host questions to. Deployed natively on a host (no host
+    MCP), it keeps the original host-diagnostics identity.
     """
 
     def _audit(record: dict[str, Any]) -> None:
@@ -178,26 +190,53 @@ def build_diagnostics_tool(audit_path: Optional[Path] = None) -> ToolSpec:
         )
         return f"$ {' '.join(argv)}\n\n{body}"  # type: ignore[arg-type]
 
-    return ToolSpec(
-        name="host_diagnostics",
-        category="host-diagnostics",
-        description=(
+    if container_scoped:
+        name = "proxy_self_diagnostics"
+        category = "proxy-diagnostics"
+        description = (
+            "Inspect the PROXY's OWN container/process environment (the box Devy's "
+            "proxy runs in) via safe, allow-listed checks. This is NOT the target "
+            "host: disk/memory/CPU here reflect the container, and there is no host "
+            "syslog. For the REAL host — disk, memory, reboot history, system logs — "
+            "use the mounted host MCP tools (host_journal, host_reboot_history, "
+            "host_disk, …) via find_tools(category='host')."
+        )
+        when_to_use = (
+            "Only when asked specifically about the proxy's OWN container/process "
+            "health (is the proxy container itself OK). NOT for the host machine — the "
+            "mounted 'host' MCP is the real host surface."
+        )
+        use_cases = [
+            "is the proxy container itself healthy",
+            "the proxy process's own resource use",
+        ]
+    else:
+        name = "host_diagnostics"
+        category = "host-diagnostics"
+        description = (
             "Inspect the live health of the local host through a fixed set of safe, "
             "allow-listed checks (no arbitrary shell). Returns the command run and its "
             "(truncated) output."
-        ),
-        when_to_use=(
+        )
+        when_to_use = (
             "When asked about the live state or health of this machine: disk space, "
             "memory, CPU/load, running processes, Docker containers or their logs, or "
             "recent system-log entries."
-        ),
-        use_cases=[
+        )
+        use_cases = [
             "is anything unhealthy on this box",
             "disk space and memory usage",
             "cpu load and busy processes",
             "docker container health and logs",
             "recent system errors",
-        ],
+        ]
+
+    return ToolSpec(
+        name=name,
+        category=category,
+        description=description,
+        when_to_use=when_to_use,
+        use_cases=use_cases,
         input_schema={
             "type": "object",
             "properties": {

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for a durable, native macOS host MCP sidecar.
+
+  Install (replace __REPO__ with your repo path):
+    sed "s#__REPO__#$PWD#g" host-mcp/deploy/com.agentic-devops.host-mcp.plist.example \
+      > ~/Library/LaunchAgents/com.agentic-devops.host-mcp.plist
+    launchctl load ~/Library/LaunchAgents/com.agentic-devops.host-mcp.plist
+
+  It runs run-native-macos.sh at login and keeps it alive, serving the host MCP
+  on :8781. Point the proxy's mcp_servers url at http://host.docker.internal:8781/mcp.
+
+  Stop / uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.agentic-devops.host-mcp.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentic-devops.host-mcp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/host-mcp/deploy/run-native-macos.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/agentic-devops-host-mcp.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/agentic-devops-host-mcp.err.log</string>
+</dict>
+</plist>

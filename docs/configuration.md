@@ -75,18 +75,21 @@ tiers:
     model: anthropic/claude-sonnet-4-6
     max_tokens: 4096
     fallbacks:
-      - { model: openai/gpt-5-mini,     max_tokens: 6144 }   # needs OPENAI_API_KEY
-      - { model: gemini/gemini-2.5-pro, max_tokens: 8192 }   # needs GEMINI_API_KEY
+      - { model: openai/gpt-5-mini,        max_tokens: 6144 }
+      - { model: gemini/gemini-flash-latest, max_tokens: 6144 }
 ```
 
 The user still just picks the **tier** — which provider actually answers is
 invisible operator policy (the web chat shows a subtle "answered with a backup
 model" note; the concrete model lands in the trace/audit). Each backup is a full
 tier profile, so it carries its own `max_tokens`/`api_base`/`temperature` — a
-GPT-5 or local-Ollama backup differs from an Anthropic primary. Set the backup
-provider's key in `.env` (e.g. `OPENAI_API_KEY`). Note: GPT-5-class models are
+GPT-5 or local-Ollama backup differs from an Anthropic primary. The backup
+provider's key is **vault-mastered** (admin Secrets tab, e.g.
+`devy/provider/gemini`), not set in `.env`. Two gotchas: GPT-5-class models are
 reasoning models — give them a generous `max_tokens` or reasoning consumes the
-budget and the visible answer comes back empty.
+budget and the answer comes back empty; and prefer Gemini's **`-latest`** aliases
+(`gemini-pro-latest`, `gemini-flash-latest`) — pinned versions like
+`gemini-2.5-pro` return 404 for API keys created after they were superseded.
 
 ## Database
 

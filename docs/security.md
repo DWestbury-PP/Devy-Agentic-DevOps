@@ -85,6 +85,36 @@ Every external credential (LLM/provider keys, GitHub PATs, per-host MCP tokens,
 MCP-server bearer tokens) resolves through **one AWS Secrets Manager API surface**
 — LocalStack in `dev`, real AWS SM in `prod`. The single knob is `DEVY_MODE`.
 
+### Secrets model
+
+Secrets fall into **two planes**, handled deliberately differently:
+
+**Plane 1 — Bootstrap** (environment / platform injection / IaC). The minimal set
+the platform needs to *come up and be administrable*. They can't be managed from
+the admin UI because the platform isn't up yet — a bootstrap paradox — so they
+live in the environment:
+- `DATABASE_URL` (+ `POSTGRES_PASSWORD` for the bundled DB) — Devy can't start without it.
+- `DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET` — they gate the admin plane
+  *itself*; you can't set the admin-access secret through admin access.
+- Vault access: `DEVY_MODE` and, in dev, the LocalStack `AWS_*` wiring. In prod
+  this is an **instance IAM role** — no key at rest.
+
+**Plane 2 — Runtime external-service credentials** (the **vault**, managed on the
+admin **Secrets tab**). Everything Devy *reaches out to*, manageable while the
+platform runs: provider keys (`devy/provider/*` — Anthropic, OpenAI, Gemini,
+Tavily, LangSmith), GitHub PATs (`devy/github/*`), host and MCP bearer tokens
+(`devy/host/*`, `devy/mcp/*`). **The vault is authoritative** — if a Plane-2 key
+is also present in `.env`, the proxy logs a warning at startup and the vault value
+wins (no silent shadowing). Provider keys are hydrated into the environment at
+boot (for the provider SDKs); MCP bearers are resolved at mount time via a config
+`secret_ref` — so no Plane-2 secret needs to sit in `config.yaml` or `.env`.
+
+> One nuance: the deployable **host-MCP sidecar** is a standalone package with no
+> vault client, so *it* reads its own `HOST_MCP_TOKEN` from its environment/token
+> file — that copy is the **server's** own credential, provisioned to match the
+> vault master (`devy/mcp/host`) that the **proxy** (the client) resolves. The
+> vault remains the source of truth; the server just holds a provisioned copy.
+
 - **Nothing secret lives in Devy's database.** Registry rows (`hosts`,
   `github_accounts`, `mcp_servers`) hold only a **`secret_ref`** — the *name* of
   the secret in the manager, never the value. The API returns loaded-state

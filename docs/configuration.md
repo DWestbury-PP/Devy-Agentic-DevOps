@@ -184,14 +184,18 @@ Only the keys for the providers you actually use are needed.
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / … | Provider keys for your tiers (LiteLLM naming) |
-| `OPENAI_API_KEY` / `VOYAGE_API_KEY` | Also used by the configured embedder |
-| `DATABASE_URL` | Postgres DSN (overrides `database.url` default) |
-| `HOST_MCP_TOKEN` | Bearer token shared by the proxy and the host MCP |
-| `DEVY_ADMIN_PASSWORD_HASH` / `DEVY_ADMIN_SECRET` | Enable the admin control plane (`agentic-devops admin set-password`); unset = admin disabled |
-| `DEVY_ENCRYPTION_KEY` | Fernet key encrypting per-host MCP tokens at rest (admin host registry) |
-| `POSTGRES_PASSWORD` | Compose only: password for the bundled Postgres |
-| `LANGSMITH_API_KEY` | Only if `tracing: langsmith` |
+| `DATABASE_URL` | Postgres DSN (bootstrap; overrides `database.url` default) |
+| `POSTGRES_PASSWORD` | Compose only: password for the bundled Postgres (bootstrap) |
+| `DEVY_ADMIN_PASSWORD_HASH` / `DEVY_ADMIN_SECRET` | Enable the admin control plane (`agentic-devops admin set-password`); unset = admin disabled (bootstrap — gates admin itself) |
+| `DEVY_MODE` | `dev` (LocalStack SM, writable) or `prod` (real AWS SM via IAM role) |
+| `HOST_MCP_TOKEN` | Bootstrap for the host-MCP **server** only; the proxy resolves its copy from the vault (`devy/mcp/host`) |
+
+Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`TAVILY_API_KEY`, `LANGSMITH_API_KEY`, embedder keys like `VOYAGE_API_KEY`) are
+**not** environment config — they are **vault-mastered** and set on the admin
+Secrets tab (`devy/provider/*`). The vault is authoritative; a provider key left
+in `.env` is warned about at startup and the vault value wins. See
+[Security → Secrets model](security.md#secrets-model).
 | `AGENTIC_DEVOPS_CONFIG` | Path to a non-default config file |
 | `AGENTIC_DEVOPS_CONFIG_DIR` | Compose: host dir mounted to `/config` |
 | `AGENTIC_DEVOPS_*` | Scalar overrides (e.g. `AGENTIC_DEVOPS_PORT`) |

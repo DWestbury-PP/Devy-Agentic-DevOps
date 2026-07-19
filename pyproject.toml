@@ -30,7 +30,7 @@ dependencies = [
     "psycopg-pool>=3.2",      # connection pooling
     "bcrypt>=4.1",            # admin password hashing (control plane)
     "pyjwt>=2.8",             # signed admin session tokens (HS256; SSO seam)
-    "cryptography>=42.0",     # Fernet (legacy token migration) + general crypto
+    "cryptography>=42.0",     # required by PyJWT for RS256/JWKS verification (SSO/jwt auth mode)
     "boto3>=1.34",            # AWS Secrets Manager client (LocalStack in dev, real ASM in prod)
     "tzdata>=2024.1",         # tz database for zoneinfo (DST-correct local time on slim images)
 ]

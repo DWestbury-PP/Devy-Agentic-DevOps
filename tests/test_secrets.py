@@ -150,3 +150,27 @@ def test_audit_records_ops_without_value(tmp_path):
     assert ("delete", "devy/github/home") in actions
     # the value is NEVER in the audit trail
     assert "ghp_supersecret" not in (tmp_path / "secrets-audit.jsonl").read_text()
+
+
+# -- config-mounted MCP bearer surfaced on the Secrets tab (vault-mastered) --
+def test_config_mount_refs_and_catalog_entry():
+    from types import SimpleNamespace
+
+    from agentic_devops.proxy.secrets_catalog import build_catalog, config_mount_refs
+
+    servers = [
+        SimpleNamespace(name="host", secret_ref="devy/mcp/host"),
+        SimpleNamespace(name="legacy", secret_ref=None),  # inline token / no vault ref
+    ]
+    assert config_mount_refs(servers) == {"devy/mcp/host"}
+
+    s = make_fake_secrets(writable=True)
+    s.set("devy/mcp/host", "bearer-abc")
+    empty = SimpleNamespace(list=lambda: [])
+    entries = build_catalog("devy", s, empty, empty, empty, config_mcp_servers=servers)
+    by_ref = {e["ref"]: e for e in entries}
+    e = by_ref["devy/mcp/host"]
+    assert e["category"] == "mcp" and e["loaded"] is True
+    assert e["editable"] is True          # settable on the tab (dev)
+    assert e["testable"] is False         # validity proven at mount, not probed here
+    assert "config-mounted" in e["label"]

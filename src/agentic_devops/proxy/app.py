@@ -213,15 +213,31 @@ def create_app(
     secrets = build_secrets_provider(settings)
     secrets_writable = secrets.writable
 
-    # Provider/LLM keys (Anthropic, OpenAI) live in the same store; hydrate them into
-    # os.environ so LiteLLM finds them. Non-clobbering: a key already in the env
-    # (e.g. from a transitional .env) wins, so this never regresses a working stack.
+    # Provider/LLM keys live in the vault; hydrate them into os.environ so the
+    # provider SDKs (via LiteLLM) find them. The VAULT IS AUTHORITATIVE: if the
+    # same key is also present in the environment (a transitional .env), the vault
+    # value wins and we warn so the operator removes the stale copy — no silent
+    # shadowing. A key that's ONLY in .env (not yet migrated) is kept, with a
+    # nudge to move it into the vault.
     for _ref, _env_var in provider_key_refs(settings.secrets.namespace).items():
-        if not os.environ.get(_env_var):
-            _val = secrets.get(_ref)
-            if _val:
-                os.environ[_env_var] = _val
-                logger.info("hydrated %s from the secrets manager", _env_var)
+        _vault_val = secrets.get(_ref)
+        _env_val = os.environ.get(_env_var)
+        if _vault_val:
+            if _env_val and _env_val != _vault_val:
+                logger.warning(
+                    "%s is set in BOTH .env and the secrets manager; using the vault "
+                    "value (the source of truth). Remove %s from your .env.",
+                    _env_var, _env_var,
+                )
+            os.environ[_env_var] = _vault_val
+            logger.info("hydrated %s from the secrets manager", _env_var)
+        elif _env_val:
+            logger.info(
+                "%s is set via the environment but not in the secrets manager; "
+                "consider `agentic-devops secrets set %s <value>` to make the vault "
+                "the source of truth.",
+                _env_var, _ref,
+            )
 
     # Host registry (control plane): secrets-backed token store + on-demand MCP caller.
     host_store = HostStore(pool, secrets)
@@ -266,6 +282,25 @@ def create_app(
         # surface is present before registering the native diagnostics builtin.
         mcp_specs = []
         if settings.mcp_servers:
+            # Resolve any `secret_ref` bearer from the vault (source of truth) before
+            # mounting. The vault wins over an inline `token`; warn on a stale inline.
+            for _s in settings.mcp_servers:
+                if getattr(_s, "secret_ref", None):
+                    _tok = secrets.get(_s.secret_ref)
+                    if _tok:
+                        if _s.token and _s.token != _tok:
+                            logger.warning(
+                                "mcp_servers[%s] has both an inline token and secret_ref %s; "
+                                "using the vault value. Drop the inline token.",
+                                _s.name, _s.secret_ref,
+                            )
+                        _s.token = _tok
+                    elif not _s.token:
+                        logger.warning(
+                            "mcp_servers[%s] references secret_ref %s but the vault has no "
+                            "value; set it on the Secrets tab or via `secrets set %s`.",
+                            _s.name, _s.secret_ref, _s.secret_ref,
+                        )
             mcp_manager = MCPManager(settings.mcp_servers)
             mcp_manager.start()
             mcp_specs = mcp_manager.tool_specs()
@@ -674,22 +709,25 @@ def create_app(
 
     def _known_refs() -> set[str]:
         """Refs the Secrets tab may write: provider keys + any connector's secret_ref
-        (so we never write an arbitrary/unknown name)."""
+        + config-mounted MCP bearers (so we never write an arbitrary/unknown name)."""
         refs = set(_sc.settable_refs(_ns))
         refs |= {a.secret_ref for a in github_store.list() if a.secret_ref}
         refs |= {h.secret_ref for h in host_store.list() if h.secret_ref}
         refs |= {m.secret_ref for m in mcp_server_store.list() if m.secret_ref}
+        refs |= _sc.config_mount_refs(settings.mcp_servers, _ns)
         return refs
 
     def _entry_for(ref: str) -> SecretEntry:
-        for e in _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store):
+        for e in _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store,
+                                   config_mcp_servers=settings.mcp_servers):
             if e["ref"] == ref:
                 return SecretEntry(**e)
         raise HTTPException(status_code=404, detail="unknown secret")
 
     @app.get("/v1/admin/secrets", response_model=SecretCatalog)
     def list_secrets(_: dict = Depends(require_admin)) -> SecretCatalog:
-        entries = _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store)
+        entries = _sc.build_catalog(_ns, secrets, github_store, host_store, mcp_server_store,
+                                    config_mcp_servers=settings.mcp_servers)
         return SecretCatalog(
             mode=settings.secrets.mode, writable=secrets.writable,
             reachable=secrets.health(),

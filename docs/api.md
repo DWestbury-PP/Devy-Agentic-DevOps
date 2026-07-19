@@ -146,8 +146,8 @@ are **never returned** (only `has_token`).
 
 ### GitHub connector — `/v1/admin/github/*`
 
-Credential-centric: register a read-only **PAT** once (stored Fernet-encrypted,
-never returned); repos are discovered live via the API. Devy reads repos through
+Credential-centric: register a read-only **PAT** once (stored in the vault under
+`devy/github/<account>`, never returned); repos are discovered live via the API. Devy reads repos through
 the read-only `repo_*` tools; an operator can crawl a repo's markdown into the
 knowledge base on demand.
 

@@ -87,9 +87,12 @@ tiers:
     # "Deep" tier — which provider actually answers is invisible; the web trail
     # shows a subtle "answered with a backup model" note. Each backup is a full
     # profile, so it can carry its own max_tokens / api_base / temperature.
+    # Provider keys are vault-mastered (admin Secrets tab), not set here.
+    # NOTE: prefer Gemini's `-latest` aliases — pinned versions (gemini-2.5-pro)
+    # return 404 for API keys created after they were superseded.
     # fallbacks:
-    #   - { model: openai/gpt-5,          max_tokens: 8192 }   # needs OPENAI_API_KEY
-    #   - { model: gemini/gemini-2.5-pro, max_tokens: 8192 }   # needs GEMINI_API_KEY
+    #   - { model: openai/gpt-5,              max_tokens: 8192 }
+    #   - { model: gemini/gemini-pro-latest,  max_tokens: 8192 }
 
 # Example of mixing providers across tiers (uncomment / adapt):
 #   fast:     { model: openai/gpt-4o-mini,  label: Fast }

@@ -123,6 +123,10 @@ services:
       HOST_MCP_TRANSPORT: http
       HOST_MCP_PROFILE: diagnostic
       HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
+      # Timed audit (check, args, argv, exit, duration_ms) per call — the
+      # observability you want on a real host ("which diagnostic cost 25s?").
+      # Inspect: docker exec agentic-devops-host-mcp cat /tmp/host-mcp-audit.jsonl
+      HOST_MCP_AUDIT: ${HOST_MCP_AUDIT:-/tmp/host-mcp-audit.jsonl}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     healthcheck:

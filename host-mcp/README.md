@@ -69,8 +69,11 @@ the unified log binary store and crash reports:
   type/pattern/enum/range constraints. No shell is ever invoked.
 - **Profiles** — `read-only` < `diagnostic` < `elevated`. The server runs at one
   active profile and exposes only the checks at or below it.
-- **Audit log** — every invocation (check, args, argv, exit, duration) can be
-  appended to a JSONL file.
+- **Audit log** — set `HOST_MCP_AUDIT=<path>` and every invocation (check, args,
+  argv, exit code, `duration_ms`) is appended as JSONL. Recommended in production:
+  it's the cheap observability that answers *"which diagnostic just cost 25s?"*
+  (`jq '{check,duration_ms}' <path>`). The bundled compose service and the
+  `deploy/` kit enable it by default.
 
 ## Run
 

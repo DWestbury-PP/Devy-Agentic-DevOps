@@ -24,6 +24,9 @@ export HOST_MCP_TOKEN="$TOKEN"
 export HOST_MCP_TRANSPORT="${HOST_MCP_TRANSPORT:-http}"
 export HOST_MCP_PORT="${HOST_MCP_PORT:-8781}"
 export HOST_MCP_PROFILE="${HOST_MCP_PROFILE:-diagnostic}"
+# Timed audit (check, args, argv, exit, duration_ms) per call — cheap, and the
+# observability you want when Devy runs diagnostics against a real host.
+export HOST_MCP_AUDIT="${HOST_MCP_AUDIT:-/tmp/agentic-devops-host-mcp-audit.jsonl}"
 # Editable install + a space in the repo path is flaky; pin the package source.
 export PYTHONPATH="$REPO/host-mcp/src${PYTHONPATH:+:$PYTHONPATH}"
 

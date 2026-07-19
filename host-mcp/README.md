@@ -157,7 +157,9 @@ HOST_MCP_TRANSPORT=http HOST_MCP_PORT=8781 HOST_MCP_TOKEN=… agentic-devops-hos
 
 For a durable sidecar that starts at login, use the launchd LaunchAgent in
 [`deploy/`](deploy/) — it runs [`run-native-macos.sh`](deploy/run-native-macos.sh)
-(which reads `HOST_MCP_TOKEN` from the repo `.env`) and keeps it alive:
+(which reads `HOST_MCP_TOKEN` from the repo `.env`, enables the audit, and adds
+Docker Desktop's CLI to `PATH` so the `docker_*` checks work — a launchd agent's
+minimal `PATH` omits `/usr/local/bin` otherwise) and keeps it alive:
 
 ```bash
 sed "s#__REPO__#$PWD#g" host-mcp/deploy/com.agentic-devops.host-mcp.plist.example \

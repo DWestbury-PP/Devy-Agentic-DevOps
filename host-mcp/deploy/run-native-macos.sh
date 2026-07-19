@@ -27,6 +27,11 @@ export HOST_MCP_PROFILE="${HOST_MCP_PROFILE:-diagnostic}"
 # Timed audit (check, args, argv, exit, duration_ms) per call — cheap, and the
 # observability you want when Devy runs diagnostics against a real host.
 export HOST_MCP_AUDIT="${HOST_MCP_AUDIT:-/tmp/agentic-devops-host-mcp-audit.jsonl}"
+# A launchd agent inherits a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which
+# omits Docker Desktop's CLI (/usr/local/bin/docker, Apple Silicon may also use
+# /opt/homebrew/bin, newer Docker Desktop ~/.docker/bin). Add them so the
+# docker_* checks can find the CLI — the daemon socket is already reachable.
+export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.docker/bin:$PATH"
 # Editable install + a space in the repo path is flaky; pin the package source.
 export PYTHONPATH="$REPO/host-mcp/src${PYTHONPATH:+:$PYTHONPATH}"
 

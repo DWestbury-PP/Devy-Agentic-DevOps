@@ -75,7 +75,7 @@ Devy is a platform; these are its plug points. Each is documented in
 | **Remote hosts** | Deploy the safe-allowlist **host MCP** (no shell, profile-gated) | [host-mcp/](host-mcp/README.md) |
 | **Any in-house system** | Mount any **MCP server** (stdio or authenticated HTTP) | [Extending → MCP](docs/extending.md#mcp-servers) |
 | **Observability** | Built-in **LangSmith** tracing; bring-your-own Grafana / CloudWatch / CloudTrail MCP | [Extending → Observability](docs/extending.md#observability) |
-| **Models** | Map `fast`/`balanced`/`deep` tiers to any LiteLLM provider | [Configuration](docs/configuration.md#model-tiers) |
+| **Models** | Map `fast`/`balanced`/`deep` tiers to any LiteLLM provider, with **automatic cross-provider failover** (e.g. Anthropic → OpenAI → Gemini) | [Configuration](docs/configuration.md#provider-failover-fallbacks) |
 | **Knowledge** | Ingest your docs/runbooks; swap the embedder | [Knowledge](docs/knowledge.md) |
 | **Storage** | Bundled Postgres or a managed instance (RDS/Aurora) | [Deployment](docs/deployment.md) |
 | **Secrets** | Vault-backed (AWS Secrets Manager / LocalStack); the DB stores only references | [Security](docs/security.md#secrets-management) |
@@ -223,6 +223,9 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
 
 - The containerized **LLM-PROXY** + agent harness + on-demand **tools-router**.
 - **Tiered, provider-agnostic** models (LiteLLM); users pick a tier, not a model.
+  **Cross-provider failover** keeps Devy answering when the primary is down
+  (billing, auth, rate-limit, overload) — a friendly message replaces raw provider
+  errors, and traces record which model actually served each turn.
 - **MCP**: mount any MCP server, plus the deployable **safe-allowlist host MCP**
   (host + Docker diagnostics, no shell, profile-gated, bearer auth).
 - **Knowledge base**: enriched ingest (deterministic structural context, optional

@@ -8,18 +8,59 @@ import (
 	"time"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Devy terminal theme — emerald primary, teal secondary, amber code, graphite
+// neutrals; a cohesive companion to the web surface's emerald/graphite look.
+// AdaptiveColor lets the UI chrome track the terminal's light/dark background.
 var (
-	promptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	toolStyle   = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("6"))
+	accentColor    = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"} // emerald
+	secondaryColor = lipgloss.AdaptiveColor{Light: "#1b7c83", Dark: "#39c5cf"} // teal
+	dangerColor    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"} // red
+
+	promptStyle = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
+	toolStyle   = lipgloss.NewStyle().Faint(true).Foreground(secondaryColor)
 	dimStyle    = lipgloss.NewStyle().Faint(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	errStyle    = lipgloss.NewStyle().Foreground(dangerColor)
 )
 
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// devyGlamourStyle derives a Glamour style from the stock light/dark base and
+// re-themes it. Headings lose the literal "##"/"###" ATX marks (Glamour's stock
+// H2/H3 prefixes) in favour of a colored glyph accent — a ▌ bar for H1/H2 and an
+// indented ▸ for H3 — with emerald headings plus teal links and amber inline
+// code. Rebuilt per call from the unmutated stock config, so it's idempotent.
+func devyGlamourStyle() ansi.StyleConfig {
+	dark := lipgloss.HasDarkBackground()
+	c := styles.LightStyleConfig
+	h1, head, link, code, codeBg, rule := "#116329", "#1a7f37", "#1b7c83", "#9a6700", "#eff1f3", "#d0d7de"
+	if dark {
+		c = styles.DarkStyleConfig
+		h1, head, link, code, codeBg, rule = "#56d364", "#3fb950", "#39c5cf", "#e3b341", "#161b22", "#30363d"
+	}
+
+	// Headings: drop the ATX marks, use a glyph accent + emerald color.
+	c.Heading.Color, c.Heading.Bold = strPtr(head), boolPtr(true)
+	c.H1.Prefix, c.H1.Suffix = "▌ ", ""
+	c.H1.Color, c.H1.BackgroundColor, c.H1.Bold = strPtr(h1), nil, boolPtr(true)
+	c.H2.Prefix, c.H2.Color, c.H2.Bold = "▌ ", strPtr(head), boolPtr(true)
+	c.H3.Prefix, c.H3.Color, c.H3.Bold = "  ▸ ", strPtr(head), boolPtr(false)
+	c.H4.Prefix, c.H4.Color, c.H4.Bold = "  ▸ ", strPtr(head), boolPtr(false)
+
+	// Links + inline code adopt the theme's secondary/amber accents.
+	c.Link.Color, c.Link.Underline = strPtr(link), boolPtr(true)
+	c.Code.Color, c.Code.BackgroundColor = strPtr(code), strPtr(codeBg)
+	c.HorizontalRule.Color = strPtr(rule)
+	return c
+}
+
 func renderMarkdown(md string) string {
-	r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(100))
+	r, err := glamour.NewTermRenderer(glamour.WithStyles(devyGlamourStyle()), glamour.WithWordWrap(100))
 	if err != nil {
 		return md + "\n"
 	}

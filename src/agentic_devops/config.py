@@ -45,6 +45,13 @@ class ModelTier(BaseModel):
     temperature: Optional[float] = None
     api_base: Optional[str] = None  # e.g. an Ollama endpoint: http://localhost:11434
     context_window: Optional[int] = None  # total input budget; compaction triggers off it
+    # Ordered backup model profiles tried when the primary fails in a way worth
+    # retrying elsewhere (billing/credit, auth, rate-limit, overload, timeout —
+    # see proxy/errors.classify). The user still just picks a *tier*; which
+    # provider actually answers is invisible operator policy. Each backup is a
+    # full profile so it can carry its own max_tokens/api_base/temperature (a
+    # GPT or local-Ollama backup differs from an Anthropic primary).
+    fallbacks: list["ModelTier"] = Field(default_factory=list)
 
     def display(self) -> str:
         return self.label or self.model

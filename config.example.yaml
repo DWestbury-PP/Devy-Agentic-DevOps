@@ -80,6 +80,16 @@ tiers:
     # temperature: 0.2
     # context_window: 200000   # total input budget; conversation compaction
     #                          # triggers at compaction_ratio of this (see below).
+    # Backup models tried, in order, when the primary fails in a way worth
+    # retrying elsewhere — billing/credit, auth, rate-limit, overload, timeout.
+    # (Context-too-large / content-policy / malformed requests are NOT retried;
+    #  they'd fail identically on any provider.) The user still just picks the
+    # "Deep" tier — which provider actually answers is invisible; the web trail
+    # shows a subtle "answered with a backup model" note. Each backup is a full
+    # profile, so it can carry its own max_tokens / api_base / temperature.
+    # fallbacks:
+    #   - { model: openai/gpt-5,          max_tokens: 8192 }   # needs OPENAI_API_KEY
+    #   - { model: gemini/gemini-2.5-pro, max_tokens: 8192 }   # needs GEMINI_API_KEY
 
 # Example of mixing providers across tiers (uncomment / adapt):
 #   fast:     { model: openai/gpt-4o-mini,  label: Fast }

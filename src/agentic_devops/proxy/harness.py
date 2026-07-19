@@ -28,6 +28,10 @@ _GUARD_MESSAGE = (
     "I reached the maximum number of reasoning steps before finishing. "
     "Here is what I gathered so far; please narrow the question if needed."
 )
+# Subtle trail note when a backup model served the turn. Deliberately does NOT
+# name the concrete model — the tier abstraction hides that from users (the
+# concrete model lands in the trace/audit instead).
+_FALLBACK_NOTICE = "Primary model unavailable — answered with a backup model."
 
 
 @dataclass
@@ -184,6 +188,7 @@ def run_turn(
     usage: dict[str, Any] = {}
     final_text = ""
     iterations = 0
+    notified_fallback = False
 
     session_id = (tool_context or {}).get("session_id") or ""
     turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
@@ -196,6 +201,9 @@ def run_turn(
                              "tool_calls": [t.name for t in response.tool_calls]},
                             usage=response.usage)
             _accumulate_usage(usage, response.usage)
+            if response.fell_back and not notified_fallback:
+                notified_fallback = True
+                emit({"type": "notice", "message": _FALLBACK_NOTICE})
 
             if not response.wants_tools:
                 final_text = response.text or ""
@@ -247,6 +255,7 @@ def run_turn_streaming(
     usage: dict[str, Any] = {}
     final_text = ""
     iterations = 0
+    notified_fallback = False
 
     session_id = (tool_context or {}).get("session_id") or ""
     turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
@@ -262,6 +271,9 @@ def run_turn_streaming(
                              "tool_calls": [t.name for t in response.tool_calls]},
                             usage=response.usage)
             _accumulate_usage(usage, response.usage)
+            if response.fell_back and not notified_fallback:
+                notified_fallback = True
+                yield {"type": "notice", "message": _FALLBACK_NOTICE}
 
             if not response.wants_tools:
                 final_text = response.text or ""

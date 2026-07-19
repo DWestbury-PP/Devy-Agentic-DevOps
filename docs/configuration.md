@@ -58,6 +58,35 @@ tiers:
 | `temperature` | Optional sampling temperature | provider default |
 | `api_base` | Override endpoint (Ollama, Azure, gateways) | — |
 | `context_window` | Total input budget; drives compaction (see below) | `default_context_window` |
+| `fallbacks` | Ordered backup model profiles for provider failover (see below) | `[]` |
+
+### Provider failover (`fallbacks`)
+
+Give any tier an ordered list of **backup model profiles**. When the primary
+model fails in a way worth retrying elsewhere — billing/credit exhausted, auth,
+rate-limit, provider overload, or timeout — the next backup is tried
+automatically. Failures that would fail *identically* on any provider (context
+too large, content policy, malformed request) are **not** retried and surface as
+a friendly message instead.
+
+```yaml
+tiers:
+  balanced:
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 4096
+    fallbacks:
+      - { model: openai/gpt-5-mini,     max_tokens: 6144 }   # needs OPENAI_API_KEY
+      - { model: gemini/gemini-2.5-pro, max_tokens: 8192 }   # needs GEMINI_API_KEY
+```
+
+The user still just picks the **tier** — which provider actually answers is
+invisible operator policy (the web chat shows a subtle "answered with a backup
+model" note; the concrete model lands in the trace/audit). Each backup is a full
+tier profile, so it carries its own `max_tokens`/`api_base`/`temperature` — a
+GPT-5 or local-Ollama backup differs from an Anthropic primary. Set the backup
+provider's key in `.env` (e.g. `OPENAI_API_KEY`). Note: GPT-5-class models are
+reasoning models — give them a generous `max_tokens` or reasoning consumes the
+budget and the visible answer comes back empty.
 
 ## Database
 

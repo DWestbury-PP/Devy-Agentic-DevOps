@@ -29,6 +29,16 @@ func TestRenderMarkdownHeadingsUseGlyphAccents(t *testing.T) {
 	}
 }
 
+func TestRenderWidthIsBoundedAndCapped(t *testing.T) {
+	w := renderWidth()
+	if w <= 0 {
+		t.Fatalf("renderWidth = %d, want a positive wrap width", w)
+	}
+	if w > maxRenderWidth {
+		t.Fatalf("renderWidth = %d, exceeds cap %d", w, maxRenderWidth)
+	}
+}
+
 func TestDevyGlamourStyleReThemesHeadings(t *testing.T) {
 	c := devyGlamourStyle()
 	if c.H2.Prefix != "▌ " {

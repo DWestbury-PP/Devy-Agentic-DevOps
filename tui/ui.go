@@ -11,7 +11,12 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
+
+// maxRenderWidth caps the wrap width so prose stays readable on ultra-wide
+// terminals while tables and code still get far more room than a fixed 100.
+const maxRenderWidth = 160
 
 // Devy terminal theme — emerald primary, teal secondary, amber code, graphite
 // neutrals; a cohesive companion to the web surface's emerald/graphite look.
@@ -59,8 +64,26 @@ func devyGlamourStyle() ansi.StyleConfig {
 	return c
 }
 
+// renderWidth is the wrap width handed to Glamour. stdout is the terminal even
+// when stdin is piped (e.g. `docker ps | ask …`), so we size to its columns
+// (less a small right margin, capped for readability). When stdout isn't a tty
+// (piped to a file), term.GetSize errors and we fall back to a fixed 100.
+func renderWidth() int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w <= 0 {
+		return 100
+	}
+	if w > 2 {
+		w -= 2
+	}
+	if w > maxRenderWidth {
+		return maxRenderWidth
+	}
+	return w
+}
+
 func renderMarkdown(md string) string {
-	r, err := glamour.NewTermRenderer(glamour.WithStyles(devyGlamourStyle()), glamour.WithWordWrap(100))
+	r, err := glamour.NewTermRenderer(glamour.WithStyles(devyGlamourStyle()), glamour.WithWordWrap(renderWidth()))
 	if err != nil {
 		return md + "\n"
 	}

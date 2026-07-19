@@ -16,9 +16,14 @@ At the default `diagnostic` profile, the packaged allow-list exposes **host** an
 **Docker** diagnostics (all read-only, no shell):
 
 - **Host:** `disk`, `memory`, `cpu_load`, `os_info`, `network` (listening
-  sockets), `processes`, `top_snapshot`, and log sweeps `journal` / `journal_grep`
-  (the systemd journal on Linux, the unified `log show` on macOS) plus
-  `journal_unit` (systemd-specific).
+  sockets), `connections` (sockets **with the owning process**), `processes`,
+  `top_snapshot`, and log sweeps `journal` / `journal_grep` (the systemd journal
+  on Linux, the unified `log show` on macOS) plus `journal_unit`
+  (systemd-specific).
+- **Services / daemons:** `services` (the manager's inventory + state),
+  `service_status` (one named service — is it up, and why did it last exit?),
+  cross-OS via systemd on Linux and launchd on macOS; plus `brew_services`
+  (Homebrew-managed services, macOS-only).
 - **Docker** (needs access to the Docker socket): `docker_ps`, `docker_ps_all`,
   `docker_logs`, `docker_inspect`, `docker_stats`, `docker_top`, `docker_images`,
   `docker_system_df`.
@@ -40,16 +45,19 @@ For example:
 | `memory` | `free -h` | `vm_stat` |
 | `os_info` | `uname -a` | `sw_vers` |
 | `network` | `ss -tuln` | `netstat -an -p tcp` |
+| `connections` | `ss -tunap` | `lsof -nP -iTCP` |
 | `processes` / `top_snapshot` | `ps` / `top -bn1` | `ps` / `top -l 1` |
 | `journal` | `journalctl` | `log show` (unified log) |
 | `journal_grep` | `journalctl --grep` | `grep … /var/log/system.log` |
 | `reboot_history` | `last -n N reboot` | `last -n N reboot` |
+| `services` | `systemctl list-units --type=service` | `launchctl list` |
+| `service_status` | `systemctl status <unit>` | `launchctl list <label>` |
 
 A check with no variant for the detected OS reports *"not supported on `<OS>`"*
 cleanly rather than running the wrong command — this covers both the
 systemd-specific checks on macOS (`journal_unit`, `systemctl_status`,
 `journal_priority`, `journal_kernel`, `journal_boot`) **and** the macOS-specific
-checks on Linux (`log_query`, `panic_reports`, below). The `HOST_MCP_*` env vars
+checks on Linux (`log_query`, `panic_reports`, `brew_services`, below). The `HOST_MCP_*` env vars
 configure the *deployment* (profile, auth, transport) — never the OS.
 
 **Linux journald filters (indexed, server-side).** On a production host, pull the

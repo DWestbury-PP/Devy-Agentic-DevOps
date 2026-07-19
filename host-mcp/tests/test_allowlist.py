@@ -246,6 +246,60 @@ def test_journal_grep_pattern_constraint():
     assert err
 
 
+def test_connections_is_cross_os_with_process_attribution(monkeypatch):
+    # `connections` maps sockets to the owning process — the gap `network`
+    # (listening sockets only) leaves. ss -p on Linux, lsof on macOS.
+    al = _allowlist()
+    assert "connections" in {c.name for c in al.available_checks()}  # diagnostic
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("connections", {})
+    assert err is None and argv == ["ss", "-tunap"]   # -p = process attribution
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("connections", {})
+    assert err is None and argv[0] == "lsof" and "-iTCP" in argv
+    # gated below diagnostic (reveals remote endpoints + process names)
+    assert "connections" not in {c.name for c in _allowlist("read-only").available_checks()}
+
+
+def test_services_is_cross_os(monkeypatch):
+    # Same concept ("what services exist and are they up?"), resolved per-OS:
+    # systemd on Linux (RHEL + Ubuntu), launchd on macOS — one server, one check.
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("services", {})
+    assert err is None and argv[:2] == ["systemctl", "list-units"]
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("services", {})
+    assert err is None and argv == ["launchctl", "list"]
+
+
+def test_service_status_cross_os_substitutes_name(monkeypatch):
+    al = _allowlist()
+    # Linux: systemd unit as the final, separate token.
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("service_status", {"name": "nginx.service"})
+    assert err is None and argv == ["systemctl", "status", "--no-pager", "nginx.service"]
+    # macOS: launchd label (dotted) as the final token.
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("service_status", {"name": "homebrew.mxcl.alloy"})
+    assert err is None and argv == ["launchctl", "list", "homebrew.mxcl.alloy"]
+    # required + injection-guarded
+    _, err = al.build_argv("service_status", {})
+    assert err
+    _, err = al.build_argv("service_status", {"name": "a; rm -rf /"})
+    assert err
+
+
+def test_brew_services_is_macos_only(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("brew_services", {})
+    assert err is None and argv == ["brew", "services", "list"]
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    _, err = al.build_argv("brew_services", {})
+    assert err and "not supported" in err
+
+
 def test_no_mutating_docker_checks_present():
     # The allowlist must never expose shell or state-changing docker verbs.
     names = set(_allowlist("elevated")._checks)  # every defined check, any profile

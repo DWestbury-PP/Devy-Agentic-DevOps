@@ -73,6 +73,13 @@ checks:
       Linux: ["top", "-bn1"]
       Darwin: ["top", "-l", "1", "-n", "20"]
 
+  connections:
+    profile: diagnostic
+    description: "Active network connections WITH the owning process (PID/name) — unlike `network` (listening sockets only, no process attribution), this maps each TCP socket to the process behind it. The way to answer 'which process is talking to that remote endpoint?' — e.g. confirming an agent is actually streaming to a remote host. Cross-OS: `ss -tunap` on Linux, `lsof` on macOS. Full process attribution for other users' sockets may require elevation; your own are always shown."
+    platform:
+      Linux: ["ss", "-tunap"]
+      Darwin: ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN,ESTABLISHED"]
+
   journal:
     profile: diagnostic
     description: "Recent system log entries — systemd journal on Linux, the unified log (log show) on macOS."
@@ -209,6 +216,35 @@ checks:
     platform:
       Darwin: ["ls", "-lt", "/Library/Logs/DiagnosticReports"]
 
+  # ---- Service / daemon management — cross-OS: the systemd service manager on
+  #      Linux (RHEL + Ubuntu), launchd on macOS. Same concept ("is this service
+  #      running, and if not why did it exit?"), resolved per-OS at runtime.
+  services:
+    profile: diagnostic
+    description: "List services/daemons and their state — the manager's inventory. Cross-OS: `systemctl list-units --type=service` on Linux (systemd; RHEL + Ubuntu), `launchctl list` on macOS (launchd). On macOS the middle column is each job's last exit status and the first its PID (a '-' PID with a non-zero exit = a service that failed to stay up — a crash-loop). The first place to look when a daemon isn't running as expected."
+    platform:
+      Linux: ["systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend"]
+      Darwin: ["launchctl", "list"]
+
+  service_status:
+    profile: diagnostic
+    description: "Status/detail for ONE named service — including whether it's active and why it last exited. Cross-OS: `systemctl status <name>` on Linux (systemd unit, e.g. nginx.service), `launchctl list <label>` on macOS (launchd job dict with PID + LastExitStatus, e.g. homebrew.mxcl.alloy). The way to diagnose a crash-looping or inactive service after `services` surfaces it."
+    platform:
+      Linux: ["systemctl", "status", "--no-pager", "{name}"]
+      Darwin: ["launchctl", "list", "{name}"]
+    args:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "Service identifier — a systemd unit on Linux (nginx.service) or a launchd label on macOS (homebrew.mxcl.alloy)."
+
+  brew_services:
+    profile: diagnostic
+    description: "Homebrew-managed services and their state (`brew services list`) — started/stopped/error plus the managing user. macOS-idiomatic: many locally-installed agents (Grafana Alloy, databases, exporters) run as Homebrew services rather than raw launchd jobs. macOS only (Homebrew is the common package/service manager on dev Macs; Linux uses systemd)."
+    platform:
+      Darwin: ["brew", "services", "list"]
+
   # ---- Docker: diagnostic (read-only; requires docker.sock access) ------
   docker_ps:
     profile: diagnostic
@@ -280,9 +316,11 @@ checks:
     argv: ["docker", "system", "df"]
 
   # ---- Elevated examples — NOT exposed at the default 'diagnostic' profile.
+  #      (For everyday read-only service status prefer the cross-OS `service_status`
+  #      above; this remains as the profile-gating example.)
   systemctl_status:
     profile: elevated
-    description: "Status of a systemd service (Linux/systemd only)."
+    description: "Status of a systemd service (Linux/systemd only). Elevated example; prefer the cross-OS `service_status` at the diagnostic profile."
     platform:
       Linux: ["systemctl", "status", "--no-pager", "{unit}"]
     args:

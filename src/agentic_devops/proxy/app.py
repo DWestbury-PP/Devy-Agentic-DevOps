@@ -559,8 +559,15 @@ def create_app(
             address, reachable, checks = "", None, 0
             if s.transport == "http" and s.url:
                 address = urlparse(s.url).netloc or s.url
+                # Resolve the bearer from the vault (source of truth) rather than the
+                # inline `s.token`, which is only populated as a boot side-effect — if
+                # the vault was briefly unavailable at startup it would stay unset and
+                # this probe would falsely report the mount unreachable forever.
+                token = s.token
+                if getattr(s, "secret_ref", None):
+                    token = secrets.get(s.secret_ref) or s.token
                 try:
-                    found = await run_in_threadpool(host_mcp.list_tools, s.url, s.token)
+                    found = await run_in_threadpool(host_mcp.list_tools, s.url, token)
                     reachable, checks = bool(found), len(found)
                 except Exception:  # noqa: BLE001 — unreachable is a state, not an error
                     reachable = False

@@ -108,7 +108,8 @@ docker compose up -d --build
 # 4. Talk to Devy — in the browser…
 open http://127.0.0.1:8080
 #    …or build the native `ask` TUI (one static binary, zero runtime deps):
-( cd tui && go build -o ask . ) && sudo mv tui/ask /usr/local/bin/
+#    (symlink picks up future rebuilds in place; see tui/README.md for options)
+( cd tui && go build -o ask . && sudo ln -sf "$PWD/ask" /usr/local/bin/ask )
 ask "is anything unhealthy on this box?"
 df -h | ask "anything concerning here?"     # pipe context in
 ```

@@ -27,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 from agentic_devops import __version__
 from agentic_devops.config import Settings, load_settings
 from agentic_devops.db import apply_schema, get_pool
+from agentic_devops.proxy.errors import ProviderError, classify
 from agentic_devops.proxy.harness import run_turn, run_turn_streaming
 from agentic_devops.proxy.prompts import assemble_messages
 from agentic_devops.proxy.providers import ProviderClient
@@ -1072,17 +1073,20 @@ def create_app(
             )
         messages = assemble_messages(session, req.prompt, req.context, req.system, tz=x_client_tz)
 
-        result = await run_in_threadpool(
-            run_turn,
-            provider,
-            router,
-            settings,
-            messages,
-            tier,
-            lambda e: tracer.event(session.id, e),
-            {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
-            tracer,
-        )
+        try:
+            result = await run_in_threadpool(
+                run_turn,
+                provider,
+                router,
+                settings,
+                messages,
+                tier,
+                lambda e: tracer.event(session.id, e),
+                {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
+                tracer,
+            )
+        except ProviderError as exc:  # friendly message instead of a raw 500 blob
+            raise HTTPException(status_code=502, detail=exc.user_message) from exc
 
         text = result.text
         if req.max_chars and len(text) > req.max_chars:
@@ -1140,9 +1144,14 @@ def create_app(
                         loop.call_soon_threadsafe(queue.put_nowait, event)
                 except StopIteration as stop:
                     result_holder["result"] = stop.value
-                except Exception as exc:  # surface as an error event
+                except Exception as exc:  # surface as a friendly error event
+                    message = (
+                        exc.user_message
+                        if isinstance(exc, ProviderError)
+                        else classify(exc).user_message
+                    )
                     loop.call_soon_threadsafe(
-                        queue.put_nowait, {"type": "error", "message": str(exc)}
+                        queue.put_nowait, {"type": "error", "message": message}
                     )
                 loop.call_soon_threadsafe(queue.put_nowait, _STREAM_SENTINEL)
 

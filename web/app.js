@@ -6,7 +6,7 @@
  * Event contract (proxy/harness.py + proxy/app.py):
  *   session {session_id} · delta {text} · tool_call {name, arguments}
  *   tools_found {names[]} · tool_result {name, ok, preview}
- *   done {iterations, usage, text} · error {message}
+ *   notice {message} · done {iterations, usage, text} · error {message}
  */
 
 const screen = document.getElementById("screen");
@@ -313,6 +313,10 @@ async function send(message) {
             det.append(sum, el("pre", null, evt.data.preview || ""));
             node.appendChild(det);
           }
+        } else if (evt.type === "notice") {
+          // Subtle operator note (e.g. answered via a backup model) — dim, in the trail.
+          ctx.body.appendChild(el("div", "notice", evt.data.message || ""));
+          if (atBottom()) scroll();
         } else if (evt.type === "done") {
           ctx.stream.classList.add("done");
           const finalText = evt.data.text || liveText;

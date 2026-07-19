@@ -274,6 +274,7 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
 }
 .meta { color: var(--fg-faint); font-size: 11px; margin-top: 8px; }
 .err { color: var(--red); }
+.notice { color: var(--fg-faint); font-size: 11px; margin-top: 6px; font-style: italic; }
 
 /* system / welcome note */
 .note { color: var(--fg-dim); margin: 0 auto 18px; white-space: pre-wrap; }

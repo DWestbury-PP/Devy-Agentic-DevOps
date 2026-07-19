@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Generator, Optional
 
 from agentic_devops.config import ModelTier
+from agentic_devops.proxy.errors import ProviderError, classify
 
 
 @dataclass
@@ -34,6 +35,8 @@ class ProviderResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
     raw: Any = None
+    served_by: Optional[str] = None  # the model that actually answered (may be a fallback)
+    fell_back: bool = False  # True when a backup model served this response
 
     @property
     def wants_tools(self) -> bool:
@@ -72,17 +75,20 @@ class ProviderClient:
         # instead of hanging the turn — and its worker thread — forever.
         self._request_timeout = request_timeout
 
-    def complete(
+    def _kwargs(
         self,
-        messages: list[dict[str, Any]],
         tier: ModelTier,
-        tools: Optional[list[dict[str, Any]]] = None,
-    ) -> ProviderResponse:
+        messages: list[dict[str, Any]],
+        tools: Optional[list[dict[str, Any]]],
+        stream: bool = False,
+    ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": tier.model,
             "messages": messages,
             "max_tokens": tier.max_tokens,
         }
+        if stream:
+            kwargs["stream"] = True
         if tier.temperature is not None:
             kwargs["temperature"] = tier.temperature
         if tier.api_base:
@@ -91,9 +97,36 @@ class ProviderClient:
             kwargs["tools"] = tools
         if self._request_timeout is not None:
             kwargs["timeout"] = self._request_timeout
+        return kwargs
 
-        raw = self._completion_fn(**kwargs)
-        return self._normalize(raw)
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tier: ModelTier,
+        tools: Optional[list[dict[str, Any]]] = None,
+    ) -> ProviderResponse:
+        """Complete one step, failing over to ``tier.fallbacks`` when worthwhile.
+
+        The primary is tried first; on a *failoverable* error (billing/credit,
+        auth, rate-limit, overload, timeout — see :func:`errors.classify`) the
+        next backup model is tried. A non-failoverable error (context too large,
+        content policy, malformed request) short-circuits — retrying elsewhere
+        would fail identically — and surfaces as a :class:`ProviderError`.
+        """
+        attempts = [tier, *tier.fallbacks]
+        for i, t in enumerate(attempts):
+            try:
+                raw = self._completion_fn(**self._kwargs(t, messages, tools))
+                resp = self._normalize(raw)
+                resp.served_by = t.model
+                resp.fell_back = i > 0
+                return resp
+            except Exception as exc:  # noqa: BLE001 — classified, then re-raised as ProviderError
+                failure = classify(exc)
+                if i < len(attempts) - 1 and failure.failoverable:
+                    continue
+                raise ProviderError(failure, tried_backup=i > 0) from exc
+        raise AssertionError("unreachable")  # pragma: no cover — attempts is never empty
 
     def stream(
         self,
@@ -101,71 +134,79 @@ class ProviderClient:
         tier: ModelTier,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> Generator[dict[str, Any], None, ProviderResponse]:
-        """Stream one model step.
+        """Stream one model step, with pre-stream failover.
 
         Yields ``{"type": "delta", "text": ...}`` events as text arrives, and
         ``return``s the assembled :class:`ProviderResponse` (capture it with
         ``response = yield from provider.stream(...)``). Tool-call fragments are
         accumulated across chunks and surfaced only on the final response.
+
+        Failover is attempted only while **nothing has streamed yet** — once a
+        delta reaches the client we can't cleanly restart on another model, so a
+        later failure surfaces as a :class:`ProviderError` instead. In practice
+        the account/outage failures we care about (billing, auth, overload) fire
+        on the first call, before any token, so this covers them.
         """
-        kwargs: dict[str, Any] = {
-            "model": tier.model,
-            "messages": messages,
-            "max_tokens": tier.max_tokens,
-            "stream": True,
-        }
-        if tier.temperature is not None:
-            kwargs["temperature"] = tier.temperature
-        if tier.api_base:
-            kwargs["api_base"] = tier.api_base
-        if tools:
-            kwargs["tools"] = tools
-        if self._request_timeout is not None:
-            kwargs["timeout"] = self._request_timeout
+        attempts = [tier, *tier.fallbacks]
+        for i, t in enumerate(attempts):
+            text_parts: list[str] = []
+            fragments: dict[int, dict[str, str]] = {}
+            emitted = False
+            try:
+                for chunk in self._completion_fn(**self._kwargs(t, messages, tools, stream=True)):
+                    choices = chunk.choices if hasattr(chunk, "choices") else chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.delta if hasattr(choice, "delta") else choice.get("delta", {})
 
-        text_parts: list[str] = []
-        fragments: dict[int, dict[str, str]] = {}
+                    content = getattr(delta, "content", None) if not isinstance(delta, dict) else delta.get("content")
+                    if content:
+                        text_parts.append(content)
+                        emitted = True
+                        yield {"type": "delta", "text": content}
 
-        for chunk in self._completion_fn(**kwargs):
-            choices = chunk.choices if hasattr(chunk, "choices") else chunk.get("choices", [])
-            if not choices:
-                continue
-            choice = choices[0]
-            delta = choice.delta if hasattr(choice, "delta") else choice.get("delta", {})
+                    raw_tcs = (
+                        getattr(delta, "tool_calls", None) if not isinstance(delta, dict) else delta.get("tool_calls")
+                    ) or []
+                    for tc in raw_tcs:
+                        idx = (getattr(tc, "index", None) if not isinstance(tc, dict) else tc.get("index")) or 0
+                        frag = fragments.setdefault(idx, {"id": "", "name": "", "args": ""})
+                        tc_id = getattr(tc, "id", None) if not isinstance(tc, dict) else tc.get("id")
+                        if tc_id:
+                            frag["id"] = tc_id
+                        fn = getattr(tc, "function", None) if not isinstance(tc, dict) else tc.get("function")
+                        if fn:
+                            name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
+                            args = getattr(fn, "arguments", None) if not isinstance(fn, dict) else fn.get("arguments")
+                            if name:
+                                frag["name"] = name
+                            if args:
+                                frag["args"] += args
+            except Exception as exc:  # noqa: BLE001 — classified, then re-raised as ProviderError
+                failure = classify(exc)
+                # Only fail over if nothing has streamed yet (a mid-stream restart
+                # would double-answer) and a backup remains worth trying.
+                if not emitted and i < len(attempts) - 1 and failure.failoverable:
+                    continue
+                raise ProviderError(failure, tried_backup=i > 0) from exc
 
-            content = getattr(delta, "content", None) if not isinstance(delta, dict) else delta.get("content")
-            if content:
-                text_parts.append(content)
-                yield {"type": "delta", "text": content}
-
-            raw_tcs = (
-                getattr(delta, "tool_calls", None) if not isinstance(delta, dict) else delta.get("tool_calls")
-            ) or []
-            for tc in raw_tcs:
-                idx = (getattr(tc, "index", None) if not isinstance(tc, dict) else tc.get("index")) or 0
-                frag = fragments.setdefault(idx, {"id": "", "name": "", "args": ""})
-                tc_id = getattr(tc, "id", None) if not isinstance(tc, dict) else tc.get("id")
-                if tc_id:
-                    frag["id"] = tc_id
-                fn = getattr(tc, "function", None) if not isinstance(tc, dict) else tc.get("function")
-                if fn:
-                    name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
-                    args = getattr(fn, "arguments", None) if not isinstance(fn, dict) else fn.get("arguments")
-                    if name:
-                        frag["name"] = name
-                    if args:
-                        frag["args"] += args
-
-        tool_calls = [
-            ToolCall(
-                id=frag["id"] or f"call_{idx}",
-                name=frag["name"],
-                arguments=_parse_arguments(frag["args"]),
+            tool_calls = [
+                ToolCall(
+                    id=frag["id"] or f"call_{idx}",
+                    name=frag["name"],
+                    arguments=_parse_arguments(frag["args"]),
+                )
+                for idx, frag in sorted(fragments.items())
+                if frag["name"]
+            ]
+            return ProviderResponse(
+                text="".join(text_parts) or None,
+                tool_calls=tool_calls,
+                served_by=t.model,
+                fell_back=i > 0,
             )
-            for idx, frag in sorted(fragments.items())
-            if frag["name"]
-        ]
-        return ProviderResponse(text="".join(text_parts) or None, tool_calls=tool_calls)
+        raise AssertionError("unreachable")  # pragma: no cover — attempts is never empty
 
     @staticmethod
     def _normalize(raw: Any) -> ProviderResponse:

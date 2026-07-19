@@ -157,3 +157,29 @@ def test_iteration_guard_trips():
     )
     assert result.iterations == 3
     assert "maximum number" in result.text
+
+
+def test_fallback_emits_a_single_notice_event():
+    # A backup model served the answer (fell_back=True) -> one subtle notice.
+    provider = FakeProvider([ProviderResponse(text="answered by backup", fell_back=True)])
+    events = []
+    result = run_turn(
+        provider, _router_with_echo(), _settings(),
+        messages=[{"role": "user", "content": "hi"}], tier=TIER,
+        on_event=events.append,
+    )
+    assert result.text == "answered by backup"
+    notices = [e for e in events if e["type"] == "notice"]
+    assert len(notices) == 1
+    assert "backup model" in notices[0]["message"]
+
+
+def test_no_notice_when_primary_serves():
+    provider = FakeProvider([ProviderResponse(text="from primary")])
+    events = []
+    run_turn(
+        provider, _router_with_echo(), _settings(),
+        messages=[{"role": "user", "content": "hi"}], tier=TIER,
+        on_event=events.append,
+    )
+    assert not any(e["type"] == "notice" for e in events)

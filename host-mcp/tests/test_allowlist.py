@@ -197,6 +197,40 @@ def test_panic_reports_macos_only(monkeypatch):
     assert err and "not supported" in err
 
 
+def test_linux_journald_native_filters(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+
+    # severity filter (indexed, server-side)
+    argv, err = al.build_argv("journal_priority", {})
+    assert err is None
+    assert argv == ["journalctl", "--no-pager", "-p", "err", "-n", "200"]
+    # enum guards the priority value
+    _, err = al.build_argv("journal_priority", {"priority": "bogus"})
+    assert err
+
+    # kernel-only (dmesg-style)
+    argv, err = al.build_argv("journal_kernel", {"lines": 50})
+    assert err is None
+    assert argv == ["journalctl", "--no-pager", "-k", "-n", "50"]
+
+    # previous-boot slice for reboot/crash RCA
+    argv, err = al.build_argv("journal_boot", {})
+    assert err is None
+    assert argv == ["journalctl", "--no-pager", "-b", "-1", "-p", "warning", "-n", "300"]
+    # boot offset is pattern-guarded (no injection, no arbitrary flags)
+    _, err = al.build_argv("journal_boot", {"boot": "; reboot"})
+    assert err
+
+
+def test_linux_journald_filters_not_supported_on_macos(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    for check in ("journal_priority", "journal_kernel", "journal_boot"):
+        _, err = al.build_argv(check, {})
+        assert err and "not supported" in err, check
+
+
 def test_journal_grep_pattern_constraint():
     # Test the pattern constraint directly on the ArgSpec — platform-independent and
     # the security-relevant bit. Single-argv-token substitution is covered elsewhere.

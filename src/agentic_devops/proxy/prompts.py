@@ -71,6 +71,16 @@ time window (when did it start, is it ongoing).
 - Gather just enough to move forward. Collect the smallest slice of data that \
 sharpens or refutes your current hypothesis, then let what you find decide what \
 to look at next. Don't dump every tool at once; investigate in passes.
+- Query logs surgically — log stores are large and scanning them is expensive. \
+Scope every query by time window AND by source/severity, and prefer filtering at \
+the source: on Linux, journald filters like severity (errors only), a specific \
+unit, kernel-only, or the previous boot; on macOS, scope the predicate by \
+process/subsystem (e.g. the kernel) rather than a bare substring. Issue ONE \
+well-scoped query, not several overlapping broad ones — a broad match over a wide \
+window can return hundreds of thousands of lines and take tens of seconds each, \
+and on a production host that load matters. For crashes, OOM/Jetsam kills, or \
+panics, read the dedicated crash/diagnostic report when one exists rather than \
+scanning the whole log.
 - Build a chronology. Pull timestamped events from each source and correlate \
 them into one timeline anchored on the symptom's onset — order across sources is \
 where causes hide. (A timeline-correlation tool may be available; use it.)

@@ -47,10 +47,20 @@ For example:
 
 A check with no variant for the detected OS reports *"not supported on `<OS>`"*
 cleanly rather than running the wrong command — this covers both the
-systemd-specific checks on macOS (`journal_unit`, `systemctl_status`) **and** the
-macOS-specific checks on Linux (`log_query`, `panic_reports`, below). The
-`HOST_MCP_*` env vars configure the *deployment* (profile, auth, transport) —
-never the OS.
+systemd-specific checks on macOS (`journal_unit`, `systemctl_status`,
+`journal_priority`, `journal_kernel`, `journal_boot`) **and** the macOS-specific
+checks on Linux (`log_query`, `panic_reports`, below). The `HOST_MCP_*` env vars
+configure the *deployment* (profile, auth, transport) — never the OS.
+
+**Linux journald filters (indexed, server-side).** On a production host, pull the
+incident slice *at the source* instead of dumping everything and scanning — these
+are cheap and surgical (Linux/systemd only):
+
+| Check | Command | Use |
+|---|---|---|
+| `journal_priority` | `journalctl -p <sev> -n N` | Errors-and-worse only (or any severity floor) — indexed by journald. |
+| `journal_kernel` | `journalctl -k -n N` | Kernel messages only (OOM kills, hardware, watchdog) — like dmesg. |
+| `journal_boot` | `journalctl -b <off> -p <sev> -n N` | A specific boot's log (default the *previous* boot) — what happened before a reboot/crash. |
 
 **macOS deep diagnostics.** `journal_grep` on macOS only sees `/var/log/system.log`
 (short retention). For historical / richer queries — the authoritative source for
@@ -69,8 +79,11 @@ the unified log binary store and crash reports:
   type/pattern/enum/range constraints. No shell is ever invoked.
 - **Profiles** — `read-only` < `diagnostic` < `elevated`. The server runs at one
   active profile and exposes only the checks at or below it.
-- **Audit log** — every invocation (check, args, argv, exit, duration) can be
-  appended to a JSONL file.
+- **Audit log** — set `HOST_MCP_AUDIT=<path>` and every invocation (check, args,
+  argv, exit code, `duration_ms`) is appended as JSONL. Recommended in production:
+  it's the cheap observability that answers *"which diagnostic just cost 25s?"*
+  (`jq '{check,duration_ms}' <path>`). The bundled compose service and the
+  `deploy/` kit enable it by default.
 
 ## Run
 

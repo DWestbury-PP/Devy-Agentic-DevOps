@@ -124,9 +124,66 @@ checks:
         max: 2000
         description: "Max matching lines to return."
 
+  # ---- Linux journald native filters (indexed, server-side) — the surgical,
+  #      cheap way to pull an incident slice on a production host. Linux-only;
+  #      macOS uses log_query (below) with a scoped predicate.
+  journal_priority:
+    profile: diagnostic
+    description: "Recent journal entries at or above a severity — e.g. errors only. Filtered server-side by journald (indexed), so it's far cheaper than pulling everything and scanning. Linux/systemd only."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-p", "{priority}", "-n", "{lines}"]
+    args:
+      priority:
+        type: string
+        default: "err"
+        enum: ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+        description: "Lowest severity to include (err = errors and worse; warning includes warnings)."
+      lines:
+        type: int
+        default: 200
+        min: 1
+        max: 2000
+        description: "Max entries to return."
+
+  journal_kernel:
+    profile: diagnostic
+    description: "Kernel messages only (OOM kills, hardware faults, watchdog, filesystem) from the journal — like dmesg. The first place to look for a crash or resource kill. Linux/systemd only."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-k", "-n", "{lines}"]
+    args:
+      lines:
+        type: int
+        default: 200
+        min: 1
+        max: 2000
+        description: "Max entries to return."
+
+  journal_boot:
+    profile: diagnostic
+    description: "Journal entries from a specific boot — default the PREVIOUS boot (-1), filtered to warnings-and-worse — for investigating what happened just before a reboot or crash. Linux/systemd only."
+    platform:
+      Linux: ["journalctl", "--no-pager", "-b", "{boot}", "-p", "{priority}", "-n", "{lines}"]
+    args:
+      boot:
+        type: string
+        default: "-1"
+        pattern: "^(0|-[1-9][0-9]?)$"
+        description: "Boot offset: 0 = current boot, -1 = previous boot, -2 = two boots ago."
+      priority:
+        type: string
+        default: "warning"
+        enum: ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+        description: "Lowest severity to include (default warning keeps the prior-boot slice small)."
+      lines:
+        type: int
+        default: 300
+        min: 1
+        max: 3000
+        description: "Max entries to return."
+
   # ---- macOS unified log (log show) — the binary store with far longer
   #      retention than /var/log/system.log. Darwin-only by design; Linux hosts
-  #      use journal / journal_grep instead.
+  #      use the journal / journal_* checks above.
   log_query:
     profile: diagnostic
     # `log show` can scan a lot for wide windows, so give it a generous timeout.

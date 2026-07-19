@@ -47,6 +47,7 @@ class Span(Protocol):
         ok: Optional[bool] = None,
         usage: Optional[dict[str, Any]] = None,
         meta: Optional[dict[str, Any]] = None,
+        name: Optional[str] = None,
     ) -> None: ...
 
 
@@ -65,7 +66,7 @@ class _NoopSpan:
     def tool(self, name: str, inputs: dict[str, Any]) -> "_NoopSpan":
         return self
 
-    def outputs(self, body=None, *, ok=None, usage=None, meta=None) -> None:
+    def outputs(self, body=None, *, ok=None, usage=None, meta=None, name=None) -> None:
         return None
 
 
@@ -155,9 +156,14 @@ class _LangSmithSpan:
     def tool(self, name: str, inputs: dict[str, Any]) -> Span:
         return self._child(name, "tool", inputs)
 
-    def outputs(self, body=None, *, ok=None, usage=None, meta=None) -> None:
+    def outputs(self, body=None, *, ok=None, usage=None, meta=None, name=None) -> None:
         if self._run is None:
             return
+        if name:  # non-sensitive (e.g. the concrete model that served) — rename the span
+            try:
+                self._run.name = name           # picked up by patch()'s update_run(name=...)
+            except Exception:  # noqa: BLE001
+                pass
         if self._full and body:
             self._outputs.update(body)          # sensitive bodies: full mode only
         if meta:

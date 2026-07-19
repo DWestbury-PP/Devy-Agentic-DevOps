@@ -62,7 +62,19 @@ def _assistant_tool_call_message(response: ProviderResponse) -> dict[str, Any]:
 
 
 def _llm_span_name(tier: ModelTier) -> str:
-    return f"llm: {tier.label or tier.model}"
+    # Pre-call name = the primary model we're about to try (accurate if the call
+    # errors out entirely). On success it's renamed to the model that actually
+    # served — which may be a fallback (see run_turn / run_turn_streaming).
+    return f"llm: {tier.model}"
+
+
+def _llm_meta(tier: ModelTier, response: ProviderResponse) -> dict[str, Any]:
+    """Non-sensitive trace metadata pinning which concrete model served this call."""
+    return {
+        "model": response.served_by or tier.model,
+        "tier": tier.label or tier.model,
+        "fell_back": response.fell_back,
+    }
 
 
 def _turn_inputs(messages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -189,6 +201,7 @@ def run_turn(
     final_text = ""
     iterations = 0
     notified_fallback = False
+    models_used: list[str] = []
 
     session_id = (tool_context or {}).get("session_id") or ""
     turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
@@ -199,8 +212,11 @@ def run_turn(
                 response = provider.complete(working, tier=tier, tools=available_tools)
                 llm.outputs({"completion": response.text,
                              "tool_calls": [t.name for t in response.tool_calls]},
-                            usage=response.usage)
+                            usage=response.usage, meta=_llm_meta(tier, response),
+                            name=f"llm: {response.served_by}" if response.served_by else None)
             _accumulate_usage(usage, response.usage)
+            if response.served_by and response.served_by not in models_used:
+                models_used.append(response.served_by)
             if response.fell_back and not notified_fallback:
                 notified_fallback = True
                 emit({"type": "notice", "message": _FALLBACK_NOTICE})
@@ -222,8 +238,9 @@ def run_turn(
             final_text = _GUARD_MESSAGE
             working.append({"role": "assistant", "content": final_text})
 
-        turn.outputs({"output": final_text},
-                     usage=usage, meta={"iterations": iterations, "tools_used": tools_used})
+        turn.outputs({"output": final_text}, usage=usage,
+                     meta={"iterations": iterations, "tools_used": tools_used,
+                           "models": models_used, "fell_back": notified_fallback})
 
     emit({"type": "done", "iterations": iterations, "usage": usage})
     return TurnResult(
@@ -256,6 +273,7 @@ def run_turn_streaming(
     final_text = ""
     iterations = 0
     notified_fallback = False
+    models_used: list[str] = []
 
     session_id = (tool_context or {}).get("session_id") or ""
     turn = tracer.turn(session_id, "devy.turn", _turn_inputs(messages)) if tracer else NOOP_SPAN
@@ -269,8 +287,11 @@ def run_turn_streaming(
                 )
                 llm.outputs({"completion": response.text,
                              "tool_calls": [t.name for t in response.tool_calls]},
-                            usage=response.usage)
+                            usage=response.usage, meta=_llm_meta(tier, response),
+                            name=f"llm: {response.served_by}" if response.served_by else None)
             _accumulate_usage(usage, response.usage)
+            if response.served_by and response.served_by not in models_used:
+                models_used.append(response.served_by)
             if response.fell_back and not notified_fallback:
                 notified_fallback = True
                 yield {"type": "notice", "message": _FALLBACK_NOTICE}
@@ -292,8 +313,9 @@ def run_turn_streaming(
             final_text = _GUARD_MESSAGE
             working.append({"role": "assistant", "content": final_text})
 
-        turn.outputs({"output": final_text},
-                     usage=usage, meta={"iterations": iterations, "tools_used": tools_used})
+        turn.outputs({"output": final_text}, usage=usage,
+                     meta={"iterations": iterations, "tools_used": tools_used,
+                           "models": models_used, "fell_back": notified_fallback})
 
     yield {"type": "done", "iterations": iterations, "usage": usage, "text": final_text}
     return TurnResult(

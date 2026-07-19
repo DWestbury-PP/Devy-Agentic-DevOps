@@ -222,3 +222,45 @@ def test_explicit_capture_overrides_mode(monkeypatch):
                  langsmith=LangSmithConfig(capture="full"))
     t.get_tracer(s)
     assert captured["capture"] == "full"  # explicit config beats prod default
+
+
+# --------------------------------------------------------------------------- #
+# Which model served — the trace must pin the concrete model (incl. fallback)
+# --------------------------------------------------------------------------- #
+def test_llm_span_records_served_model_and_fallback():
+    tracer = FakeTracer(full=True)
+    provider = FakeProvider([
+        ProviderResponse(text="answered by backup", served_by="openai/gpt-5-mini", fell_back=True),
+    ])
+    run_turn(
+        provider, _router(), Settings(max_iterations=4),
+        messages=[{"role": "user", "content": "hi"}],
+        tier=ModelTier(model="anthropic/claude-sonnet-4-6", label="Balanced"),
+        tool_context={"session_id": "s1"}, tracer=tracer,
+    )
+    root = tracer.root
+    llm = root.children[0]
+    # Span renamed from the primary model to the model that actually served.
+    assert llm.name == "llm: openai/gpt-5-mini"
+    assert llm.outputs["model"] == "openai/gpt-5-mini"
+    assert llm.outputs["tier"] == "Balanced"
+    assert llm.outputs["fell_back"] is True
+    # Turn-level summary lists every model used and flags the fallback.
+    assert root.outputs["models"] == ["openai/gpt-5-mini"]
+    assert root.outputs["fell_back"] is True
+
+
+def test_llm_span_names_primary_model_when_no_fallback():
+    tracer = FakeTracer(full=True)
+    provider = FakeProvider([
+        ProviderResponse(text="ok", served_by="anthropic/claude-sonnet-4-6", fell_back=False),
+    ])
+    run_turn(
+        provider, _router(), Settings(max_iterations=4),
+        messages=[{"role": "user", "content": "hi"}],
+        tier=ModelTier(model="anthropic/claude-sonnet-4-6", label="Balanced"),
+        tool_context={"session_id": "s1"}, tracer=tracer,
+    )
+    root = tracer.root
+    assert root.children[0].name == "llm: anthropic/claude-sonnet-4-6"
+    assert root.outputs["fell_back"] is False

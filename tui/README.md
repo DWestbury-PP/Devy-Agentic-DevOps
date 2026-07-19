@@ -10,7 +10,21 @@ ships as a single self-contained binary with no runtime dependencies.
 ```bash
 cd tui
 go build -o ask .
-sudo mv ask /usr/local/bin/      # or anywhere on your PATH
+```
+
+Then put it on your `PATH`. A **symlink is the nicest for development** — it points
+at the built file, so future `go build`s are picked up with no re-copy, and it's
+branch-agnostic (`ask` is a gitignored artifact that survives branch switches):
+
+```bash
+sudo ln -sf "$PWD/ask" /usr/local/bin/ask     # recommended for dev
+ln -sf "$PWD/ask" ~/go/bin/ask                # no sudo if ~/go/bin is on your PATH
+```
+
+For a fixed install, copy it instead (re-copy after each rebuild):
+
+```bash
+sudo cp ask /usr/local/bin/ask
 ```
 
 Cross-compile (the binary is static; drop it on any matching host):

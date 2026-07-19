@@ -177,3 +177,33 @@ def test_mcp_mounts_lists_reachable_host(tmp_path, pool, pg_url, monkeypatch):
     m = data[0]
     assert m["name"] == "host" and m["address"] == "host-mcp:8780"
     assert m["reachable"] is True and m["checks"] == 2
+
+
+def test_mcp_mounts_probe_resolves_secret_ref_from_vault(tmp_path, pool, pg_url, monkeypatch):
+    """The reachability probe must resolve a `secret_ref` bearer from the vault,
+    not the inline `s.token` (which is only populated as a boot side-effect). With
+    the router passed in, that boot mutation never runs — so a mount configured
+    purely via `secret_ref` would falsely report unreachable if the probe trusted
+    `s.token`. The fake `list_tools` accepts ONLY the vault-resolved token."""
+    import agentic_devops.proxy.app as app_mod
+    import agentic_devops.proxy.host_mcp_client as hmc
+    from agentic_devops.config import MCPServerConfig
+    from tests.conftest import make_fake_secrets
+
+    vault = make_fake_secrets(writable=True)
+    vault.set("devy/mcp/host", "bearer-from-vault")
+    monkeypatch.setattr(app_mod, "build_secrets_provider", lambda settings: vault)
+
+    def _list(self, url, token):
+        assert token == "bearer-from-vault", f"probe passed the wrong token: {token!r}"
+        return ["df", "free", "ps"]
+
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", _list)
+    c = _mounted_client(
+        tmp_path, pg_url, monkeypatch,
+        # secret_ref only, NO inline token — the fragile configuration
+        [MCPServerConfig(name="host", transport="http",
+                         url="http://host-mcp:8780/mcp", secret_ref="devy/mcp/host")],
+    )
+    m = c.get("/v1/admin/mcp-mounts").json()[0]
+    assert m["reachable"] is True and m["checks"] == 3

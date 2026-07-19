@@ -76,8 +76,17 @@ def test_ref_helpers_sanitize_and_namespace():
     assert host_secret_ref("web01.example.com") == "devy/host/web01.example.com"
     assert github_secret_ref("home", namespace="acme") == "acme/github/home"
     assert set(provider_key_refs().values()) == {
-        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY", "LANGSMITH_API_KEY",
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+        "TAVILY_API_KEY", "LANGSMITH_API_KEY",
     }
+
+
+def test_provider_key_refs_matches_catalog():
+    # The two provider lists (boot hydration vs admin catalog) must not drift.
+    from agentic_devops.proxy.secrets_catalog import provider_specs
+
+    catalog = {p["ref"]: p["env"] for p in provider_specs()}
+    assert catalog == provider_key_refs()
 
 
 def test_health_reflects_reachability():

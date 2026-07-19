@@ -70,9 +70,11 @@ def host_secret_ref(fqdn: str, namespace: str = "devy") -> str:
 # Provider/LLM keys live in the same store; hydrated into os.environ at startup so
 # LiteLLM/provider SDKs find them. ref → environment variable.
 def provider_key_refs(namespace: str = "devy") -> dict[str, str]:
+    # Keep in sync with secrets_catalog._PROVIDERS (same ref → env mapping).
     return {
         f"{namespace}/provider/anthropic": "ANTHROPIC_API_KEY",
         f"{namespace}/provider/openai": "OPENAI_API_KEY",
+        f"{namespace}/provider/gemini": "GEMINI_API_KEY",
         f"{namespace}/provider/tavily": "TAVILY_API_KEY",
         f"{namespace}/provider/langsmith": "LANGSMITH_API_KEY",
     }

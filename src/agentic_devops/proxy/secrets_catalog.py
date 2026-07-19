@@ -21,15 +21,19 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    service: str          # stable id: anthropic | openai | tavily | langsmith
+    service: str          # stable id: anthropic | openai | gemini | tavily | langsmith
     label: str            # display label
     env: str              # environment variable it hydrates
     probe: str            # which probe function to run
 
 
+# Keep in sync with proxy.secrets.provider_key_refs (same ref → env mapping; that
+# one drives boot-time env hydration, this one drives the admin catalog + probes).
 _PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec("anthropic", "Anthropic (chat models)", "ANTHROPIC_API_KEY", "anthropic"),
-    ProviderSpec("openai", "OpenAI (embeddings)", "OPENAI_API_KEY", "openai"),
+    # OpenAI powers embeddings AND is a chat-failover backup (config tier `fallbacks`).
+    ProviderSpec("openai", "OpenAI (embeddings + chat fallback)", "OPENAI_API_KEY", "openai"),
+    ProviderSpec("gemini", "Gemini (chat fallback)", "GEMINI_API_KEY", "gemini"),
     ProviderSpec("tavily", "Tavily (web search)", "TAVILY_API_KEY", "tavily"),
     ProviderSpec("langsmith", "LangSmith (tracing)", "LANGSMITH_API_KEY", "langsmith"),
 )
@@ -118,6 +122,13 @@ def probe_provider(service: str, value: str) -> tuple[bool, str]:
     if service == "openai":
         return _probe_http("GET", "https://api.openai.com/v1/models",
                            headers={"Authorization": f"Bearer {value}"})
+    if service == "gemini":
+        # Google Generative Language API. Auth via the x-goog-api-key header
+        # (not a ?key= query param) so the key never lands in a URL.
+        return _probe_http(
+            "GET", "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": value},
+        )
     if service == "tavily":
         return _probe_http(
             "POST", "https://api.tavily.com/search",

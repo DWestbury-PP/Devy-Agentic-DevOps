@@ -69,6 +69,10 @@ class MCPServerConfig(BaseModel):
     # streamable-HTTP transport (proxy connects to a running, possibly remote server):
     url: Optional[str] = None
     token: Optional[str] = None  # bearer token (sent as Authorization: Bearer ...)
+    # Preferred over an inline `token`: resolve the bearer from the vault at mount
+    # time (the vault is the source of truth). Keeps the token out of config/.env
+    # entirely — set the value on the admin Secrets tab or `secrets set <ref>`.
+    secret_ref: Optional[str] = None  # e.g. devy/mcp/host
     # Optional UX overrides:
     category: Optional[str] = None  # defaults to `name`
     safety_tier: str = "external"

@@ -101,12 +101,14 @@ tiers:
 # tools-router. `name` becomes the tool category and name prefix.
 # mcp_servers:
 #   # The containerized host MCP from docker-compose (host + docker diagnostics).
-#   # Reachable on the compose network; ${HOST_MCP_TOKEN} is expanded from the
-#   # environment (set it in a .env next to docker-compose.yml). Uncomment to wire:
+#   # PREFER `secret_ref`: the bearer is mastered in the vault (set it on the admin
+#   # Secrets tab, or `agentic-devops secrets set devy/mcp/host <token>`) and
+#   # resolved at mount time — nothing secret in this file or .env. Uncomment to wire:
 #   - name: host
 #     transport: http
 #     url: http://host-mcp:8780/mcp
-#     token: ${HOST_MCP_TOKEN}
+#     secret_ref: devy/mcp/host          # vault-mastered bearer (preferred)
+#     # token: ${HOST_MCP_TOKEN}         # legacy: inline env-expansion (still works)
 #
 #   # A host MCP spawned locally over stdio (proxy and host on the same machine):
 #   - name: localhost
@@ -117,7 +119,7 @@ tiers:
 #   - name: trading-host-1
 #     transport: http
 #     url: https://trading-host-1.internal:8780/mcp   # front with TLS in production
-#     token: ${TRADING_HOST_1_TOKEN}                   # bearer token
+#     secret_ref: devy/mcp/trading-host-1              # vault-mastered bearer
 #
 #   # Any third-party MCP server works too:
 #   - name: filesystem

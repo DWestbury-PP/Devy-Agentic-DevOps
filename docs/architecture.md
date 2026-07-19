@@ -43,9 +43,9 @@ src/agentic_devops/
 │   ├── mcp_client.py   mounts external MCP servers into the tools-router
 │   ├── tracing.py      pluggable tracing (JSONL default, LangSmith optional)
 │   │   # ── admin control plane (Phase 9) ──
-│   ├── auth.py             interim bcrypt password → HS256 token (the SSO seam)
-│   ├── encryption.py       Fernet encryption for per-host MCP tokens at rest
-│   ├── hosts.py            HostStore — host registry CRUD + resolve
+│   ├── auth.py             bcrypt password → HS256 token; JWT/JWKS SSO + RBAC
+│   ├── secrets.py          SecretsProvider (AWS SM / LocalStack) — all runtime tokens
+│   ├── hosts.py            HostStore — host registry CRUD + resolve (secret_ref)
 │   ├── host_mcp_client.py  on-demand caller for a registered host's MCP
 │   ├── documents.py        DocumentStore / JobStore (import registry)
 │   └── ingest_worker.py    in-process worker that runs queued ingest jobs
@@ -63,7 +63,7 @@ src/agentic_devops/
 │   ├── retrieval.py    the search_knowledge tool
 │   └── factory.py      build store + embedder from config
 ├── db/             Postgres connection pool + bootstrap schema.sql
-└── cli/main.py     `agentic-devops serve | ingest | db init | admin set-password | admin gen-key`
+└── cli/main.py     `agentic-devops serve | ingest | db init | admin set-password | secrets set|list`
 ```
 
 ## The harness loop

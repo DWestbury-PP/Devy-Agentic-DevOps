@@ -56,8 +56,15 @@ def settable_refs(namespace: str = "devy") -> set[str]:
 
 def build_catalog(
     namespace: str, secrets: Any, github_store: Any, host_store: Any, mcp_server_store: Any = None,
+    config_mcp_servers: Any = None,
 ) -> list[dict[str, Any]]:
-    """Assemble the full inventory with live loaded-state (value never included)."""
+    """Assemble the full inventory with live loaded-state (value never included).
+
+    ``config_mcp_servers`` are the statically config-mounted MCP servers
+    (``settings.mcp_servers``); any that resolve their bearer from a vault
+    ``secret_ref`` are surfaced here so the token is managed on the Secrets tab
+    rather than living in config/.env.
+    """
     entries: list[dict[str, Any]] = []
     for p in provider_specs(namespace):
         entries.append({
@@ -90,7 +97,24 @@ def build_catalog(
             "ref": m.secret_ref, "category": "mcp", "env": None,
             "loaded": secrets.exists(m.secret_ref), "editable": secrets.writable, "testable": True,
         })
+    for s in (config_mcp_servers or []):
+        ref = getattr(s, "secret_ref", None)
+        if not ref:
+            continue
+        # A config-mounted server's bearer is resolved at mount time — its validity
+        # is proven when the mount succeeds (visible on Hosts), so not probed here.
+        # Editing takes effect on the next proxy restart (static mount).
+        entries.append({
+            "service": f"mcp:{s.name}", "label": f"MCP · {s.name} (config-mounted)",
+            "ref": ref, "category": "mcp", "env": None,
+            "loaded": secrets.exists(ref), "editable": secrets.writable, "testable": False,
+        })
     return entries
+
+
+def config_mount_refs(config_mcp_servers: Any, namespace: str = "devy") -> set[str]:
+    """secret_refs used by statically config-mounted MCP servers (settable on the tab)."""
+    return {s.secret_ref for s in (config_mcp_servers or []) if getattr(s, "secret_ref", None)}
 
 
 # --- live probes -----------------------------------------------------------

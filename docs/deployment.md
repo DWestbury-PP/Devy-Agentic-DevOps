@@ -31,11 +31,13 @@ Config and secrets are read from a mounted directory (default
 `docker-compose.yml` for `HOST_MCP_TOKEN`, `POSTGRES_PASSWORD`, and `DATABASE_URL`.
 
 > **Enabling the admin control plane** (host registry + document import) needs
-> three more secrets in the *mounted* `~/.config/agentic-devops/.env`:
+> two bootstrap secrets in the *mounted* `~/.config/agentic-devops/.env`:
 > `DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET` (both required, else
-> `/v1/admin/*` → `503`) and `DEVY_ENCRYPTION_KEY` (Fernet, for per-host tokens).
-> Generate them with `agentic-devops admin set-password` / `admin gen-key`. See
-> [Security → Admin control plane](security.md#admin-control-plane).
+> `/v1/admin/*` → `503`). They gate the admin plane itself, so they're bootstrap
+> (environment), not vault-managed. Generate them with
+> `agentic-devops admin set-password`. Connector/provider tokens are then managed
+> *in* the vault via the admin Secrets tab. See
+> [Security → Secrets model](security.md#secrets-model).
 
 ```bash
 # one-time: a shared token for the host MCP

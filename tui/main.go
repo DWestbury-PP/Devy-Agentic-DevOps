@@ -1,11 +1,14 @@
 // Command ask is the terminal surface for the Agentic DevOps co-pilot.
 //
-//	ask "is anything unhealthy on this box?"      # one-shot, streamed
-//	kubectl get pods | ask "anything wrong here?"  # piped stdin as context
-//	ask                                            # interactive REPL
+//	ask "is anything unhealthy on this box?"          # one-shot, streamed
+//	ask --continue "and what's causing the writes?"    # follow up (same convo)
+//	ask --session <id> "…"                             # resume a specific convo
+//	kubectl get pods | ask "anything wrong here?"      # piped stdin as context
+//	ask                                                # interactive REPL
 //
 // It is a thin native client: it streams from / posts to the LLM-PROXY and
-// renders. All reasoning lives in the proxy.
+// renders. All reasoning lives in the proxy. Multi-turn context is server-side;
+// each one-shot prints its `session:` id so a follow-up can resume it.
 package main
 
 import (
@@ -45,13 +48,16 @@ func readStdinContext() string {
 }
 
 func main() {
-	var tier, url string
-	var oneShot bool
+	var tier, url, sessionID string
+	var oneShot, continueSession bool
 	var maxChars int
 
 	flag.StringVar(&tier, "tier", "", "model tier (e.g. fast/balanced/deep)")
 	flag.StringVar(&tier, "t", "", "model tier (shorthand)")
 	flag.StringVar(&url, "url", "", "proxy URL (default "+defaultURL+", or $AGENTIC_DEVOPS_URL)")
+	flag.StringVar(&sessionID, "session", "", "resume a conversation by id (from a prior answer's `session:` line)")
+	flag.StringVar(&sessionID, "s", "", "resume a session by id (shorthand)")
+	flag.BoolVar(&continueSession, "continue", false, "resume the last session started from this CLI")
 	flag.BoolVar(&oneShot, "complete", false, "one-shot non-streaming completion")
 	flag.BoolVar(&oneShot, "c", false, "one-shot (shorthand)")
 	flag.IntVar(&maxChars, "max-chars", 0, "cap answer length (one-shot only)")
@@ -60,6 +66,7 @@ func main() {
 	client := NewClient(resolveURL(url))
 	context := readStdinContext()
 	prompt := strings.TrimSpace(strings.Join(flag.Args(), " "))
+	startSession := resolveStartSession(sessionID, continueSession, readLastSession)
 
 	if !client.Healthy() {
 		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf(
@@ -73,20 +80,33 @@ func main() {
 			fmt.Fprintln(os.Stderr, errStyle.Render("Piped input needs a question, e.g. `… | ask \"what's wrong?\"`"))
 			os.Exit(1)
 		}
-		repl(client, tier)
+		repl(client, tier, startSession)
 		return
 	}
 
 	if oneShot {
-		md, err := client.Complete(prompt, tier, context, maxChars)
+		md, newID, err := client.Complete(prompt, startSession, tier, context, maxChars)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 			os.Exit(1)
 		}
 		fmt.Print(renderMarkdown(md))
+		saveLastSession(newID)
+		announceSession(newID)
 		return
 	}
-	streamTurn(client, prompt, "", tier, context)
+	newID := streamTurn(client, prompt, startSession, tier, context)
+	saveLastSession(newID)
+	announceSession(newID)
+}
+
+// announceSession tells the user the conversation's id (on stderr, so stdout
+// stays clean/pipeable) so a follow-up can resume it.
+func announceSession(id string) {
+	if id == "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, dimStyle.Render("session "+id+`  ·  follow up with: ask --continue "…"`))
 }
 
 const helpText = `Commands
@@ -98,11 +118,14 @@ const helpText = `Commands
   /exit, /quit    leave
 Anything else is sent to the co-pilot.`
 
-func repl(client *Client, tier string) {
+func repl(client *Client, tier, startSession string) {
 	fmt.Printf("%s — your DevOps & SRE co-pilot. Type %s for commands, %s to quit.\n\n",
 		promptStyle.Render("Devy"), dimStyle.Render("/help"), dimStyle.Render("/exit"))
 
-	sessionID := ""
+	sessionID := startSession
+	if startSession != "" {
+		fmt.Println(dimStyle.Render("Resuming session " + startSession + ".\n"))
+	}
 	currentTier := tier
 	reader := bufio.NewReader(os.Stdin)
 
@@ -125,6 +148,7 @@ func repl(client *Client, tier string) {
 			continue
 		}
 		sessionID = streamTurn(client, line, sessionID, currentTier, "")
+		saveLastSession(sessionID)
 	}
 }
 

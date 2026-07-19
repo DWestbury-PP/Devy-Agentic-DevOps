@@ -66,9 +66,14 @@ func (c *Client) Tools() ([]Tool, error) {
 	return tools, json.NewDecoder(resp.Body).Decode(&tools)
 }
 
-// Complete performs a one-shot, non-streaming completion.
-func (c *Client) Complete(prompt, tier, context string, maxChars int) (string, error) {
+// Complete performs a one-shot, non-streaming completion. It returns the
+// rendered Markdown and the session id (non-empty only when a session was
+// resumed — /v1/complete is stateless for a fresh call).
+func (c *Client) Complete(prompt, sessionID, tier, context string, maxChars int) (string, string, error) {
 	payload := map[string]any{"prompt": prompt}
+	if sessionID != "" {
+		payload["session_id"] = sessionID
+	}
 	if tier != "" {
 		payload["tier"] = tier
 	}
@@ -81,20 +86,21 @@ func (c *Client) Complete(prompt, tier, context string, maxChars int) (string, e
 	body, _ := json.Marshal(payload)
 	resp, err := c.http.Post(c.base+"/v1/complete", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("proxy %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return "", "", fmt.Errorf("proxy %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	var out struct {
-		Markdown string `json:"markdown"`
+		Markdown  string `json:"markdown"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return out.Markdown, nil
+	return out.Markdown, out.SessionID, nil
 }
 
 // SSEHandler is called for each server-sent event during a streamed chat turn.

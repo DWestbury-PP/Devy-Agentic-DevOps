@@ -24,13 +24,23 @@ At the default `diagnostic` profile, the packaged allow-list exposes **host** an
   `service_status` (one named service — is it up, and why did it last exit?),
   cross-OS via systemd on Linux and launchd on macOS; plus `brew_services`
   (Homebrew-managed services, macOS-only).
+- **Scoped log-file read:** `tail_file` reads the trailing lines of a log file —
+  but only one that resolves inside an operator-declared allow-list of log
+  directories (default `/var/log`, `/opt/homebrew/var/log`,
+  `/usr/local/var/log`, `/Library/Logs`). It exists for the case the journal/unified
+  log can't cover: a launchd/Homebrew service on macOS whose own stderr is
+  redirected to a file (its `StandardErrorPath`, reported by `service_status`) —
+  where the reason a service crash-loops actually lives. The path is
+  `realpath`-resolved and rejected unless it lands within an allowed root, so `..`
+  traversal and symlink escapes can't reach anything else.
 - **Docker** (needs access to the Docker socket): `docker_ps`, `docker_ps_all`,
   `docker_logs`, `docker_inspect`, `docker_stats`, `docker_top`, `docker_images`,
   `docker_system_df`.
 
 Deliberately **absent**: anything that mutates or grants a shell —
-`docker exec/run/rm/stop`, arbitrary `cat`/`tail`, `dmesg`. The boundary is the
-allow-list itself, not the socket's mount mode.
+`docker exec/run/rm/stop`, an *arbitrary* `cat`/`tail` of any path, `dmesg`. File
+reads are confined to `tail_file`'s allow-listed log roots (above); the boundary
+is the allow-list itself, not the socket's mount mode.
 
 ## One server, many operating systems
 

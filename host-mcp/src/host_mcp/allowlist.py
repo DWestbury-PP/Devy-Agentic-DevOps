@@ -10,6 +10,7 @@ active profile and exposes only the checks at or below it.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import subprocess
@@ -25,13 +26,18 @@ _DEFAULT_TIMEOUT = 20
 
 @dataclass
 class ArgSpec:
-    type: str = "string"  # "string" | "int"
+    type: str = "string"  # "string" | "int" | "path"
     required: bool = False
     default: Any = None
     pattern: Optional[str] = None
     enum: Optional[list] = None
     min: Optional[int] = None
     max: Optional[int] = None
+    # For type == "path": the allow-listed directory roots a path may resolve
+    # inside. The value is realpath-resolved (collapsing `..` and symlinks) and
+    # rejected unless it lands within one of these roots — the guard that turns a
+    # file read into a *scoped* one, never an arbitrary `cat`.
+    roots: Optional[list[str]] = None
     description: str = ""
 
     def json_schema(self) -> dict[str, Any]:
@@ -68,12 +74,30 @@ class ArgSpec:
             if self.max is not None and ival > self.max:
                 ival = self.max
             return ival, None
+        if self.type == "path":
+            return self._validate_path(name, str(value))
         sval = str(value)
         if self.enum and sval not in self.enum:
             return None, f"argument {name!r} must be one of {self.enum}"
         if self.pattern and not re.match(self.pattern, sval):
             return None, f"argument {name!r} failed validation"
         return sval, None
+
+    def _validate_path(self, name: str, value: str) -> tuple[Any, Optional[str]]:
+        # Reject control characters outright, then confine to the allow-listed
+        # roots. realpath resolves `..` and symlinks BEFORE the prefix check, so
+        # neither traversal nor a symlink inside a root can escape it. Both sides
+        # are realpath'd (e.g. macOS /var -> /private/var) so the compare is sound.
+        if any(c in value for c in ("\n", "\r", "\x00")):
+            return None, f"argument {name!r} failed validation"
+        if not self.roots:
+            return None, f"argument {name!r} has no allow-listed roots configured"
+        real = os.path.realpath(value)
+        for root in self.roots:
+            rroot = os.path.realpath(root)
+            if real == rroot or real.startswith(rroot + os.sep):
+                return real, None
+        return None, f"argument {name!r} must resolve inside an allow-listed directory"
 
 
 @dataclass

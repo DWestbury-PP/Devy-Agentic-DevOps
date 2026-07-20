@@ -300,6 +300,66 @@ def test_brew_services_is_macos_only(monkeypatch):
     assert err and "not supported" in err
 
 
+def test_path_arg_confines_to_allowed_roots(tmp_path):
+    # The `path` arg type is the security kernel for tail_file: a value is accepted
+    # only if it realpath-resolves inside an allow-listed root — defeating traversal
+    # and symlink escapes.
+    from host_mcp.allowlist import ArgSpec
+
+    allowed = tmp_path / "logs"
+    allowed.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    spec = ArgSpec(type="path", required=True, roots=[str(allowed)])
+
+    # a file inside the root → accepted, returned as its realpath
+    ok, err = spec.validate("path", str(allowed / "app.err.log"))
+    assert err is None and ok == str((allowed / "app.err.log"))
+
+    # `..` traversal out of the root → rejected (even though the target exists)
+    _, err = spec.validate("path", str(allowed / ".." / "secret.txt"))
+    assert err and "allow-listed" in err
+
+    # a sibling path entirely outside the root → rejected
+    _, err = spec.validate("path", str(secret))
+    assert err
+
+    # a symlink inside the root pointing outside → rejected (realpath follows it)
+    link = allowed / "escape.log"
+    link.symlink_to(secret)
+    _, err = spec.validate("path", str(link))
+    assert err
+
+    # control characters and empty root set → rejected
+    _, err = spec.validate("path", str(allowed / "a\nb"))
+    assert err
+    _, err = ArgSpec(type="path", roots=[]).validate("path", "/var/log/x")
+    assert err
+
+
+def test_tail_file_reads_allowlisted_logs_only():
+    al = _allowlist()
+    assert "tail_file" in {c.name for c in al.available_checks()}  # diagnostic
+
+    # a path under a default log root → accepted, substituted as the final token
+    argv, err = al.build_argv(
+        "tail_file", {"path": "/opt/homebrew/var/log/alloy.err.log", "lines": 80}
+    )
+    assert err is None
+    assert argv[:3] == ["tail", "-n", "80"]
+    assert argv[-1].endswith("/opt/homebrew/var/log/alloy.err.log")
+
+    # arbitrary read outside the roots → rejected (no /etc/passwd, no home dir)
+    _, err = al.build_argv("tail_file", {"path": "/etc/passwd"})
+    assert err and "allow-listed" in err
+    _, err = al.build_argv("tail_file", {"path": "/opt/homebrew/var/log/../../../../etc/passwd"})
+    assert err
+
+    # lines clamped to the declared max
+    argv, err = al.build_argv("tail_file", {"path": "/var/log/system.log", "lines": 999999})
+    assert err is None and "2000" in argv
+
+
 def test_no_mutating_docker_checks_present():
     # The allowlist must never expose shell or state-changing docker verbs.
     names = set(_allowlist("elevated")._checks)  # every defined check, any profile

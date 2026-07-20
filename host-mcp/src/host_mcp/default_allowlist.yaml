@@ -245,6 +245,32 @@ checks:
     platform:
       Darwin: ["brew", "services", "list"]
 
+  # ---- Scoped log-file read — for a service whose own stdout/stderr is
+  #      redirected to a FILE rather than the journal/unified log. On macOS a
+  #      launchd/Homebrew service's error output goes to its StandardErrorPath
+  #      (visible via `service_status`), which `log show` never captures; the
+  #      *reason* a service crash-loops lives there. This is NOT an arbitrary
+  #      `cat`: the path is realpath-resolved and rejected unless it lands inside
+  #      an allow-listed log directory (no traversal, no symlink escape). Operators
+  #      tune `roots` per host — keep them log dirs; never add `/`, a home dir, or a
+  #      secrets path, which would defeat the guard.
+  tail_file:
+    profile: diagnostic
+    description: "Read the trailing lines of a specific LOG FILE, restricted to allow-listed log directories (default: /var/log, /opt/homebrew/var/log, /usr/local/var/log, /Library/Logs). Use it to read a service's own error log — e.g. the StandardErrorPath that `service_status` reports for a crash-looping launchd/Homebrew service on macOS (/opt/homebrew/var/log/<svc>.err.log), whose startup error is written to the file, NOT the unified log. On Linux a systemd service's stderr is usually in the journal already — prefer `journal_unit`. The path is realpath-resolved and rejected unless it resolves inside an allow-listed directory: this is a scoped read, never an arbitrary file read, and never a shell."
+    argv: ["tail", "-n", "{lines}", "{path}"]
+    args:
+      path:
+        type: path
+        required: true
+        roots: ["/var/log", "/opt/homebrew/var/log", "/usr/local/var/log", "/Library/Logs"]
+        description: "Absolute path to a log file inside an allow-listed log directory, e.g. /opt/homebrew/var/log/alloy.err.log. Rejected if it resolves outside the allowed roots."
+      lines:
+        type: int
+        default: 50
+        min: 1
+        max: 2000
+        description: "Number of trailing lines to read (default 50; the fatal error in a crash log is usually last)."
+
   # ---- Docker: diagnostic (read-only; requires docker.sock access) ------
   docker_ps:
     profile: diagnostic

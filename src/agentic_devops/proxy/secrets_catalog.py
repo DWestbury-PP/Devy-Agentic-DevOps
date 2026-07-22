@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -101,13 +102,19 @@ def build_catalog(
         ref = getattr(s, "secret_ref", None)
         if not ref:
             continue
-        # A config-mounted server's bearer is resolved at mount time — its validity
-        # is proven when the mount succeeds (visible on Hosts), so not probed here.
-        # Editing takes effect on the next proxy restart (static mount).
+        # Name the endpoint in the label so the admin knows exactly WHICH MCP this
+        # bearer is for (otherwise "MCP · host" is opaque). The bearer is probeable
+        # against the live server (Test), same as a registered one; a stored-value
+        # edit only takes effect for the proxy's own mounted calls on the next
+        # restart (static mount), but Test always probes with the current value.
+        endpoint = urlparse(getattr(s, "url", "") or "").netloc or getattr(s, "url", "")
+        label = f"MCP · {s.name} (config-mounted)"
+        if endpoint:
+            label = f"MCP · {s.name} — {endpoint} (config-mounted)"
         entries.append({
-            "service": f"mcp:{s.name}", "label": f"MCP · {s.name} (config-mounted)",
+            "service": f"mcp:{s.name}", "label": label,
             "ref": ref, "category": "mcp", "env": None,
-            "loaded": secrets.exists(ref), "editable": secrets.writable, "testable": False,
+            "loaded": secrets.exists(ref), "editable": secrets.writable, "testable": True,
         })
     return entries
 

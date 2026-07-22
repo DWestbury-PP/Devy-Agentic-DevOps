@@ -113,3 +113,36 @@ def test_test_dispatch_for_github(client, monkeypatch):
     monkeypatch.setattr(secrets_catalog, "probe_github", fake_gh)
     r = client.post("/v1/admin/secrets/test", json={"ref": "devy/github/home"})
     assert r.status_code == 200 and r.json()["ok"] is True and "authenticated" in r.json()["detail"]
+
+
+def test_test_dispatch_for_config_mounted_mcp(tmp_path, pool, pg_url, monkeypatch):
+    # A config-mounted MCP bearer (settings.mcp_servers, not the DB registry) is set
+    # here too, so Test must probe THAT server rather than reporting "no server bound".
+    import agentic_devops.proxy.host_mcp_client as hmc
+    from agentic_devops.config import MCPServerConfig
+
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, url, token: ["disk", "memory", "cpu"])
+    monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
+    app = create_app(
+        settings=Settings(
+            database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",
+            secrets=SecretsConfig(mode="dev"),
+            mcp_servers=[MCPServerConfig(name="host", transport="http",
+                                         url="http://host-mcp:8780/mcp", secret_ref="devy/mcp/host")],
+        ),
+        provider=object(), router=ToolsRouter(),
+    )
+    c = TestClient(app)
+    tok = c.post("/v1/admin/login", json={"password": "pw"}).json()["token"]
+    c.headers.update({"Authorization": f"Bearer {tok}"})
+
+    # the catalog names the endpoint and marks it testable
+    e = {x["ref"]: x for x in c.get("/v1/admin/secrets").json()["secrets"]}["devy/mcp/host"]
+    assert e["testable"] is True and "host-mcp:8780" in e["label"]
+
+    # set the bearer, then Test → probes the config-mounted server (not "no server bound")
+    c.put("/v1/admin/secrets", json={"ref": "devy/mcp/host", "value": "sekret"})
+    r = c.post("/v1/admin/secrets/test", json={"ref": "devy/mcp/host"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True and "3 tools available" in r.json()["detail"]

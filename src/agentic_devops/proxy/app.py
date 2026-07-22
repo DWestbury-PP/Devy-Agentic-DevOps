@@ -792,10 +792,16 @@ def create_app(
             checks = await run_in_threadpool(host_mcp.list_tools, resolved.url, resolved.token)
             ok, detail = (bool(checks), f"{len(checks)} checks available" if checks else "unreachable")
         elif category == "mcp":
+            # Match a registered (DB) server first, then fall back to a config-mounted
+            # one (settings.mcp_servers) — that bearer is set here too, so it must be
+            # testable rather than reporting "no server bound".
             server = next((m for m in mcp_server_store.list() if m.secret_ref == ref), None)
-            if server is None:
+            url = server.url if server is not None else next(
+                (s.url for s in settings.mcp_servers if getattr(s, "secret_ref", None) == ref), None
+            )
+            if url is None:
                 return SecretTestResult(ok=False, detail="no MCP server bound to this secret")
-            checks = await run_in_threadpool(host_mcp.list_tools, server.url, value)
+            checks = await run_in_threadpool(host_mcp.list_tools, url, value)
             ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")

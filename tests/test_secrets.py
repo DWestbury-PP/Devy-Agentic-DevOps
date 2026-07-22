@@ -159,7 +159,8 @@ def test_config_mount_refs_and_catalog_entry():
     from agentic_devops.proxy.secrets_catalog import build_catalog, config_mount_refs
 
     servers = [
-        SimpleNamespace(name="host", secret_ref="devy/mcp/host"),
+        SimpleNamespace(name="host", secret_ref="devy/mcp/host",
+                        url="http://host.docker.internal:8781/mcp"),
         SimpleNamespace(name="legacy", secret_ref=None),  # inline token / no vault ref
     ]
     assert config_mount_refs(servers) == {"devy/mcp/host"}
@@ -172,5 +173,7 @@ def test_config_mount_refs_and_catalog_entry():
     e = by_ref["devy/mcp/host"]
     assert e["category"] == "mcp" and e["loaded"] is True
     assert e["editable"] is True          # settable on the tab (dev)
-    assert e["testable"] is False         # validity proven at mount, not probed here
+    assert e["testable"] is True          # probeable against the live server (Test)
+    # the label names the endpoint so the admin knows WHICH MCP this bearer is for
     assert "config-mounted" in e["label"]
+    assert "host.docker.internal:8781" in e["label"]

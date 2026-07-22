@@ -19,9 +19,9 @@ from agentic_devops.proxy.secrets import SecretsProvider
 
 _COLS = (
     "id, name, url, secret_ref, category, description, allow_writes, enabled, "
-    "last_status, tool_count, write_tool_count, created_at, updated_at"
+    "last_status, tool_count, write_tool_count, created_at, updated_at, auth_header"
 )
-_FIELDS = ("name", "url", "category", "description", "allow_writes", "enabled")
+_FIELDS = ("name", "url", "category", "description", "allow_writes", "enabled", "auth_header")
 
 
 def mcp_secret_ref(name: str, namespace: str = "devy") -> str:
@@ -45,6 +45,10 @@ class MCPServer:
     write_tool_count: int = 0
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    # Non-standard auth header name a server wants the vault token in (e.g. the
+    # Grafana MCP wants `X-Grafana-Api-Key`, not `Authorization: Bearer`). NULL/None
+    # → the default `Authorization: Bearer <token>`.
+    auth_header: Optional[str] = None
     has_token: bool = False
 
     @property
@@ -57,6 +61,7 @@ class ResolvedServer:
     server: MCPServer
     url: str
     token: Optional[str]
+    auth_header: Optional[str] = None
 
 
 def _iso(v: Any) -> Optional[str]:
@@ -68,6 +73,7 @@ def _row(r: tuple) -> MCPServer:
         id=r[0], name=r[1], url=r[2], secret_ref=r[3], category=r[4], description=r[5],
         allow_writes=r[6], enabled=r[7], last_status=r[8], tool_count=r[9],
         write_tool_count=r[10], created_at=_iso(r[11]), updated_at=_iso(r[12]),
+        auth_header=r[13],
     )
 
 
@@ -149,4 +155,4 @@ class MCPServerStore:
         if s is None:
             return None
         token = self._secrets.get(s.secret_ref) if s.secret_ref else None
-        return ResolvedServer(server=s, url=s.url, token=token)
+        return ResolvedServer(server=s, url=s.url, token=token, auth_header=s.auth_header)

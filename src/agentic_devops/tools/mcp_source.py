@@ -78,7 +78,10 @@ def _make_spec(server: Any, t: dict[str, Any], is_write: bool, store: Any, calle
         resolved = store.resolve(server_id)
         if resolved is None:
             return f"ERROR: MCP server {server_name!r} is no longer registered"
-        return caller.call_tool(resolved.url, resolved.token, tool_name, args or {})
+        return caller.call_tool(
+            resolved.url, resolved.token, tool_name, args or {},
+            auth_header=getattr(resolved, "auth_header", None),
+        )
 
     return ToolSpec(
         name=_spec_name(server_name, tool_name),

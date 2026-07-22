@@ -121,7 +121,7 @@ def test_test_dispatch_for_config_mounted_mcp(tmp_path, pool, pg_url, monkeypatc
     import agentic_devops.proxy.host_mcp_client as hmc
     from agentic_devops.config import MCPServerConfig
 
-    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, url, token: ["disk", "memory", "cpu"])
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, url, token, ah=None: ["disk", "memory", "cpu"])
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
     app = create_app(

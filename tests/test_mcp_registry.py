@@ -72,18 +72,49 @@ def test_handler_dials_on_demand():
     seen = {}
 
     class Caller:
-        def call_tool(self, url, token, name, args):
-            seen.update(url=url, token=token, name=name, args=args)
+        def call_tool(self, url, token, name, args, auth_header=None):
+            seen.update(url=url, token=token, name=name, args=args, auth_header=auth_header)
             return "ok"
 
     class Store:
         def resolve(self, sid):
-            return SimpleNamespace(url="http://grafana/mcp", token="tok")
+            return SimpleNamespace(url="http://grafana/mcp", token="tok", auth_header=None)
 
     tools = [{"name": "ping", "description": "p", "input_schema": {}, "read_only_hint": True}]
     specs, _ = build_server_tools(_server(), tools, store=Store(), caller=Caller())
     assert specs[0].handler({"a": 1}) == "ok"
-    assert seen == {"url": "http://grafana/mcp", "token": "tok", "name": "ping", "args": {"a": 1}}
+    assert seen == {"url": "http://grafana/mcp", "token": "tok", "name": "ping",
+                    "args": {"a": 1}, "auth_header": None}
+
+
+def test_handler_forwards_custom_auth_header():
+    # A server that resolves a non-standard auth header (e.g. the Grafana MCP's
+    # X-Grafana-Api-Key) must have it threaded through to the caller.
+    seen = {}
+
+    class Caller:
+        def call_tool(self, url, token, name, args, auth_header=None):
+            seen["auth_header"] = auth_header
+            return "ok"
+
+    class Store:
+        def resolve(self, sid):
+            return SimpleNamespace(url="http://grafana/mcp", token="glsa_x",
+                                   auth_header="X-Grafana-Api-Key")
+
+    tools = [{"name": "list_datasources", "description": "d", "input_schema": {}, "read_only_hint": True}]
+    specs, _ = build_server_tools(_server(), tools, store=Store(), caller=Caller())
+    assert specs[0].handler({}) == "ok"
+    assert seen["auth_header"] == "X-Grafana-Api-Key"
+
+
+def test_auth_headers_builder():
+    from agentic_devops.proxy.host_mcp_client import _auth_headers
+
+    assert _auth_headers(None) is None
+    assert _auth_headers("t") == {"Authorization": "Bearer t"}
+    assert _auth_headers("glsa_x", "X-Grafana-Api-Key") == {"X-Grafana-Api-Key": "glsa_x"}
+    assert _auth_headers(None, "X-Grafana-Api-Key") is None  # no token → no header
 
 
 # -- admin API --------------------------------------------------------------
@@ -107,8 +138,8 @@ def _stub_mcp(monkeypatch):
         {"name": "query", "description": "q", "input_schema": {"type": "object", "properties": {}}, "read_only_hint": True},
         {"name": "delete_x", "description": "d", "input_schema": {}, "read_only_hint": False},
     ]
-    monkeypatch.setattr(hmc.HostMCPClient, "list_tools_detail", lambda self, u, t: detail)
-    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, u, t: ["query", "delete_x"])
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools_detail", lambda self, u, t, ah=None: detail)
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, u, t, ah=None: ["query", "delete_x"])
 
 
 def test_endpoints_gated(client):

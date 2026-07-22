@@ -176,6 +176,7 @@ def assemble_messages(
     now: Optional[float] = None,
     tz: Optional[str] = None,
     attachments: Optional[list[dict[str, Any]]] = None,
+    digests: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """Build the message list for one turn: system + derived context channel + user.
 
@@ -194,7 +195,7 @@ def assemble_messages(
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_override or SYSTEM_PROMPT}
     ]
-    messages.extend(session.working_context())
+    messages.extend(session.working_context(digests))
 
     time_ctx = time_context(session, time.time() if now is None else now, tz)
     if context:

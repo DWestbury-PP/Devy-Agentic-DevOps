@@ -117,8 +117,8 @@ def test_past_turn_images_flatten_to_placeholder_not_pixels():
     user_msg = next(m for m in ctx if m["role"] == "user")
     assert isinstance(user_msg["content"], str)
     assert "look at this" in user_msg["content"] and "panel.png" in user_msg["content"]
-    assert "a" * 64 not in user_msg["content"]  # the ref/hash isn't leaked as content
-    # no image_url parts anywhere in the working context
+    # Phase 3: the image id IS exposed (so view_image can re-fetch it) — but as
+    # TEXT, never pixels. No image_url parts anywhere in the working context.
     assert all(not isinstance(m.get("content"), list) for m in ctx)
 
 

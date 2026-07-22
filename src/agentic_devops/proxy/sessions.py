@@ -73,11 +73,13 @@ TOOL EVIDENCE:
 """
 
 
-def _flatten_content(content: Any) -> str:
+def _flatten_content(content: Any, digests: Optional[dict[str, str]] = None) -> str:
     """Collapse a structured (multimodal) message content to plain text for the
-    context channel: text parts are kept; an ``image_ref`` part becomes a short
-    ``[image: name]`` placeholder — its pixels are NOT re-sent. A plain string
-    passes through unchanged."""
+    context channel: text parts are kept; an ``image_ref`` part becomes a text
+    stand-in — its pixels are NOT re-sent (the "process once" invariant). When a
+    one-time ``digest`` is available (Phase 3) the stand-in carries the image's
+    description + its id so the model can call ``view_image`` to see it again;
+    otherwise it's a bare placeholder. A plain string passes through unchanged."""
     if not isinstance(content, list):
         return content or ""
     parts: list[str] = []
@@ -88,7 +90,16 @@ def _flatten_content(content: Any) -> str:
             parts.append(p.get("text", ""))
         elif p.get("type") == "image_ref":
             name = p.get("name") or "image"
-            parts.append(f"[image the user attached earlier: {name}]")
+            ref = p.get("ref", "")
+            digest = (digests or {}).get(ref)
+            if digest:
+                parts.append(
+                    f'[Image the user attached earlier — "{name}" (id: {ref}). '
+                    f"Description: {digest}\n"
+                    "Call view_image with this id to look at the actual image again.]"
+                )
+            else:
+                parts.append(f'[Image the user attached earlier — "{name}" (id: {ref})]')
     return "\n".join(x for x in parts if x).strip()
 
 
@@ -164,10 +175,24 @@ class Session:
     def recent_findings(self) -> list[dict[str, Any]]:
         return [f for f in self.findings if f.get("turn", 0) >= self.compacted_turns]
 
-    def working_context(self) -> list[dict[str, Any]]:
+    def recent_image_refs(self) -> list[str]:
+        """Image refs (hashes) in the non-compacted window — the ones
+        ``working_context`` will render, so their digests are worth ensuring."""
+        refs: list[str] = []
+        for m in self.messages[2 * self.compacted_turns :]:
+            content = m.get("content")
+            if isinstance(content, list):
+                refs.extend(p["ref"] for p in content
+                            if isinstance(p, dict) and p.get("type") == "image_ref" and p.get("ref"))
+        return refs
+
+    def working_context(self, digests: Optional[dict[str, str]] = None) -> list[dict[str, Any]]:
         """The derived context channel: summary + recent display turns + findings.
 
-        This is what the model sees — NOT the full display transcript.
+        This is what the model sees — NOT the full display transcript. ``digests``
+        maps an image ref → its one-time description, used to flatten past
+        image-carrying turns (Phase 3); without it, past images are bare
+        placeholders.
         """
         ctx: list[dict[str, Any]] = []
         summary_text = render_summary_state(self.summary_state)
@@ -182,7 +207,7 @@ class Session:
         # invariant (only the current turn inlines pixels; see assemble_messages).
         # Phase 3 replaces the placeholder with the image's cached digest.
         ctx.extend(
-            {"role": m["role"], "content": _flatten_content(m.get("content"))}
+            {"role": m["role"], "content": _flatten_content(m.get("content"), digests)}
             for m in self.messages[2 * self.compacted_turns :]
         )
         findings_text = render_findings(self.recent_findings())

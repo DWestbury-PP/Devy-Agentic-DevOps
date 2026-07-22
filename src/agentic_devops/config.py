@@ -198,6 +198,30 @@ class SecretsConfig(BaseModel):
     audit_enabled: bool = True
 
 
+class AttachmentsConfig(BaseModel):
+    """User-attached images (composer paperclip) stored in a content-addressed S3
+    blob store. Same AWS wiring as secrets — the S3 client reads its endpoint +
+    credentials from the environment (LocalStack in dev via ``AWS_ENDPOINT_URL``;
+    real S3 via the instance **IAM role** in prod). The only prod knob is the
+    bucket name; no endpoint or keys in code.
+    """
+
+    enabled: bool = True
+    bucket: str = "devy-blobs"
+    max_bytes: int = 5_000_000          # per image (5 MB)
+    max_per_turn: int = 6
+    allowed_mime: list[str] = Field(
+        default_factory=lambda: ["image/png", "image/jpeg", "image/gif", "image/webp"]
+    )
+    # A durable text description generated ONCE per unique image (dedup by hash),
+    # so later turns carry the digest instead of re-processing the pixels. Uses a
+    # VISION-capable tier — quality is the durability control (a wrong digest is
+    # authoritative and reused), so default to balanced, not fast. See
+    # .claude/plans/multimodal-attachments.md.
+    digest_enabled: bool = True
+    digest_tier: str = "balanced"
+
+
 class AuthConfig(BaseModel):
     """Admin-plane identity (Phase RBAC-1). Two modes:
 
@@ -294,6 +318,9 @@ class Settings(BaseSettings):
 
     # Secrets backend (dev=LocalStack / prod=AWS SM). Mode also settable via DEVY_MODE.
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+
+    # User-attached images → content-addressed S3 blob store (LocalStack dev / real S3 prod).
+    attachments: AttachmentsConfig = Field(default_factory=AttachmentsConfig)
 
     # Admin-plane identity + roles (RBAC-1). Defaults to password mode (backward compat).
     auth: AuthConfig = Field(default_factory=AuthConfig)

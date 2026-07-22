@@ -169,6 +169,21 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 -- Backfill for DBs created before auth_header existed (idempotent no-op on fresh).
 ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS auth_header TEXT;
 
+-- User-attached images (multimodal composer). The raw bytes live in the S3 blob
+-- store keyed by `hash` (sha256); this table is the metadata + the durable vision
+-- `digest` generated ONCE per unique image (dedup by hash), so later turns carry
+-- the digest instead of re-processing the pixels. See
+-- .claude/plans/multimodal-attachments.md.
+CREATE TABLE IF NOT EXISTS attachments (
+    hash           TEXT PRIMARY KEY,       -- sha256 of the bytes = the blob store key
+    mime           TEXT NOT NULL,
+    bytes          INTEGER NOT NULL,
+    digest         TEXT,                    -- one-time vision description (Phase 3)
+    digest_status  TEXT NOT NULL DEFAULT 'pending',  -- pending | ready | skipped | error
+    digest_tier    TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- GitHub connector (Phase D-1): registered GitHub credentials Devy can use to
 -- discover + read repos (read-only). Credential-centric: one read-only PAT sees
 -- all of an account's repos (repos are discovered live via the API, not pre-

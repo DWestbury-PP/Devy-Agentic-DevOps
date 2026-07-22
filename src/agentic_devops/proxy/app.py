@@ -20,7 +20,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from sse_starlette.sse import EventSourceResponse
 
@@ -71,6 +71,7 @@ from agentic_devops.proxy.schemas import (
 )
 from agentic_devops.proxy.auth import Principal, build_authenticator, max_tier_for_roles
 from agentic_devops.proxy.documents import DocumentStore, JobStore
+from agentic_devops.proxy.blobs import build_blob_store
 from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
 from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
@@ -212,6 +213,10 @@ def create_app(
     # secret lives in our DB. Writable only in dev (prod is provisioned out-of-band).
     secrets = build_secrets_provider(settings)
     secrets_writable = secrets.writable
+
+    # Content-addressed S3 blob store for user-attached images (None if disabled).
+    # Same AWS wiring as secrets: LocalStack in dev, real S3 via IAM role in prod.
+    blob_store = build_blob_store(settings)
 
     # Provider/LLM keys live in the vault; hydrate them into os.environ so the
     # provider SDKs (via LiteLLM) find them. The VAULT IS AUTHORITATIVE: if the
@@ -411,6 +416,22 @@ def create_app(
     @app.get("/healthz", response_model=HealthInfo)
     def healthz() -> HealthInfo:
         return HealthInfo(status="ok", version=__version__, default_tier=settings.default_tier)
+
+    @app.get("/v1/blobs/{digest}")
+    async def get_blob(digest: str) -> Response:
+        """Serve a stored image by content hash. Immutable (content-addressed), so
+        long-cacheable. Open by hash (unguessable content address) — see the
+        attachments plan's access-control decision."""
+        if blob_store is None:
+            raise HTTPException(status_code=404, detail="attachments disabled")
+        if not (digest.isalnum() and len(digest) == 64):  # sha256 hex — reject junk keys
+            raise HTTPException(status_code=400, detail="invalid blob id")
+        found = await run_in_threadpool(blob_store.get, digest)
+        if found is None:
+            raise HTTPException(status_code=404, detail="blob not found")
+        data, mime = found
+        return Response(content=data, media_type=mime,
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @app.get("/v1/tiers", response_model=list[TierInfo])
     def tiers() -> list[TierInfo]:

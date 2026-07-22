@@ -37,6 +37,20 @@ secrets:
                            #       on the hot path; writes invalidate; rotation picked up within TTL. 0 = off.
   audit_enabled: true      # (S-3) append a value-free audit line per secret op to trace_dir/secrets-audit.jsonl
 
+# User-attached images (composer paperclip) → content-addressed S3 blob store.
+# Same AWS wiring as secrets: LocalStack S3 in dev (compose), real S3 in prod.
+# The ONLY prod knob is the bucket name — the S3 client reads its endpoint + creds
+# from the environment (LocalStack via AWS_ENDPOINT_URL in dev; the instance IAM
+# role in prod, no keys at rest). Grant the role s3:GetObject/PutObject/HeadObject
+# on the bucket. See .claude/plans/multimodal-attachments.md.
+# attachments:
+#   enabled: true
+#   bucket: devy-blobs           # prod: your S3 bucket name
+#   max_bytes: 5000000           # per image (5 MB)
+#   max_per_turn: 6
+#   digest_enabled: true         # one-time vision description per unique image (Phase 3)
+#   digest_tier: balanced        # VISION-capable tier; quality is the durability control (deep for dense)
+
 # Admin-plane identity + roles (RBAC-1). Default is `password` mode (the existing
 # operator password → token). For production, put Devy behind an SSO edge proxy and
 # switch to `jwt`: Devy verifies the forwarded JWT against your IdP's JWKS and maps

@@ -925,11 +925,13 @@ function mcpRow(s) {
   const wrap = el("div", "acts");
   const test = el("button", "btn ghost-btn", "Test");
   test.addEventListener("click", () => testMcp(s.id, test));
+  const edit = el("button", "btn ghost-btn", "Edit");
+  edit.addEventListener("click", () => startEditMcp(s));
   const refresh = el("button", "btn ghost-btn", "Refresh");
   refresh.addEventListener("click", () => refreshMcp(s.id, refresh));
   const del = el("button", "btn ghost-btn", "Delete");
   del.addEventListener("click", () => confirmDeleteMcp(wrap, s.id));
-  wrap.append(test, refresh, del);
+  wrap.append(test, edit, refresh, del);
   actions.appendChild(wrap);
   tr.appendChild(actions);
   return tr;
@@ -975,11 +977,44 @@ function confirmDeleteMcp(wrap, id) {
   wrap.append(yes, no);
 }
 
-$("mcp-add-toggle").addEventListener("click", () => $("mcp-form").classList.toggle("hidden"));
-$("mcp-cancel").addEventListener("click", () => { $("mcp-form").reset(); hide("mcp-form"); });
+// null = create mode; a server id = editing that server in place.
+let mcpEditId = null;
+
+function mcpField(name) { return $("mcp-form").querySelector(`[name="${name}"]`); }
+
+function resetMcpForm() {
+  mcpEditId = null;
+  $("mcp-form").reset();
+  mcpField("name").readOnly = false;   // name is immutable only while editing
+  $("mcp-submit").textContent = "Save server";
+  hide("mcp-form");
+}
+
+function startEditMcp(s) {
+  mcpEditId = s.id;
+  mcpField("name").value = s.name;
+  mcpField("name").readOnly = true;    // the name is the tool prefix — not editable in place
+  mcpField("url").value = s.url || "";
+  mcpField("category").value = s.category || "";
+  mcpField("description").value = s.description || "";
+  mcpField("auth_header").value = s.auth_header || "";
+  $("mcp-allow-writes").checked = !!s.allow_writes;
+  $("mcp-submit").textContent = "Save changes";
+  show("mcp-form");
+  mcpMsg(`Editing ${s.name} — changes re-mount the server on save.`);
+  $("mcp-form").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+$("mcp-add-toggle").addEventListener("click", () => {
+  const f = $("mcp-form");
+  if (f.classList.contains("hidden")) { resetMcpForm(); show("mcp-form"); }
+  else { resetMcpForm(); }   // toggling closed also clears any edit state
+});
+$("mcp-cancel").addEventListener("click", resetMcpForm);
 
 $("mcp-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (mcpEditId) return saveMcpEdit();
   const fd = new FormData(e.target);
   const body = {};
   for (const [k, v] of fd.entries()) { const val = String(v).trim(); if (val) body[k] = val; }
@@ -997,9 +1032,36 @@ $("mcp-form").addEventListener("submit", async (e) => {
     if (d.write_tool_count) note += `, ${d.write_tool_count} write tool(s) ${d.allow_writes ? "enabled" : "flagged"}`;
     if (d.last_status !== "reachable") note += " — set its bearer token on the Secrets tab, then Refresh.";
     mcpMsg(note + ".");
-    e.target.reset(); hide("mcp-form"); renderMcp();
+    resetMcpForm(); renderMcp();
   } catch (_) { mcpMsg("Couldn't reach the proxy.", true); }
 });
+
+async function saveMcpEdit() {
+  const url = mcpField("url").value.trim();
+  if (!url) return mcpMsg("URL is required.", true);
+  // Editable fields only (not name). Empty strings clear a field; auth_header ""
+  // falls back to the default Authorization: Bearer.
+  const patch = {
+    url,
+    category: mcpField("category").value.trim(),
+    description: mcpField("description").value.trim(),
+    auth_header: mcpField("auth_header").value.trim(),
+    allow_writes: $("mcp-allow-writes").checked,
+  };
+  mcpMsg("Saving + re-mounting tools…");
+  try {
+    const r = await fetch(`/v1/admin/mcp-servers/${mcpEditId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(patch),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return mcpMsg(`Couldn't save: ${d.detail || r.status}`, true);
+    let note = `Saved ${d.name}: ${d.tool_count} tools (${d.last_status})`;
+    if (d.last_status !== "reachable") note += " — check the URL/token on the Secrets tab.";
+    mcpMsg(note + ".");
+    resetMcpForm(); renderMcp();
+  } catch (_) { mcpMsg("Couldn't reach the proxy.", true); }
+}
 
 /* ---------- sortable tables ----------
  * Click a header to sort the rows by that column (toggle asc/desc); numeric

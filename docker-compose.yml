@@ -87,16 +87,16 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # Secrets backend for DEV (Phase S-1): LocalStack emulating the AWS Secrets
-  # Manager API, so the resolve path is identical to prod (which targets real AWS
-  # SM). Community tier doesn't persist across restarts — that's fine: the proxy
-  # mirrors writes to /config/secrets-store.json and re-hydrates LocalStack on
-  # boot. PROD omits this service entirely (DEVY_MODE=prod → real AWS SM via IAM).
+  # Secrets + blob backend for DEV: LocalStack emulating AWS Secrets Manager (S-1)
+  # and S3 (attachments), so the resolve/store paths are identical to prod (real
+  # AWS SM + S3). Community tier doesn't persist across restarts — fine for secrets
+  # (the proxy mirrors + re-hydrates); attachment blobs are dev/test-ephemeral.
+  # PROD omits this service entirely (DEVY_MODE=prod → real AWS SM + S3 via IAM).
   localstack:
     image: localstack/localstack:3
     container_name: agentic-devops-localstack
     environment:
-      SERVICES: secretsmanager   # only what we use
+      SERVICES: secretsmanager,s3   # secrets + attachment blob store
       DEBUG: ${LOCALSTACK_DEBUG:-0}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"secretsmanager\": \"available\"\\|\"secretsmanager\": \"running\"'"]

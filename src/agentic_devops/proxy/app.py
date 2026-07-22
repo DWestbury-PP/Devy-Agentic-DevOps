@@ -627,9 +627,11 @@ def create_app(
         resolved = await run_in_threadpool(mcp_server_store.resolve, server_id)
         if resolved is None:
             raise HTTPException(status_code=404, detail="MCP server not found")
-        checks = await run_in_threadpool(host_mcp.list_tools, resolved.url, resolved.token)
-        status = "reachable" if checks else "unreachable"
-        return {"status": status, "checks": checks}
+        # Deep probe (credential, not just reachability) + auth_header-aware.
+        ok, detail = await run_in_threadpool(
+            _sc.probe_mcp_server, host_mcp, resolved.url, resolved.token, resolved.auth_header
+        )
+        return {"status": "reachable" if ok else "unreachable", "detail": detail}
 
     @app.post("/v1/admin/mcp-servers/{server_id}/refresh", response_model=MCPServerInfo)
     async def refresh_mcp_server(server_id: str, _: dict = Depends(require_admin)) -> MCPServerInfo:
@@ -804,8 +806,9 @@ def create_app(
                 auth_header = getattr(cfg, "auth_header", None) if cfg is not None else None
             if url is None:
                 return SecretTestResult(ok=False, detail="no MCP server bound to this secret")
-            checks = await run_in_threadpool(host_mcp.list_tools, url, value, auth_header)
-            ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
+            # Deep probe: exercise the credential with a real read call, not just
+            # tools/list — so a pass-through-auth server's bad upstream token fails.
+            ok, detail = await run_in_threadpool(_sc.probe_mcp_server, host_mcp, url, value, auth_header)
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")
         secrets.audit("test", ref, ok, actor=principal.actor, detail=detail[:120])

@@ -950,7 +950,7 @@ async function testMcp(id, btn) {
   try {
     const r = await fetch(`/v1/admin/mcp-servers/${id}/test`, { method: "POST", headers: authHeaders() });
     const d = await r.json().catch(() => ({}));
-    mcpListMsg(`Test: ${d.status || "failed"}${d.checks ? ` — ${d.checks.length} tools` : ""}`, d.status !== "reachable");
+    mcpListMsg(`Test: ${d.detail || d.status || "failed"}`, d.status !== "reachable");
   } catch (_) { mcpListMsg("Couldn't reach the proxy.", true); }
   finally { btn.disabled = false; btn.textContent = label; renderMcp(); }
 }

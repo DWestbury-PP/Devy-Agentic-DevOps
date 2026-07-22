@@ -121,7 +121,12 @@ def test_test_dispatch_for_config_mounted_mcp(tmp_path, pool, pg_url, monkeypatc
     import agentic_devops.proxy.host_mcp_client as hmc
     from agentic_devops.config import MCPServerConfig
 
-    monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, url, token, ah=None: ["disk", "memory", "cpu"])
+    # deep probe: list tools, then call the first read-only zero-arg one
+    detail = [{"name": "disk", "read_only_hint": True,
+               "input_schema": {"type": "object", "properties": {}}}]
+    monkeypatch.setattr(hmc.HostMCPClient, "list_tools_detail", lambda self, u, t, ah=None: detail)
+    monkeypatch.setattr(hmc.HostMCPClient, "call_tool",
+                        lambda self, u, t, name, args, auth_header=None: "df -h output")
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
     app = create_app(
@@ -141,8 +146,9 @@ def test_test_dispatch_for_config_mounted_mcp(tmp_path, pool, pg_url, monkeypatc
     e = {x["ref"]: x for x in c.get("/v1/admin/secrets").json()["secrets"]}["devy/mcp/host"]
     assert e["testable"] is True and "host-mcp:8780" in e["label"]
 
-    # set the bearer, then Test → probes the config-mounted server (not "no server bound")
+    # set the bearer, then Test → deep-probes the config-mounted server (not "no server bound")
     c.put("/v1/admin/secrets", json={"ref": "devy/mcp/host", "value": "sekret"})
     r = c.post("/v1/admin/secrets/test", json={"ref": "devy/mcp/host"})
     assert r.status_code == 200
-    assert r.json()["ok"] is True and "3 tools available" in r.json()["detail"]
+    body = r.json()
+    assert body["ok"] is True and "credential verified via 'disk'" in body["detail"]

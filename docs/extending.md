@@ -116,10 +116,41 @@ typed/constrained placeholders) — see
 
 Devy's incident-RCA reasoning is only as good as the data it can reach. Plug your
 observability stack in as **bring-your-own MCP servers** (a Grafana, CloudWatch,
-CloudTrail, Loki, Prometheus, … MCP) under `mcp_servers`. Once mounted, those
-tools become another data source the investigation discovers via `find_tools` and
-folds into its `correlate_timeline` chronology — no core changes. See the RCA
-walkthrough in the [README](../README.md#try-the-rca-demo).
+CloudTrail, Loki, Prometheus, … MCP). Once mounted, those tools become another
+data source the investigation discovers via `find_tools` and folds into its
+`correlate_timeline` chronology — no core changes. See the RCA walkthrough in the
+[README](../README.md#try-the-rca-demo).
+
+For a third-party server like Grafana's, prefer the **admin MCP tab** (the S-4
+registry) over `config.yaml`: it's the general registration point for external MCP
+services, mounts **read-only by default** (write tools are flagged and only
+callable if you opt in with `allow_writes`), and stores the bearer as a
+vault-mastered `secret_ref` you set on the Secrets tab.
+
+### Reference: mounting the Grafana MCP (read-only)
+
+The official [`grafana/mcp-grafana`](https://github.com/grafana/mcp-grafana) is a
+**rich, Grafana-maintained** surface (PromQL/LogQL queries, dashboards, datasources,
+alerting, Sift/incidents) — the textbook "mount, don't build" case. The bundled
+compose stack ships it as the **`grafana-mcp`** sidecar:
+
+1. **Point it at your tenant.** Set `GRAFANA_URL=https://<stack>.grafana.net` in the
+   repo-root `.env` (not a secret) and start it: `docker compose up -d grafana-mcp`.
+   It runs `-t streamable-http` with `-disable-write` (read-only at the source) and
+   holds **no token** — it's in *header-auth* mode.
+2. **Vault the service-account token.** On the admin **Secrets tab**, set
+   `devy/grafana/token` to a Grafana **service-account token** (a *Viewer*-role
+   token is enough for read-only). It's never written to `.env` or the sidecar.
+3. **Register the mount.** On the admin **MCP tab**, add a server:
+   `url: http://grafana-mcp:8000/mcp`, `secret_ref: devy/grafana/token`,
+   `allow_writes: false`. The proxy forwards the vaulted token as the request Bearer
+   and mcp-grafana uses it to reach Grafana. Test/refresh, and the `grafana_*` tools
+   join the router.
+
+Read-only is enforced three ways: `-disable-write` (server), `allow_writes=false`
+(registry), and any write tool is tagged `safety_tier=elevated` (RBAC-gated). This
+closes the one question host-side tools structurally can't answer — *is telemetry
+actually arriving in Grafana Cloud?* — plus ad-hoc PromQL/LogQL for RCA.
 
 ## Models & tiers
 

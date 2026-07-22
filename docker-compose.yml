@@ -137,6 +137,43 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Grafana MCP — the official Grafana observability MCP server (grafana/mcp-grafana),
+  # mounted as a reference read-only observability adapter. This is the "rich
+  # external suite -> MOUNT" case (vs. building native): PromQL/LogQL queries,
+  # dashboards, datasources, alerting, Sift/incidents — a large, Grafana-maintained
+  # surface that tracks upstream for free.
+  #
+  # SECRETS: the Grafana service-account TOKEN is NOT set here. mcp-grafana runs in
+  # header-auth mode (no token in env), so the proxy forwards the vault-mastered
+  # token (secret_ref `devy/grafana/token`, set on the admin Secrets tab) as the
+  # Bearer on each request and mcp-grafana uses it to reach Grafana. One credential,
+  # nothing secret in this file or the sidecar's env. Only GRAFANA_URL (your tenant,
+  # not secret) is configured — set it in the repo-root .env.
+  #
+  # READ-ONLY, doubly enforced: `-disable-write` here (server drops all create/update
+  # tools) AND the S-4 registry mounts with allow_writes=false (proxy side). Register
+  # it on the admin MCP tab pointing at http://grafana-mcp:8000/mcp — see
+  # docs/extending.md. Served on the compose network only (no host port).
+  grafana-mcp:
+    image: mcp/grafana:latest
+    container_name: agentic-devops-grafana-mcp
+    environment:
+      GRAFANA_URL: ${GRAFANA_URL:-}
+    command:
+      - "-t"
+      - "streamable-http"
+      - "-address"
+      - "0.0.0.0:8000"
+      - "-endpoint-path"
+      - "/mcp"
+      # The proxy dials us by the compose service name, so allow that Host value
+      # (the default only permits loopback variants of --address).
+      - "-allowed-hosts"
+      - "grafana-mcp:8000"
+      # Read-only: drop every create/update tool at the source.
+      - "-disable-write"
+    restart: unless-stopped
+
   # Phase 5 RCA showcase (opt-in): a "faulty" worker that exhausts its DB pool
   # and OOM crash-loops, so Devy can investigate a real running container live
   # (host MCP docker_ps/logs/inspect/stats) and cross-reference the platform

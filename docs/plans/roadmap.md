@@ -88,14 +88,16 @@ phase makes that a first-class, governed experience and ships reference adapters
 - **BYO-MCP hardening:** per-server profile/scoping, admin-UI configuration and
   health, and vetting guidance — mounting a third-party MCP is treated like adding
   a dependency.
-- **Observability MCP adapters** (reference integrations): **Grafana MCP** (beta),
-  **AWS CloudWatch / CloudTrail** (metrics, logs, and API-call correlation), and
-  **AWS auto-discovery** populating the host registry (instance-id / account /
+- **Observability MCP adapters** (reference integrations): **Grafana MCP** ✅ —
+  the official `grafana/mcp-grafana` mounted read-only via the S-4 registry (bundled
+  `grafana-mcp` compose sidecar; header-auth with a vault-mastered service-account
+  token; see [Extending → Observability](../extending.md#observability)). Still
+  ahead: **AWS CloudWatch / CloudTrail** (metrics, logs, and API-call correlation)
+  and **AWS auto-discovery** populating the host registry (instance-id / account /
   region → SSM targeting).
 
 **Unlocks:** real signal sources for RCA and proactive investigation (17).
-🏗 *Needs a Grafana tenant / AWS account — built when the project lands in a work
-environment that has them.*
+🏗 *Grafana MCP delivered against a live tenant; AWS adapters pending an account.*
 
 ## Phase 14 — DB-broker MCP (safe query plane)
 

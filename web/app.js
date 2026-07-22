@@ -5,7 +5,7 @@
  *
  * Event contract (proxy/harness.py + proxy/app.py):
  *   session {session_id} · delta {text} · tool_call {name, arguments}
- *   tools_found {names[]} · tool_result {name, ok, preview}
+ *   tools_found {names[]} · tool_result {name, ok, preview, images?: [{mime, data}]}
  *   notice {message} · done {iterations, usage, text} · error {message}
  */
 
@@ -312,6 +312,20 @@ async function send(message) {
             sum.append(chev, document.createTextNode(evt.data.ok ? "result" : "error"));
             det.append(sum, el("pre", null, evt.data.preview || ""));
             node.appendChild(det);
+            // Rendered images (e.g. a Grafana panel) shown inline, not hidden in details.
+            if (Array.isArray(evt.data.images) && evt.data.images.length) {
+              const gallery = el("div", "tool-images");
+              for (const img of evt.data.images) {
+                const im = document.createElement("img");
+                im.className = "tool-image";
+                im.loading = "lazy";
+                im.alt = `${evt.data.name} — rendered image`;
+                im.src = `data:${img.mime || "image/png"};base64,${img.data}`;
+                gallery.appendChild(im);
+              }
+              node.appendChild(gallery);
+              if (atBottom()) scroll();
+            }
           }
         } else if (evt.type === "notice") {
           // Subtle operator note (e.g. answered via a backup model) — dim, in the trail.

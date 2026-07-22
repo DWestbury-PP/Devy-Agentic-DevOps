@@ -55,6 +55,42 @@ def _parse_arguments(raw_args: Any) -> dict[str, Any]:
         return {}
 
 
+def _has_image_parts(messages: list[dict[str, Any]]) -> bool:
+    return any(
+        isinstance(m.get("content"), list)
+        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+        for m in messages
+    )
+
+
+def _messages_for_model(model: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pass messages through untouched unless they carry images AND the target
+    model can't do vision — in which case image parts are replaced with a short
+    text note so a non-vision fallback degrades gracefully instead of erroring.
+    Unknown models are assumed vision-capable (the primary here is Claude)."""
+    if not _has_image_parts(messages):
+        return messages
+    try:
+        import litellm
+
+        if litellm.supports_vision(model=model):
+            return messages
+    except Exception:  # noqa: BLE001 — offline / unknown model → keep images (primary is vision)
+        return messages
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            text = " ".join(p.get("text", "") for p in c if p.get("type") == "text").strip()
+            n_img = sum(1 for p in c if isinstance(p, dict) and p.get("type") == "image_url")
+            if n_img:
+                text = (text + f" [{n_img} image(s) omitted — this model can't view images]").strip()
+            out.append({**m, "content": text})
+        else:
+            out.append(m)
+    return out
+
+
 def _default_completion_fn(**kwargs: Any) -> Any:
     # Imported lazily so unit tests using the seam don't require litellm.
     import litellm
@@ -84,7 +120,7 @@ class ProviderClient:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": tier.model,
-            "messages": messages,
+            "messages": _messages_for_model(tier.model, messages),
             "max_tokens": tier.max_tokens,
         }
         if stream:

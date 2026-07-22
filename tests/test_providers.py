@@ -226,3 +226,30 @@ def yield_from_stream(client, events):
             result = stop.value
             break
     return result
+
+
+# -- multimodal: image parts pass through to vision models, stripped otherwise --
+def test_messages_for_model_passes_images_to_vision_and_strips_for_text():
+    from agentic_devops.proxy.providers import _has_image_parts, _messages_for_model
+
+    text_only = [{"role": "user", "content": "hello"}]
+    with_image = [{"role": "user", "content": [
+        {"type": "text", "text": "look"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ABC"}},
+    ]}]
+
+    assert _has_image_parts(with_image) is True
+    assert _has_image_parts(text_only) is False
+
+    # no images → returned untouched (identity)
+    assert _messages_for_model("gpt-3.5-turbo", text_only) is text_only
+
+    # vision model keeps the image parts (list content preserved)
+    kept = _messages_for_model("anthropic/claude-sonnet-4-6", with_image)
+    assert isinstance(kept[0]["content"], list)
+
+    # non-vision model → image parts collapsed to a text note (no data URI leaks)
+    stripped = _messages_for_model("gpt-3.5-turbo", with_image)
+    assert isinstance(stripped[0]["content"], str)
+    assert "look" in stripped[0]["content"] and "omitted" in stripped[0]["content"]
+    assert "data:image" not in stripped[0]["content"]

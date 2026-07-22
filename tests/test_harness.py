@@ -128,6 +128,58 @@ def test_tool_findings_captured_for_context_channel():
     assert f["ok"] is True
 
 
+def test_image_tool_result_renders_and_reaches_vision_model():
+    """A tool returning a ToolResult with an image: (1) the base64 stays OUT of the
+    model's text tool-result and the stored finding, (2) it reaches the model as a
+    real image message, (3) the tool_result event carries it for the UI."""
+    from agentic_devops.tools.base import ToolImage, ToolResult
+
+    router = ToolsRouter()
+    router.register(ToolSpec(
+        name="get_panel_image", category="grafana", description="render a panel",
+        when_to_use="render panel image", input_schema={"type": "object", "properties": {}},
+        handler=lambda args: ToolResult(text="", images=[ToolImage(data="BASE64PNG", mime="image/png")]),
+    ))
+
+    calls: list[list] = []
+
+    class RecordingProvider:
+        def __init__(self, responses):
+            self._r = list(responses)
+
+        def complete(self, messages, tier, tools=None):
+            calls.append([dict(m) for m in messages])  # snapshot per call
+            return self._r.pop(0)
+
+    events: list[dict] = []
+    provider = RecordingProvider([
+        ProviderResponse(tool_calls=[ToolCall(id="c1", name="get_panel_image", arguments={})]),
+        ProviderResponse(text="The panel reads 8.9%."),
+    ])
+    result = run_turn(
+        provider, router, _settings(),
+        messages=[{"role": "user", "content": "render the CPU panel"}],
+        tier=ModelTier(model="anthropic/claude-sonnet-4-6"), on_event=events.append,
+    )
+
+    # (2) an image user-message reached the model on the 2nd call
+    second = calls[1]
+    img_msgs = [m for m in second if isinstance(m.get("content"), list)
+                and any(p.get("type") == "image_url" for p in m["content"])]
+    assert img_msgs, "no image message reached the model"
+    assert img_msgs[0]["content"][-1]["image_url"]["url"] == "data:image/png;base64,BASE64PNG"
+
+    # (1) base64 is NOT in the model's tool message, nor the stored finding
+    tool_msgs = [m for m in second if m.get("role") == "tool"]
+    assert tool_msgs and all("BASE64PNG" not in (m.get("content") or "") for m in tool_msgs)
+    f = [x for x in result.tool_findings if x["tool"] == "get_panel_image"][0]
+    assert "BASE64PNG" not in f["result"] and "rendered" in f["result"].lower()
+
+    # (3) the tool_result event carries the image for the web UI
+    ev = [e for e in events if e.get("type") == "tool_result" and e["name"] == "get_panel_image"][0]
+    assert ev["images"] == [{"mime": "image/png", "data": "BASE64PNG"}]
+
+
 def test_unknown_tool_call_is_surfaced_not_fatal():
     provider = FakeProvider(
         [

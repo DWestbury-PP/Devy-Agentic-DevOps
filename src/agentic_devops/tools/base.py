@@ -6,8 +6,39 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 # Handlers are synchronous in Phase 1: they take validated arguments and return
-# a string (or anything str()-able) that becomes the tool result.
+# a string (or anything str()-able) that becomes the tool result — OR a
+# ``ToolResult`` when the tool produces images (e.g. a rendered Grafana panel).
 ToolHandler = Callable[[dict[str, Any]], Any]
+
+
+@dataclass
+class ToolImage:
+    """An image a tool produced — base64 payload + mime, never inlined into the
+    model's TEXT context (that would waste tokens and be unreadable). The harness
+    surfaces it to the UI and, for vision models, as an actual image block."""
+
+    data: str            # base64-encoded bytes
+    mime: str = "image/png"
+
+    def data_uri(self) -> str:
+        return f"data:{self.mime};base64,{self.data}"
+
+
+@dataclass
+class ToolResult:
+    """A richer tool result carrying text AND images. Handlers may return a plain
+    string (the common case) or this when there's an image to render/analyze."""
+
+    text: str
+    images: list[ToolImage] = field(default_factory=list)
+
+    def placeholder(self) -> str:
+        """Short text stand-in for storage/findings — the base64 never lands in
+        the transcript, summary, or model text context."""
+        if not self.images:
+            return self.text
+        tag = f"[rendered {len(self.images)} image(s): {', '.join(i.mime for i in self.images)}]"
+        return f"{self.text}\n{tag}".strip() if self.text else tag
 
 
 @dataclass

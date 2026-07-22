@@ -73,6 +73,7 @@ from agentic_devops.proxy.schemas import (
 )
 from agentic_devops.proxy.auth import Principal, build_authenticator, max_tier_for_roles
 from agentic_devops.proxy.documents import DocumentStore, JobStore
+from agentic_devops.proxy.attachments import AttachmentStore, DigestService
 from agentic_devops.proxy.blobs import build_blob_store
 from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
@@ -219,6 +220,8 @@ def create_app(
     # Content-addressed S3 blob store for user-attached images (None if disabled).
     # Same AWS wiring as secrets: LocalStack in dev, real S3 via IAM role in prod.
     blob_store = build_blob_store(settings)
+    # Attachment metadata (the one-time vision digest is built after the provider).
+    attachment_store = AttachmentStore(pool)
 
     # Provider/LLM keys live in the vault; hydrate them into os.environ so the
     # provider SDKs (via LiteLLM) find them. The VAULT IS AUTHORITATIVE: if the
@@ -343,6 +346,13 @@ def create_app(
             except ValueError:
                 logger.warning("web_search tool name clash, skipping")
         mem_store = _register_recall_tool(router, settings, pool)
+        if blob_store is not None:  # view_image: re-load a previously attached image on demand
+            from agentic_devops.tools.builtin.attachments import build_view_image_tool
+
+            try:
+                router.register(build_view_image_tool(blob_store))
+            except ValueError:
+                logger.warning("view_image tool name clash, skipping")
         for spec in build_host_tools(host_store, host_mcp):
             try:
                 router.register(spec)
@@ -376,6 +386,7 @@ def create_app(
         return "reachable", len(detail), write_count
 
     provider = provider or ProviderClient(request_timeout=settings.request_timeout)
+    digest_service = DigestService(attachment_store, blob_store, provider, settings)
     sessions = PgSessionStore(pool)
     tracer = get_tracer(settings)
     authenticator = build_authenticator(settings)
@@ -484,6 +495,7 @@ def create_app(
                 raise HTTPException(status_code=400,
                                     detail=f"attachment too large (max {ac.max_bytes} bytes)")
             digest = blob_store.put(raw, a.mime)
+            attachment_store.record(digest, a.mime, len(raw))
             pixels.append({"mime": a.mime, "data": a.data})
             refs.append({"type": "image_ref", "ref": digest, "mime": a.mime, "name": a.name})
         return pixels, refs
@@ -494,6 +506,19 @@ def create_app(
         if not refs:
             return message
         return [{"type": "text", "text": message}, *refs]
+
+    def _ensure_digests(session: Any) -> dict[str, Any]:
+        """One-time vision digests for the PAST images in this session's window, so
+        the model carries their description (not the pixels). Generated once per
+        image and cached; blocking (a vision call) — call via run_in_threadpool."""
+        if not digest_service.enabled:
+            return {}
+        out: dict[str, Any] = {}
+        for ref in dict.fromkeys(session.recent_image_refs()):  # unique, in order
+            d = digest_service.ensure(ref)
+            if d:
+                out[ref] = d
+        return out
 
     # ---- admin control plane (Phase 9 / RBAC-1) -------------------------------
     def require_role(role: str):
@@ -1189,8 +1214,9 @@ def create_app(
                 sessions.compact_if_needed, session, provider, tier, settings
             )
         pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
+        digests = await run_in_threadpool(_ensure_digests, session)
         messages = assemble_messages(session, req.prompt, req.context, req.system,
-                                     tz=x_client_tz, attachments=pixels)
+                                     tz=x_client_tz, attachments=pixels, digests=digests)
 
         try:
             result = await run_in_threadpool(
@@ -1244,7 +1270,9 @@ def create_app(
         session = sessions.load(req.session_id, user_id=user_id)
         await run_in_threadpool(sessions.compact_if_needed, session, provider, tier, settings)
         pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
-        messages = assemble_messages(session, req.message, req.context, tz=x_client_tz, attachments=pixels)
+        digests = await run_in_threadpool(_ensure_digests, session)
+        messages = assemble_messages(session, req.message, req.context, tz=x_client_tz,
+                                     attachments=pixels, digests=digests)
 
         async def event_stream():
             queue: asyncio.Queue = asyncio.Queue()

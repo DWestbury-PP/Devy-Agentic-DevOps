@@ -7,12 +7,23 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
+class Attachment(BaseModel):
+    """A user-attached image on a chat turn. ``data`` is base64 of the raw bytes
+    (no data-URI prefix); the server stores it in the blob store and sends the
+    pixels to a vision model for this turn only."""
+
+    mime: str
+    data: str
+    name: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     tier: Optional[str] = None
     context: Optional[str] = None  # piped stdin / page context
     user_id: Optional[str] = None  # honor-system identity (X-User-Id header also accepted)
+    attachments: list[Attachment] = Field(default_factory=list)
 
 
 class CompleteRequest(BaseModel):
@@ -23,6 +34,7 @@ class CompleteRequest(BaseModel):
     max_chars: Optional[int] = None
     session_id: Optional[str] = None
     user_id: Optional[str] = None
+    attachments: list[Attachment] = Field(default_factory=list)
 
 
 class CompleteResponse(BaseModel):

@@ -82,7 +82,12 @@ def _turn_inputs(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """The user's prompt for the turn's root span (last message in the assembled list)."""
     for m in reversed(messages):
         if m.get("role") == "user":
-            return {"input": m.get("content") or ""}
+            content = m.get("content") or ""
+            if isinstance(content, list):  # multimodal turn → text parts + image count
+                texts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+                n_img = sum(1 for p in content if isinstance(p, dict) and p.get("type") == "image_url")
+                content = " ".join(t for t in texts if t) + (f" [+{n_img} image(s)]" if n_img else "")
+            return {"input": content}
     return {}
 
 

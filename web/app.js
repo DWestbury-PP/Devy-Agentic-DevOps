@@ -13,6 +13,9 @@ const screen = document.getElementById("screen");
 const input = document.getElementById("input");
 const composer = document.getElementById("composer");
 const sendBtn = document.getElementById("send-btn");
+const attachBtn = document.getElementById("attach-btn");
+const attachInput = document.getElementById("attach-input");
+const attachChips = document.getElementById("attach-chips");
 const tierSelect = document.getElementById("tier-select");
 const statusDot = document.getElementById("status-dot");
 const connLabel = document.getElementById("conn-label");
@@ -83,6 +86,7 @@ const ICON_PATHS = {
   globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   chevron: '<path d="m9 18 6-6-6-6"/>',
+  paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
 };
 function icon(name) {
   const ns = "http://www.w3.org/2000/svg";
@@ -204,8 +208,9 @@ function addCopy(msgEl, getText) {
 function renderMessage(role, content) {
   if (role === "user") {
     const u = msg("user", "you");
-    u.body.textContent = content;
-    addCopy(u.el, () => content);
+    const { text, images } = splitStoredContent(content);
+    renderUserBody(u.body, text, images);
+    addCopy(u.el, () => contentToMarkdown(content));
   } else {
     const d = msg("devy", "Devy");
     const answer = el("div", "answer");
@@ -215,9 +220,10 @@ function renderMessage(role, content) {
   }
 }
 
-function startTurn(promptText) {
+function startTurn(promptText, attachments = []) {
   const u = msg("user", "you");
-  u.body.textContent = promptText;
+  const imgs = attachments.map((a) => ({ src: `data:${a.mime};base64,${a.data}`, name: a.name }));
+  renderUserBody(u.body, promptText, imgs);
   addCopy(u.el, () => promptText);
   state.transcript.push({ role: "user", content: promptText });
   const turn = msg("devy", "Devy");
@@ -250,17 +256,20 @@ function addTool(ctx, name, detail) {
 }
 
 /* ---------- the stream ---------- */
-async function send(message) {
+async function send(message, attachments = []) {
   if (state.busy) return;
   setBusy(true);
-  const ctx = startTurn(message);
+  const ctx = startTurn(message, attachments);
   let liveText = "";
 
   try {
     const resp = await fetch("/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ message, session_id: state.sessionId, tier: state.tier || undefined }),
+      body: JSON.stringify({
+        message, session_id: state.sessionId, tier: state.tier || undefined,
+        attachments: attachments.length ? attachments : undefined,
+      }),
     });
     if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
     setStatus("ok");
@@ -476,16 +485,91 @@ async function handleCommand(line) {
   }
 }
 
+/* ---------- image attachments ---------- */
+// pending = [{mime, data(base64, no prefix), name}] — the current composer's images.
+let pendingAttachments = [];
+const MAX_ATTACH = 6;
+
+attachBtn.appendChild(icon("paperclip"));
+attachBtn.addEventListener("click", () => attachInput.click());
+attachInput.addEventListener("change", () => { addFiles(attachInput.files); attachInput.value = ""; });
+// paste an image straight into the composer
+input.addEventListener("paste", (e) => {
+  const imgs = [...(e.clipboardData?.items || [])].filter((it) => it.type.startsWith("image/"));
+  if (imgs.length) { e.preventDefault(); addFiles(imgs.map((it) => it.getAsFile()).filter(Boolean)); }
+});
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1]);  // strip the data: URI prefix
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+async function addFiles(files) {
+  for (const f of files) {
+    if (!f || !f.type.startsWith("image/")) continue;
+    if (pendingAttachments.length >= MAX_ATTACH) { setStatus("err", `max ${MAX_ATTACH} images`); break; }
+    try { pendingAttachments.push({ mime: f.type, data: await fileToBase64(f), name: f.name || "image" }); }
+    catch (_) { /* skip unreadable file */ }
+  }
+  renderChips();
+}
+function renderChips() {
+  attachChips.innerHTML = "";
+  attachChips.style.display = pendingAttachments.length ? "flex" : "none";
+  pendingAttachments.forEach((a, i) => {
+    const chip = el("div", "attach-chip");
+    const img = document.createElement("img");
+    img.src = `data:${a.mime};base64,${a.data}`;
+    img.alt = a.name;
+    const x = el("button", "attach-x"); x.type = "button"; x.textContent = "×";
+    x.title = "remove"; x.addEventListener("click", () => { pendingAttachments.splice(i, 1); renderChips(); });
+    chip.append(img, x);
+    attachChips.appendChild(chip);
+  });
+}
+
+/* Render a user turn's body: text + any image thumbnails. `images` = [{src, name}]. */
+function renderUserBody(bodyEl, text, images) {
+  bodyEl.textContent = "";
+  if (text) { const t = el("div", "msg-text"); t.textContent = text; bodyEl.appendChild(t); }
+  if (images && images.length) {
+    const gal = el("div", "msg-images");
+    images.forEach((im) => {
+      const i = document.createElement("img");
+      i.className = "msg-image"; i.loading = "lazy"; i.src = im.src; i.alt = im.name || "attachment";
+      gal.appendChild(i);
+    });
+    bodyEl.appendChild(gal);
+  }
+}
+// Stored list-content (text + image_ref parts) → {text, images:[{src,name}]} for history render.
+function splitStoredContent(content) {
+  if (!Array.isArray(content)) return { text: content || "", images: [] };
+  const text = content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+  const images = content.filter((p) => p.type === "image_ref")
+    .map((p) => ({ src: `/v1/blobs/${p.ref}`, name: p.name }));
+  return { text, images };
+}
+function contentToMarkdown(content) {
+  const { text, images } = splitStoredContent(content);
+  const imgMd = images.map((im) => `![${im.name || "image"}](${im.src})`).join("\n");
+  return [text, imgMd].filter(Boolean).join("\n\n");
+}
+
 /* ---------- input handling ---------- */
 function submit() {
   const text = input.value.trim();
-  if (!text || state.busy) return;
+  if ((!text && !pendingAttachments.length) || state.busy) return;
   input.value = "";
   autosize();
-  state.history.push(text);
-  state.histIdx = state.history.length;
-  if (text.startsWith("/")) { handleCommand(text); return; }
-  send(text);
+  if (text) { state.history.push(text); state.histIdx = state.history.length; }
+  if (text.startsWith("/")) { handleCommand(text); return; }  // commands don't carry images
+  const atts = pendingAttachments;
+  pendingAttachments = []; renderChips();
+  send(text, atts);
 }
 function autosize() {
   input.style.height = "auto";
@@ -630,7 +714,8 @@ async function loadConversation(id) {
 
 async function copyConversation() {
   const md = state.transcript
-    .map((m) => (m.role === "user" ? "**You:**\n\n" : "**Devy:**\n\n") + (m.content || ""))
+    .map((m) => (m.role === "user" ? "**You:**\n\n" : "**Devy:**\n\n") +
+      (m.role === "user" ? contentToMarkdown(m.content) : (m.content || "")))
     .join("\n\n---\n\n");
   if (!md) { note("Nothing to copy yet."); return; }
   try {

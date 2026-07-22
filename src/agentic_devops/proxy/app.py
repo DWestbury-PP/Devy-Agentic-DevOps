@@ -13,6 +13,8 @@ these endpoints:
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -455,6 +457,43 @@ def create_app(
             return settings.resolve_tier(name)
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _ingest_attachments(attachments: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Validate + store the turn's images. Returns ``(pixels, refs)``: pixels
+        (``{mime, data}``) go to the vision model for THIS turn; refs
+        (``{type:image_ref, ref, mime, name}``) are stored in the display
+        transcript (the blob hash, never base64). Raises 400 on bad input.
+        Blocking (S3) — call via run_in_threadpool."""
+        if not attachments:
+            return [], []
+        if blob_store is None:
+            raise HTTPException(status_code=400, detail="image attachments are disabled")
+        ac = settings.attachments
+        if len(attachments) > ac.max_per_turn:
+            raise HTTPException(status_code=400, detail=f"too many attachments (max {ac.max_per_turn})")
+        pixels: list[dict[str, Any]] = []
+        refs: list[dict[str, Any]] = []
+        for a in attachments:
+            if a.mime not in ac.allowed_mime:
+                raise HTTPException(status_code=400, detail=f"unsupported image type {a.mime!r}")
+            try:
+                raw = base64.b64decode(a.data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="attachment is not valid base64") from exc
+            if len(raw) > ac.max_bytes:
+                raise HTTPException(status_code=400,
+                                    detail=f"attachment too large (max {ac.max_bytes} bytes)")
+            digest = blob_store.put(raw, a.mime)
+            pixels.append({"mime": a.mime, "data": a.data})
+            refs.append({"type": "image_ref", "ref": digest, "mime": a.mime, "name": a.name})
+        return pixels, refs
+
+    def _stored_user_content(message: str, refs: list[dict[str, Any]]) -> Any:
+        """The user turn as stored in the display transcript: a plain string, or a
+        text+image_ref parts list when the turn carried attachments."""
+        if not refs:
+            return message
+        return [{"type": "text", "text": message}, *refs]
 
     # ---- admin control plane (Phase 9 / RBAC-1) -------------------------------
     def require_role(role: str):
@@ -1149,7 +1188,9 @@ def create_app(
             await run_in_threadpool(
                 sessions.compact_if_needed, session, provider, tier, settings
             )
-        messages = assemble_messages(session, req.prompt, req.context, req.system, tz=x_client_tz)
+        pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
+        messages = assemble_messages(session, req.prompt, req.context, req.system,
+                                     tz=x_client_tz, attachments=pixels)
 
         try:
             result = await run_in_threadpool(
@@ -1171,7 +1212,7 @@ def create_app(
             text = text[: req.max_chars].rstrip() + "…"
 
         if req.session_id:
-            session.add_user(req.prompt)
+            session.add_user(_stored_user_content(req.prompt, refs))
             session.add_assistant(result.text)
             session.add_findings(result.tool_findings, settings.tool_finding_max_chars)
             if not session.title and len(session.messages) >= 2:
@@ -1202,7 +1243,8 @@ def create_app(
         allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         await run_in_threadpool(sessions.compact_if_needed, session, provider, tier, settings)
-        messages = assemble_messages(session, req.message, req.context, tz=x_client_tz)
+        pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
+        messages = assemble_messages(session, req.message, req.context, tz=x_client_tz, attachments=pixels)
 
         async def event_stream():
             queue: asyncio.Queue = asyncio.Queue()
@@ -1246,7 +1288,7 @@ def create_app(
 
             result = result_holder.get("result")
             if result is not None:
-                session.add_user(req.message)
+                session.add_user(_stored_user_content(req.message, refs))
                 session.add_assistant(result.text)
                 session.add_findings(result.tool_findings, settings.tool_finding_max_chars)
                 if not session.title and len(session.messages) >= 2:

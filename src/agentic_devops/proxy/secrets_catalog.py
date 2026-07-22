@@ -16,7 +16,7 @@ authenticated call per service that reveals nothing. They distinguish invalid
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 
@@ -182,3 +182,47 @@ def probe_github(client: Any, value: str) -> tuple[bool, str]:
         return True, f"authenticated as {user.get('login', '?')}"
     except Exception as exc:  # noqa: BLE001
         return False, f"invalid: {exc}"
+
+
+# Auth-failure markers to look for in a probe tool's output. A *pass-through-auth*
+# MCP server (e.g. the Grafana MCP, which forwards the token to Grafana) accepts
+# the MCP handshake + lists tools even with a bad UPSTREAM token — so tools/list
+# alone can't validate the credential. These catch the auth error a real call
+# surfaces instead.
+_AUTH_FAIL_MARKERS = (
+    "401", "403", "unauthorized", "forbidden", "invalid api key", "invalid token",
+    "authentication failed", "permission denied", "not authorized", "invalid credentials",
+)
+
+
+def _pick_probe_tool(detail: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """A read-only, zero-required-arg tool to exercise the credential — preferring
+    an obvious list/get/health verb, else any safe read tool."""
+    from agentic_devops.tools.mcp_source import _is_write
+
+    def safe(t: dict[str, Any]) -> bool:
+        return not _is_write(t) and not ((t.get("input_schema") or {}).get("required"))
+
+    candidates = [t for t in detail if safe(t)]
+    verbs = ("list", "get", "search", "describe", "health", "ping", "whoami", "status")
+    preferred = next((t for t in candidates if any(v in (t.get("name") or "").lower() for v in verbs)), None)
+    return preferred or (candidates[0] if candidates else None)
+
+
+def probe_mcp_server(caller: Any, url: str, token: Optional[str],
+                     auth_header: Optional[str] = None) -> tuple[bool, str]:
+    """Validate an MCP server's CREDENTIAL, not just reachability. After the
+    tools/list handshake, invoke one read-only zero-arg tool and fail if it comes
+    back with an auth error — catching the pass-through-auth case (a valid MCP
+    session but a rejected upstream token) that tools/list silently passes."""
+    detail = caller.list_tools_detail(url, token, auth_header)
+    if not detail:
+        return False, "unreachable"
+    n = len(detail)
+    probe = _pick_probe_tool(detail)
+    if probe is None:
+        return True, f"reachable · {n} tools (handshake ok; no zero-arg read tool to verify the credential)"
+    result = caller.call_tool(url, token, probe["name"], {}, auth_header=auth_header) or ""
+    if any(m in result.lower() for m in _AUTH_FAIL_MARKERS):
+        return False, f"handshake ok, but '{probe['name']}' returned an auth error — check the token / its permissions"
+    return True, f"reachable · {n} tools · credential verified via '{probe['name']}'"

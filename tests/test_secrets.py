@@ -177,3 +177,50 @@ def test_config_mount_refs_and_catalog_entry():
     # the label names the endpoint so the admin knows WHICH MCP this bearer is for
     assert "config-mounted" in e["label"]
     assert "host.docker.internal:8781" in e["label"]
+
+
+# -- deep MCP credential probe (catches pass-through-auth failures) -------------
+def test_probe_mcp_server_verifies_credential_with_a_real_call():
+    from agentic_devops.proxy.secrets_catalog import probe_mcp_server
+
+    detail = [
+        {"name": "list_datasources", "read_only_hint": True,
+         "input_schema": {"type": "object", "properties": {}}},
+        {"name": "create_dashboard", "read_only_hint": False, "input_schema": {}},
+        {"name": "get_dashboard", "read_only_hint": True,
+         "input_schema": {"type": "object", "required": ["uid"], "properties": {"uid": {}}}},
+    ]
+
+    class Caller:
+        def __init__(self, reply):
+            self.reply = reply
+            self.called = None
+
+        def list_tools_detail(self, url, token, auth_header=None):
+            self.seen_ah = auth_header
+            return detail
+
+        def call_tool(self, url, token, name, args, auth_header=None):
+            self.called = (name, auth_header)
+            return self.reply
+
+    # good token → picks the read-verb, zero-arg tool (not the write, not the one
+    # needing `uid`) and reports verification; auth_header threaded through
+    good = Caller("datasources: [prom, loki]")
+    ok, detail_msg = probe_mcp_server(good, "http://x", "tok", "X-Grafana-Api-Key")
+    assert ok is True and "credential verified via 'list_datasources'" in detail_msg
+    assert good.called == ("list_datasources", "X-Grafana-Api-Key")
+    assert good.seen_ah == "X-Grafana-Api-Key"
+
+    # pass-through-auth failure: tools/list succeeded but the real call 401s → FAIL
+    bad = Caller("ERROR: list datasources: [GET /datasources][401] Unauthorized")
+    ok, detail_msg = probe_mcp_server(bad, "http://x", "bad-tok")
+    assert ok is False and "auth error" in detail_msg
+
+    # unreachable server → no tools
+    class Dead:
+        def list_tools_detail(self, url, token, auth_header=None):
+            return []
+
+    ok, detail_msg = probe_mcp_server(Dead(), "http://x", "tok")
+    assert ok is False and detail_msg == "unreachable"

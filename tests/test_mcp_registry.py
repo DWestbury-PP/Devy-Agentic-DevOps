@@ -140,6 +140,9 @@ def _stub_mcp(monkeypatch):
     ]
     monkeypatch.setattr(hmc.HostMCPClient, "list_tools_detail", lambda self, u, t, ah=None: detail)
     monkeypatch.setattr(hmc.HostMCPClient, "list_tools", lambda self, u, t, ah=None: ["query", "delete_x"])
+    # the /test endpoint now deep-probes: it calls the first read-only zero-arg tool
+    monkeypatch.setattr(hmc.HostMCPClient, "call_tool",
+                        lambda self, u, t, name, args, auth_header=None: "probe ok")
 
 
 def test_endpoints_gated(client):

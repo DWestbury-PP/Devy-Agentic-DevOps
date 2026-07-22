@@ -276,6 +276,13 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
 .err { color: var(--red); }
 .notice { color: var(--fg-faint); font-size: 11px; margin-top: 6px; font-style: italic; }
 
+/* Images a tool rendered (e.g. a Grafana panel) — shown inline in the tool trail. */
+.tool-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.tool-image {
+  max-width: 100%; height: auto; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg-soft);
+}
+
 /* system / welcome note */
 .note { color: var(--fg-dim); margin: 0 auto 18px; white-space: pre-wrap; }
 .note.welcome {

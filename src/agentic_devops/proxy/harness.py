@@ -19,6 +19,7 @@ from agentic_devops.config import ModelTier, Settings
 from agentic_devops.proxy.auth import tier_allows
 from agentic_devops.proxy.providers import ProviderClient, ProviderResponse
 from agentic_devops.proxy.tracing import NOOP_SPAN, Span, Tracer
+from agentic_devops.tools.base import ToolImage, ToolResult
 from agentic_devops.tools.router import FIND_TOOLS_NAME, ToolNotFoundError, ToolsRouter
 
 EventCallback = Callable[[dict[str, Any]], None]
@@ -85,6 +86,18 @@ def _turn_inputs(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
+def _image_message(images: list[ToolImage]) -> dict[str, Any]:
+    """A user-role multimodal message carrying rendered images for a vision model
+    (portable ``image_url`` data-URI parts — LiteLLM maps these per provider)."""
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": "Rendered image(s) from the tool call above — "
+         "shown to the user and provided here for your visual analysis."}
+    ]
+    for im in images:
+        content.append({"type": "image_url", "image_url": {"url": im.data_uri()}})
+    return {"role": "user", "content": content}
+
+
 def _process_tool_calls(
     response: ProviderResponse,
     router: ToolsRouter,
@@ -104,6 +117,7 @@ def _process_tool_calls(
     messages: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
+    collected_images: list[ToolImage] = []
 
     for tc in response.tool_calls:
         events.append({"type": "tool_call", "name": tc.name, "arguments": tc.arguments})
@@ -138,8 +152,17 @@ def _process_tool_calls(
                     events.append({"type": "tool_denied", "name": tc.name, "required": _spec.safety_tier})
                     span.outputs(ok=False, meta={"tool": tc.name, "denied": _spec.safety_tier})
                 else:
+                    tc_images: list[ToolImage] = []
                     try:
-                        content = str(router.execute(tc.name, tc.arguments, context=tool_context))
+                        raw = router.execute(tc.name, tc.arguments, context=tool_context)
+                        if isinstance(raw, ToolResult):
+                            # base64 stays OUT of the model's text context + findings;
+                            # the image goes to the UI and (for vision models) as an
+                            # image message injected after the tool results.
+                            content = raw.placeholder()
+                            tc_images = raw.images
+                        else:
+                            content = str(raw)
                         ok = True
                     except ToolNotFoundError:
                         content = (
@@ -150,9 +173,11 @@ def _process_tool_calls(
                     except Exception as exc:  # surface tool failures to the model, don't crash
                         content = f"ERROR: tool {tc.name!r} failed: {exc}"
                         ok = False
-                    events.append(
-                        {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
-                    )
+                    event = {"type": "tool_result", "name": tc.name, "ok": ok, "preview": content[:_PREVIEW_CHARS]}
+                    if tc_images:
+                        event["images"] = [{"mime": im.mime, "data": im.data} for im in tc_images]
+                        collected_images.extend(tc_images)
+                    events.append(event)
                     findings.append(
                         {
                             "tool": tc.name,
@@ -161,11 +186,17 @@ def _process_tool_calls(
                             "ok": ok,
                         }
                     )
-                    span.outputs({"result": content}, ok=ok, meta={"tool": tc.name})
+                    span.outputs({"result": content}, ok=ok, meta={"tool": tc.name, "images": len(tc_images)})
 
         messages.append(
             {"role": "tool", "tool_call_id": tc.id, "name": tc.name, "content": content}
         )
+
+    # Vision hand-off: append the rendered image(s) as a user image message so a
+    # vision model can actually SEE them. Context-channel only (never persisted to
+    # the display transcript); the provider strips it for a non-vision fallback.
+    if collected_images:
+        messages.append(_image_message(collected_images))
 
     return messages, events, findings
 

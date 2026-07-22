@@ -154,6 +154,14 @@ Read-only is enforced three ways: `-disable-write` (server), `allow_writes=false
 closes the one question host-side tools structurally can't answer — *is telemetry
 actually arriving in Grafana Cloud?* — plus ad-hoc PromQL/LogQL for RCA.
 
+**Rendered images.** Any MCP tool that returns image content (e.g. Grafana's
+`get_panel_image`, which renders a panel/dashboard as PNG) is handled end-to-end:
+the image is shown inline in the web chat **and** passed to the model as a real
+image block, so a vision model can read the panel — not just link to it. The base64
+never enters the model's text context, the stored transcript, or the rolling
+summary (a `[rendered image]` placeholder stands in there); a non-vision fallback
+model degrades to that placeholder automatically.
+
 ## Models & tiers
 
 Users pick a **tier** (`fast` / `balanced` / `deep`); the operator maps each tier

@@ -32,14 +32,31 @@ def _sanitize(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "_-") else "_" for c in name)
 
 
-def _render_result(result: Any) -> str:
+def _render_result(result: Any) -> Any:
+    """Render an MCP tool result. Text-only results return a ``str`` (the common
+    case); a result carrying image content returns a ``ToolResult`` so the base64
+    is handed off for rendering/vision instead of being stringified into the
+    model's text context (unreadable + 10s of KB of token waste)."""
+    from agentic_devops.tools.base import ToolImage, ToolResult
+
     parts: list[str] = []
+    images: list[ToolImage] = []
     for block in getattr(result, "content", None) or []:
         text = getattr(block, "text", None)
-        parts.append(text if text is not None else str(block))
+        if text is not None:
+            parts.append(text)
+            continue
+        # MCP ImageContent: type == "image", base64 in .data, mime in .mimeType
+        data = getattr(block, "data", None)
+        if getattr(block, "type", None) == "image" and data:
+            images.append(ToolImage(data=data, mime=getattr(block, "mimeType", None) or "image/png"))
+        else:
+            parts.append(str(block))
     body = "\n".join(parts).strip()
     if getattr(result, "isError", False):
         return f"ERROR: {body}" if body else "ERROR: MCP tool call failed"
+    if images:
+        return ToolResult(text=body, images=images)
     return body
 
 

@@ -162,9 +162,12 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     last_status      TEXT,                   -- reachable | unreachable | unknown
     tool_count       INTEGER NOT NULL DEFAULT 0,
     write_tool_count INTEGER NOT NULL DEFAULT 0,  -- mutating tools seen (flagged)
+    auth_header      TEXT,                   -- non-standard auth header name e.g. X-Grafana-Api-Key (NULL means Authorization Bearer)
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Backfill for DBs created before auth_header existed (idempotent no-op on fresh).
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS auth_header TEXT;
 
 -- GitHub connector (Phase D-1): registered GitHub credentials Devy can use to
 -- discover + read repos (read-only). Credential-centric: one read-only PAT sees

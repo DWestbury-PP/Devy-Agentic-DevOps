@@ -143,9 +143,11 @@ compose stack ships it as the **`grafana-mcp`** sidecar:
    token is enough for read-only). It's never written to `.env` or the sidecar.
 3. **Register the mount.** On the admin **MCP tab**, add a server:
    `url: http://grafana-mcp:8000/mcp`, `secret_ref: devy/grafana/token`,
-   `allow_writes: false`. The proxy forwards the vaulted token as the request Bearer
-   and mcp-grafana uses it to reach Grafana. Test/refresh, and the `grafana_*` tools
-   join the router.
+   `allow_writes: false`, and **Auth header: `X-Grafana-Api-Key`** — mcp-grafana
+   reads the Grafana service-account token from that header, not `Authorization:
+   Bearer` (leave Auth header blank for servers that use the standard Bearer). The
+   proxy forwards the vaulted token in that header and mcp-grafana uses it to reach
+   Grafana. Test/refresh, and the `grafana_*` tools join the router.
 
 Read-only is enforced three ways: `-disable-write` (server), `allow_writes=false`
 (registry), and any write tool is tagged `safety_tier=elevated` (RBAC-gated). This

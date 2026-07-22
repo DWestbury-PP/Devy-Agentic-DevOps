@@ -287,6 +287,7 @@ class MCPServerCreate(BaseModel):
     allow_writes: bool = False             # opt-in to register mutating tools
     enabled: bool = True
     secret_ref: Optional[str] = None       # override the manager name for the bearer token
+    auth_header: Optional[str] = None      # non-standard auth header (e.g. X-Grafana-Api-Key); default Authorization: Bearer
 
 
 class MCPServerUpdate(BaseModel):
@@ -295,6 +296,7 @@ class MCPServerUpdate(BaseModel):
     description: Optional[str] = None
     allow_writes: Optional[bool] = None
     enabled: Optional[bool] = None
+    auth_header: Optional[str] = None
 
 
 class MCPServerInfo(BaseModel):
@@ -309,6 +311,7 @@ class MCPServerInfo(BaseModel):
     last_status: Optional[str] = None
     tool_count: int = 0
     write_tool_count: int = 0
+    auth_header: Optional[str] = None
     has_token: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

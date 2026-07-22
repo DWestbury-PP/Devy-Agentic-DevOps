@@ -19,6 +19,18 @@ _CALL_TIMEOUT = 45
 _LIST_TIMEOUT = 20
 
 
+def _auth_headers(token: Optional[str], auth_header: Optional[str] = None) -> Optional[dict[str, str]]:
+    """Build the auth headers for an MCP endpoint. By default the token goes in
+    ``Authorization: Bearer <token>``; a server that wants a non-standard header
+    (e.g. the Grafana MCP's ``X-Grafana-Api-Key``) sets ``auth_header`` and the raw
+    token is sent under that name instead."""
+    if not token:
+        return None
+    if auth_header:
+        return {auth_header: token}
+    return {"Authorization": f"Bearer {token}"}
+
+
 class HostMCPClient:
     def __init__(self) -> None:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -37,23 +49,27 @@ class HostMCPClient:
         return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
 
     # -- public (sync) API --------------------------------------------------
-    def call_tool(self, url: str, token: Optional[str], name: str, args: dict[str, Any]) -> str:
+    # ``auth_header`` (optional) forwards the token in a non-standard header (e.g.
+    # the Grafana MCP's X-Grafana-Api-Key); default is Authorization: Bearer.
+    def call_tool(self, url: str, token: Optional[str], name: str, args: dict[str, Any],
+                  auth_header: Optional[str] = None) -> str:
         try:
-            return self._run(self._call(url, token, name, args or {}), _CALL_TIMEOUT + 10)
+            return self._run(self._call(url, token, name, args or {}, auth_header), _CALL_TIMEOUT + 10)
         except Exception as exc:  # noqa: BLE001 — connection/timeout failures → readable error
             return f"ERROR: host check {name!r} could not run ({exc})"
 
-    def list_tools(self, url: str, token: Optional[str]) -> list[str]:
+    def list_tools(self, url: str, token: Optional[str], auth_header: Optional[str] = None) -> list[str]:
         try:
-            return self._run(self._list(url, token), _LIST_TIMEOUT + 5)
+            return self._run(self._list(url, token, auth_header), _LIST_TIMEOUT + 5)
         except Exception:  # noqa: BLE001
             return []
 
-    def list_tools_detail(self, url: str, token: Optional[str]) -> list[dict[str, Any]]:
+    def list_tools_detail(self, url: str, token: Optional[str],
+                          auth_header: Optional[str] = None) -> list[dict[str, Any]]:
         """Full tool schemas (name/description/input_schema/annotations) — used by
         the MCP Servers registry to normalize a server's tools into ToolSpecs."""
         try:
-            return self._run(self._list_detail(url, token), _LIST_TIMEOUT + 5)
+            return self._run(self._list_detail(url, token, auth_header), _LIST_TIMEOUT + 5)
         except Exception:  # noqa: BLE001
             return []
 
@@ -61,33 +77,35 @@ class HostMCPClient:
     # The session is opened AND closed inline within one coroutine (one task) —
     # a generator + early-return would close the anyio cancel scope in a
     # different task ("Attempted to exit cancel scope in a different task").
-    async def _call(self, url: str, token: Optional[str], name: str, args: dict[str, Any]) -> str:
+    async def _call(self, url: str, token: Optional[str], name: str, args: dict[str, Any],
+                    auth_header: Optional[str] = None) -> str:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
-        headers = {"Authorization": f"Bearer {token}"} if token else None
+        headers = _auth_headers(token, auth_header)
         async with streamablehttp_client(url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await asyncio.wait_for(session.call_tool(name, args), _CALL_TIMEOUT)
                 return _render_result(result)
 
-    async def _list(self, url: str, token: Optional[str]) -> list[str]:
+    async def _list(self, url: str, token: Optional[str], auth_header: Optional[str] = None) -> list[str]:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
-        headers = {"Authorization": f"Bearer {token}"} if token else None
+        headers = _auth_headers(token, auth_header)
         async with streamablehttp_client(url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await asyncio.wait_for(session.list_tools(), _LIST_TIMEOUT)
                 return [t.name for t in tools.tools]
 
-    async def _list_detail(self, url: str, token: Optional[str]) -> list[dict[str, Any]]:
+    async def _list_detail(self, url: str, token: Optional[str],
+                           auth_header: Optional[str] = None) -> list[dict[str, Any]]:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
-        headers = {"Authorization": f"Bearer {token}"} if token else None
+        headers = _auth_headers(token, auth_header)
         async with streamablehttp_client(url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()

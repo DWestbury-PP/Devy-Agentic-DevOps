@@ -145,8 +145,10 @@ services:
   #
   # SECRETS: the Grafana service-account TOKEN is NOT set here. mcp-grafana runs in
   # header-auth mode (no token in env), so the proxy forwards the vault-mastered
-  # token (secret_ref `devy/grafana/token`, set on the admin Secrets tab) as the
-  # Bearer on each request and mcp-grafana uses it to reach Grafana. One credential,
+  # token (secret_ref `devy/grafana/token`, set on the admin Secrets tab) on each
+  # request and mcp-grafana uses it to reach Grafana. NOTE: mcp-grafana reads the
+  # token from the `X-Grafana-Api-Key` header, NOT `Authorization: Bearer` — so the
+  # MCP registry row must set Auth header = X-Grafana-Api-Key. One credential,
   # nothing secret in this file or the sidecar's env. Only GRAFANA_URL (your tenant,
   # not secret) is configured — set it in the repo-root .env.
   #

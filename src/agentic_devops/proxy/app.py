@@ -360,7 +360,7 @@ def create_app(
         resolved = mcp_server_store.resolve(server.id)
         if resolved is None:
             return "unknown", 0, 0
-        detail = host_mcp.list_tools_detail(resolved.url, resolved.token)
+        detail = host_mcp.list_tools_detail(resolved.url, resolved.token, resolved.auth_header)
         if not detail:
             return "unreachable", 0, 0
         specs, write_count = build_server_tools(server, detail, store=mcp_server_store, caller=host_mcp)
@@ -796,12 +796,15 @@ def create_app(
             # one (settings.mcp_servers) — that bearer is set here too, so it must be
             # testable rather than reporting "no server bound".
             server = next((m for m in mcp_server_store.list() if m.secret_ref == ref), None)
-            url = server.url if server is not None else next(
-                (s.url for s in settings.mcp_servers if getattr(s, "secret_ref", None) == ref), None
-            )
+            if server is not None:
+                url, auth_header = server.url, server.auth_header
+            else:
+                cfg = next((s for s in settings.mcp_servers if getattr(s, "secret_ref", None) == ref), None)
+                url = cfg.url if cfg is not None else None
+                auth_header = getattr(cfg, "auth_header", None) if cfg is not None else None
             if url is None:
                 return SecretTestResult(ok=False, detail="no MCP server bound to this secret")
-            checks = await run_in_threadpool(host_mcp.list_tools, url, value)
+            checks = await run_in_threadpool(host_mcp.list_tools, url, value, auth_header)
             ok, detail = (bool(checks), f"{len(checks)} tools available" if checks else "unreachable")
         else:
             return SecretTestResult(ok=False, detail="unknown secret category")

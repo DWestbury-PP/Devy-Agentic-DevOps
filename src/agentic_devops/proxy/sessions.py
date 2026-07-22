@@ -73,6 +73,25 @@ TOOL EVIDENCE:
 """
 
 
+def _flatten_content(content: Any) -> str:
+    """Collapse a structured (multimodal) message content to plain text for the
+    context channel: text parts are kept; an ``image_ref`` part becomes a short
+    ``[image: name]`` placeholder — its pixels are NOT re-sent. A plain string
+    passes through unchanged."""
+    if not isinstance(content, list):
+        return content or ""
+    parts: list[str] = []
+    for p in content:
+        if not isinstance(p, dict):
+            parts.append(str(p))
+        elif p.get("type") == "text":
+            parts.append(p.get("text", ""))
+        elif p.get("type") == "image_ref":
+            name = p.get("name") or "image"
+            parts.append(f"[image the user attached earlier: {name}]")
+    return "\n".join(x for x in parts if x).strip()
+
+
 def render_summary_state(state: dict[str, Any]) -> str:
     """Render the structured summary into a readable block for the system prompt."""
     if not state:
@@ -117,7 +136,11 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
-    def add_user(self, content: str) -> None:
+    def add_user(self, content: Any) -> None:
+        """Store a user turn. ``content`` is a plain string, or a list of parts
+        ``[{type:"text",...}, {type:"image_ref", ref, mime, name}]`` when the turn
+        carried attachments — the display transcript keeps the image *reference*
+        (the blob hash), never the base64."""
         self.messages.append({"role": "user", "content": content, "ts": time.time()})
 
     def add_assistant(self, content: str) -> None:
@@ -153,9 +176,13 @@ class Session:
                 {"role": "system", "content": f"Summary of earlier conversation:\n{summary_text}"}
             )
         # Strip the per-message ``ts`` (a display-channel annotation, see add_user)
-        # so the provider only ever sees role/content — never an unknown key.
+        # so the provider only ever sees role/content — never an unknown key. Also
+        # FLATTEN any image-carrying turn to text (image_ref → "[image]" placeholder):
+        # a PAST image is never re-sent as pixels — that's the "process once"
+        # invariant (only the current turn inlines pixels; see assemble_messages).
+        # Phase 3 replaces the placeholder with the image's cached digest.
         ctx.extend(
-            {k: v for k, v in m.items() if k != "ts"}
+            {"role": m["role"], "content": _flatten_content(m.get("content"))}
             for m in self.messages[2 * self.compacted_turns :]
         )
         findings_text = render_findings(self.recent_findings())

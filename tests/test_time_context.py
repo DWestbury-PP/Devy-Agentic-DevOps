@@ -91,6 +91,37 @@ def test_assemble_keeps_terminal_context_block():
     assert "df -h" in content and content.endswith("explain this")
 
 
+def test_assemble_current_turn_attachments_become_image_url_parts():
+    s = Session(id="t")
+    msgs = assemble_messages(
+        s, "what does this panel show?", now=NOW,
+        attachments=[{"mime": "image/png", "data": "BASE64PNG"}],
+    )
+    content = msgs[-1]["content"]
+    assert isinstance(content, list)
+    # text part carries the time anchor + the raw question
+    assert content[0]["type"] == "text" and content[0]["text"].endswith("what does this panel show?")
+    # image part is a data-URI the provider forwards to a vision model
+    assert content[1] == {"type": "image_url",
+                          "image_url": {"url": "data:image/png;base64,BASE64PNG"}}
+
+
+def test_past_turn_images_flatten_to_placeholder_not_pixels():
+    # A stored user turn that carried an image → working_context sends TEXT only
+    # (the process-once invariant: past images are never re-sent as pixels).
+    s = Session(id="t")
+    s.add_user([{"type": "text", "text": "look at this"},
+                {"type": "image_ref", "ref": "a" * 64, "mime": "image/png", "name": "panel.png"}])
+    s.add_assistant("It shows 10%.")
+    ctx = s.working_context()
+    user_msg = next(m for m in ctx if m["role"] == "user")
+    assert isinstance(user_msg["content"], str)
+    assert "look at this" in user_msg["content"] and "panel.png" in user_msg["content"]
+    assert "a" * 64 not in user_msg["content"]  # the ref/hash isn't leaked as content
+    # no image_url parts anywhere in the working context
+    assert all(not isinstance(m.get("content"), list) for m in ctx)
+
+
 def test_no_local_line_without_tz():
     assert "local time" not in time_context(Session(id="t"), NOW)
 

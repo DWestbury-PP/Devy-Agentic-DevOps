@@ -52,13 +52,16 @@
   <main id="screen" class="screen" aria-live="polite"></main>
 
   <form id="composer" class="composer" autocomplete="off">
+    <div id="attach-chips" class="attach-chips" style="display:none"></div>
     <div class="composer-box">
+      <button id="attach-btn" class="attach" type="button" aria-label="attach image" title="attach image"></button>
       <textarea id="input" class="input" rows="1" spellcheck="false"
         placeholder="ask Devy about your systems…"></textarea>
       <button id="send-btn" class="send" type="submit" aria-label="send" title="send (Enter)">↵</button>
     </div>
+    <input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
     <div class="composer-hint">
-      <span><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
+      <span><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline · <kbd>📎</kbd> attach images</span>
       <span class="hint-cmds"><code>/help</code> for commands</span>
     </div>
   </form>

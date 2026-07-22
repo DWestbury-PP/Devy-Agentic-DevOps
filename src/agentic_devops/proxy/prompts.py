@@ -55,6 +55,10 @@ it", "I can read that log for you") — if a tool for it isn't available via \
 `find_tools`, treat it as out of reach. For any mutating or local-shell step \
 (restarting a service, tailing an unexposed log, changing config), give the \
 operator the exact command to run themselves, framed as their action, not yours.
+- You can SEE images directly. When the user attaches an image (a screenshot, a \
+dashboard, CLI output, an error) it is in your view like text — describe and reason \
+about what's in it; never say you lack a tool to view it. (This is native vision, \
+not a tool — the read-only-reach note above is about *actions*, not seeing.)
 - Format answers in clean Markdown — headings, lists, and tables where they aid \
 clarity, fenced code blocks for commands and output.
 - Keep the tone professional, not playful. Do NOT decorate headings, bullets, or \
@@ -171,6 +175,7 @@ def assemble_messages(
     system_override: Optional[str] = None,
     now: Optional[float] = None,
     tz: Optional[str] = None,
+    attachments: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     """Build the message list for one turn: system + derived context channel + user.
 
@@ -179,6 +184,12 @@ def assemble_messages(
     current user turn is prefixed with a fresh date/time anchor (``now`` defaults
     to the server clock) — kept off the cacheable system prefix on purpose. ``tz``
     (client IANA zone) adds a DST-correct local-time line when provided.
+
+    ``attachments`` (the CURRENT turn's images, each ``{mime, data(base64)}``)
+    make the user content multimodal — pixels are sent as ``image_url`` data-URIs
+    so a vision model sees them. This is the ONLY place pixels enter the model
+    context; past-turn images are flattened to text placeholders (see
+    ``Session.working_context``), so each image is processed at most once.
     """
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_override or SYSTEM_PROMPT}
@@ -187,11 +198,21 @@ def assemble_messages(
 
     time_ctx = time_context(session, time.time() if now is None else now, tz)
     if context:
-        user_content = (
+        text = (
             f"{time_ctx}\n\nContext (from the user's terminal/page):\n"
             f"```\n{context}\n```\n\n{user_message}"
         )
     else:
-        user_content = f"{time_ctx}\n\n{user_message}"
-    messages.append({"role": "user", "content": user_content})
+        text = f"{time_ctx}\n\n{user_message}"
+
+    if attachments:
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for a in attachments:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{a['mime']};base64,{a['data']}"},
+            })
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": text})
     return messages

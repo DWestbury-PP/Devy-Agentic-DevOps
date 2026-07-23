@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Devy unreachable</title>
+  <style>
+    /* Self-contained on purpose: this renders when the backend is down, so it can't
+       depend on the app's stylesheet, fonts, or any external request. Devy-dark. */
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+      font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      color: #d6ded8;
+      background: radial-gradient(1200px 600px at 50% -12%, #16201b 0%, #0c100e 60%, #070908 100%) #0c100e;
+    }
+    .wrap {
+      width: min(520px, 100%); text-align: center;
+      background: #141a16; border: 1px solid #232b26; border-left: 3px solid #2c8a5d;
+      border-radius: 12px; padding: 40px 32px;
+    }
+    .mark {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border: 1px solid #2c8a5d; border-radius: 9px;
+      color: #46c98a; font-weight: 700; font-size: 18px; margin-bottom: 18px;
+      text-shadow: 0 0 2px rgba(70, 201, 138, 0.35);
+    }
+    .code { font-size: 64px; font-weight: 600; color: #34423a; line-height: 1; margin-bottom: 6px; }
+    h1 { color: #46c98a; font-size: 20px; margin: 0 0 10px; text-shadow: 0 0 2px rgba(70, 201, 138, 0.25); }
+    p { color: #8b9890; font-size: 13.5px; line-height: 1.6; margin: 0 auto 22px; max-width: 380px; }
+    .btn {
+      display: inline-block; text-decoration: none; font-size: 13px; font-weight: 700;
+      color: #04140c; background: #2c8a5d; border-radius: 8px; padding: 9px 18px;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #46c98a; box-shadow: 0 0 2px rgba(70, 201, 138, 0.5); }
+    .hint { color: #5d6b63; font-size: 11px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="mark">&gt;_</div>
+    <div class="code">5xx</div>
+    <h1>Devy is unreachable</h1>
+    <p>The backend didn't respond. It may be starting up, restarting, or briefly
+       overloaded. Give it a moment and try again.</p>
+    <a class="btn" href="/">Retry</a>
+    <div class="hint">If this persists, check that the stack is running.</div>
+  </main>
+</body>
+</html>

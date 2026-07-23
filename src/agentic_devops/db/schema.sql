@@ -306,3 +306,28 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title           TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS summary_state   JSONB   NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS findings        JSONB   NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS compacted_turns INTEGER NOT NULL DEFAULT 0;
+
+-- Guarded mutating actions (G-2b): Devy proposes a reversible remediation, a
+-- human approves, the proxy executes it on the host MCP. One row per proposal;
+-- `status` is the state machine. Only reversible Tier-A verbs (see
+-- proxy/actions.py ACTION_CATALOG); never a data-destroying op.
+CREATE TABLE IF NOT EXISTS pending_actions (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT,
+    user_id       TEXT,
+    host          TEXT,                              -- target host id (NULL = default mounted sidecar)
+    verb          TEXT NOT NULL,
+    args          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rationale     TEXT NOT NULL DEFAULT '',
+    reversibility TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'proposed',  -- proposed | denied | executing | executed | failed | expired
+    decided_by    TEXT,
+    result        TEXT,
+    returncode    INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at    TIMESTAMPTZ,
+    executed_at   TIMESTAMPTZ,
+    expires_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_actions_session ON pending_actions (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pending_actions_status ON pending_actions (status);

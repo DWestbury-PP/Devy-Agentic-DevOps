@@ -257,6 +257,20 @@ class RbacConfig(BaseModel):
     assistant_role: str = "admin"
 
 
+class ActionsConfig(BaseModel):
+    """Guarded mutating actions (Devy PROPOSES a reversible remediation → a human
+    APPROVES → the proxy EXECUTES it on the host MCP). OFF by default and
+    FAIL-CLOSED on auth: a human-approval guardrail is only meaningful behind real
+    identity, so enabling actions requires ``auth.mode: jwt`` UNLESS
+    ``allow_insecure_dev`` is set (local testing only). Independently, the host
+    sidecar must be started with ``HOST_MCP_ALLOW_MUTATIONS`` for any verb to
+    actually run — this flag only governs the proxy-side propose/approve plane."""
+
+    enabled: bool = False
+    allow_insecure_dev: bool = False   # permit without jwt auth — LOCAL TESTING ONLY
+    ttl_seconds: int = 900             # a proposal expires if not approved within this window
+
+
 class LangSmithConfig(BaseModel):
     """LangSmith tracing (opt-in; ``tracing: langsmith``). The API key is a secret
     (``LANGSMITH_API_KEY``, set on the Secrets tab); everything here is plain config.
@@ -325,6 +339,9 @@ class Settings(BaseSettings):
     # Admin-plane identity + roles (RBAC-1). Defaults to password mode (backward compat).
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rbac: RbacConfig = Field(default_factory=RbacConfig)
+
+    # Guarded mutating actions (propose → human approve → execute). Off + fail-closed.
+    actions: ActionsConfig = Field(default_factory=ActionsConfig)
 
     # Optional operator note about THIS deployment/environment, injected into the
     # model context each turn (e.g. "Host: Mac Mini, macOS 26, Apple Silicon,

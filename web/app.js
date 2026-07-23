@@ -6,7 +6,7 @@
  * Event contract (proxy/harness.py + proxy/app.py):
  *   session {session_id} · delta {text} · tool_call {name, arguments}
  *   tools_found {names[]} · tool_result {name, ok, preview, images?: [{mime, data}]}
- *   notice {message} · done {iterations, usage, text} · error {message}
+ *   notice {message} · action_proposed {action} · done {iterations, usage, text} · error {message}
  */
 
 const screen = document.getElementById("screen");
@@ -272,6 +272,67 @@ function addTool(ctx, name, detail) {
   return node;
 }
 
+/* Guarded-action approval card (G-3): a human approves or denies; on approve the
+ * proxy executes the reversible verb on the host MCP and we render the result.
+ * The agent only PROPOSED — this card is where a human decides and runs it. */
+function renderActionCard(ctx, a) {
+  const card = el("div", "action-card pending");
+  const head = el("div", "action-head");
+  const label = (a.label || a.verb || "action") + (a.target ? " · " + a.target : "");
+  head.append(icon("wrench"), el("span", "action-title", "Action proposed: " + label));
+  card.appendChild(head);
+  if (a.host) card.appendChild(el("div", "action-meta", "host: " + a.host));
+  if (a.rationale) card.appendChild(el("div", "action-rationale", a.rationale));
+  if (a.reversibility) card.appendChild(el("div", "action-rev", a.reversibility));
+
+  const btns = el("div", "action-btns");
+  const approve = el("button", "action-approve", "Approve & run");
+  const deny = el("button", "action-deny", "Deny");
+  btns.append(approve, deny);
+  const status = el("div", "action-status", "awaiting your approval");
+  card.append(btns, status);
+  ctx.body.appendChild(card);
+
+  async function decide(kind) {
+    approve.disabled = deny.disabled = true;
+    status.textContent = kind === "approve" ? "running…" : "denying…";
+    try {
+      const r = await fetch("/v1/actions/" + encodeURIComponent(a.id) + "/" + kind, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        card.className = "action-card fail";
+        status.textContent = "error: " + (body.detail || "HTTP " + r.status);
+        approve.disabled = deny.disabled = false;
+        return;
+      }
+      btns.remove();
+      if (kind === "deny" || body.status === "denied") {
+        card.className = "action-card denied";
+        status.textContent = "denied";
+        return;
+      }
+      const ok = body.status === "executed";
+      card.className = "action-card " + (ok ? "done" : "fail");
+      status.textContent = ok ? "executed ✓" : "failed";
+      if (body.result) {
+        const det = el("details");
+        det.append(el("summary", null, "result"), el("pre", null, body.result));
+        card.appendChild(det);
+      }
+      if (atBottom()) scroll();
+    } catch (e) {
+      card.className = "action-card fail";
+      status.textContent = "error: " + e.message;
+      approve.disabled = deny.disabled = false;
+    }
+  }
+  approve.addEventListener("click", () => decide("approve"));
+  deny.addEventListener("click", () => decide("deny"));
+}
+
 /* ---------- the stream ---------- */
 async function send(message, attachments = []) {
   if (state.busy) return;
@@ -368,6 +429,10 @@ async function send(message, attachments = []) {
         } else if (evt.type === "notice") {
           // Subtle operator note (e.g. answered via a backup model) — dim, in the trail.
           ctx.body.appendChild(el("div", "notice", evt.data.message || ""));
+          if (atBottom()) scroll();
+        } else if (evt.type === "action_proposed") {
+          // Guarded action: render an Approve/Deny card in the stream (G-3).
+          renderActionCard(ctx, evt.data.action || {});
           if (atBottom()) scroll();
         } else if (evt.type === "done") {
           const finalText = evt.data.text || liveText;

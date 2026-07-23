@@ -147,11 +147,46 @@ def test_request_action_happy_path_creates_proposal(astore):
         {"verb": "restart_service", "args": {"name": "alloy"}, "rationale": "crash loop"},
         {"session_id": sid, "user_id": "u1"},
     )
-    assert "AWAITING HUMAN APPROVAL" in out and "Restart service" in out
+    assert "AWAITING HUMAN APPROVAL" in out.text and "Restart service" in out.text
     # a proposed row exists, stamped with provenance from context (not model args)
     rows = astore.list(session_id=sid)
     assert len(rows) == 1 and rows[0].status == "proposed" and rows[0].user_id == "u1"
     assert rows[0].args == {"name": "alloy"} and rows[0].host == "host"
+
+
+def test_request_action_emits_action_proposed_event(astore):
+    from agentic_devops.tools.base import ToolResult
+
+    tool = build_request_action_tool(astore, ttl_seconds=900, default_host="host")
+    out = tool.handler(
+        {"verb": "prune_images", "rationale": "reclaim disk"},
+        {"session_id": uuid.uuid4().hex, "user_id": "u1"},
+    )
+    # A ToolResult carrying an out-of-band event drives the real-time approval card.
+    assert isinstance(out, ToolResult)
+    assert out.event["type"] == "action_proposed"
+    assert out.event["action"]["verb"] == "prune_images"
+    assert out.event["action"]["status"] == "proposed"
+
+
+def test_toolresult_event_is_forwarded_by_harness():
+    from types import SimpleNamespace
+
+    from agentic_devops.proxy.harness import _process_tool_calls
+    from agentic_devops.tools.base import ToolResult, ToolSpec
+    from agentic_devops.tools.router import ToolsRouter
+
+    router = ToolsRouter()
+    router.register(ToolSpec(
+        name="fake_proposer", category="actions", description="d", when_to_use="w",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda a: ToolResult(text="ok", event={"type": "action_proposed", "action": {"id": "abc"}}),
+        safety_tier="elevated",
+    ))
+    resp = SimpleNamespace(tool_calls=[SimpleNamespace(id="1", name="fake_proposer", arguments={})])
+    _msgs, events, _find, _rend = _process_tool_calls(resp, router, [], set(), [])
+    proposed = [e for e in events if e["type"] == "action_proposed"]
+    assert proposed and proposed[0]["action"]["id"] == "abc"
 
 
 def test_request_action_is_elevated_propose_only_seam(astore):

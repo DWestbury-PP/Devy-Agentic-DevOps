@@ -198,10 +198,12 @@ def _process_tool_calls(
                     span.outputs(ok=False, meta={"tool": tc.name, "denied": _spec.safety_tier})
                 else:
                     tc_images: list[ToolImage] = []
+                    tc_event: Optional[dict[str, Any]] = None
                     try:
                         raw = router.execute(tc.name, tc.arguments, context=tool_context)
                         if isinstance(raw, ToolResult):
                             tc_images = raw.images
+                            tc_event = raw.event
                             # Persist first (base64 never enters the model's text
                             # context) so we can hand the model an embeddable URL for
                             # each image — it places them INLINE in its answer.
@@ -233,6 +235,8 @@ def _process_tool_calls(
                         event["images"] = [{"mime": im.mime, "data": im.data} for im in tc_images]
                         collected_images.extend(tc_images)
                     events.append(event)
+                    if tc_event:  # a tool-declared UI signal (e.g. action_proposed)
+                        events.append(tc_event)
                     findings.append(
                         {
                             "tool": tc.name,

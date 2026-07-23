@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from agentic_devops.proxy.actions import ACTION_CATALOG, ActionStore
-from agentic_devops.tools.base import ToolSpec
+from agentic_devops.proxy.actions import ACTION_CATALOG, ActionStore, action_public
+from agentic_devops.tools.base import ToolResult, ToolSpec
 
 
 def build_request_action_tool(
@@ -50,12 +50,15 @@ def build_request_action_tool(
         )
         tgt = f" {action.target}" if action.target else ""
         where = f" on {host}" if host else ""
-        return (
+        msg = (
             f"Proposed action {action.id}: {spec.label}{tgt}{where} — AWAITING HUMAN "
             "APPROVAL. I have NOT run anything. A human must approve it before it "
             "executes, and it expires if not approved in time. Tell the user exactly "
             "what you've proposed and why, and that they need to approve it."
         )
+        # Carry an out-of-band UI signal so the surface can render an approval card
+        # in real time; the model just sees `msg`.
+        return ToolResult(text=msg, event={"type": "action_proposed", "action": action_public(action)})
 
     return ToolSpec(
         name="request_action",

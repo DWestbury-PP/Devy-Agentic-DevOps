@@ -269,6 +269,7 @@ def create_app(
     from agentic_devops.proxy.actions import (
         ActionExecutor,
         ActionStore,
+        action_public,
         guarded_actions_status,
     )
 
@@ -669,15 +670,7 @@ def create_app(
         return max_tier_for_roles(roles)
 
     # ---- guarded mutating actions (assistant plane; tier-gated) ---------------
-    def _action_public(a: Any) -> dict:
-        return {
-            "id": a.id, "verb": a.verb, "label": a.label, "target": a.target,
-            "host": a.host, "args": a.args, "rationale": a.rationale,
-            "reversibility": a.reversibility, "status": a.status,
-            "decided_by": a.decided_by, "result": a.result, "returncode": a.returncode,
-            "created_at": a.created_at, "decided_at": a.decided_at,
-            "executed_at": a.executed_at, "expires_at": a.expires_at,
-        }
+    _action_public = action_public  # shared serializer (also feeds the action_proposed event)
 
     def _approver_identity(request: Request, x_user_id: Optional[str]) -> str:
         """Who approved, for the audit trail: the verified email in jwt mode, else

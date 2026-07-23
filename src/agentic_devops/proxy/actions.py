@@ -100,6 +100,19 @@ class StoredAction:
         return self.args.get(v.target_hint) if v and v.target_hint else None
 
 
+def action_public(a: "StoredAction") -> dict:
+    """Serialize a stored action for the API + the ``action_proposed`` event — the
+    shape the web approval card renders. Single source of truth for both."""
+    return {
+        "id": a.id, "verb": a.verb, "label": a.label, "target": a.target,
+        "host": a.host, "args": a.args, "rationale": a.rationale,
+        "reversibility": a.reversibility, "status": a.status,
+        "decided_by": a.decided_by, "result": a.result, "returncode": a.returncode,
+        "created_at": a.created_at, "decided_at": a.decided_at,
+        "executed_at": a.executed_at, "expires_at": a.expires_at,
+    }
+
+
 def _iso(v: Any) -> Optional[str]:
     return v.isoformat() if v is not None else None
 

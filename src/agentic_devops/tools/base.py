@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 # Handlers are synchronous in Phase 1: they take validated arguments and return
 # a string (or anything str()-able) that becomes the tool result — OR a
@@ -31,6 +31,11 @@ class ToolResult:
 
     text: str
     images: list[ToolImage] = field(default_factory=list)
+    # An optional out-of-band event the harness forwards to the UI stream verbatim
+    # (e.g. ``{"type": "action_proposed", "action": {...}}`` from request_action) —
+    # a clean seam for a tool to surface a UI signal without the harness knowing the
+    # tool. Never enters the model's text context.
+    event: Optional[dict[str, Any]] = None
 
     def placeholder(self) -> str:
         """Short text stand-in for storage/findings — the base64 never lands in

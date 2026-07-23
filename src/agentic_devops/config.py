@@ -236,7 +236,9 @@ class AuthConfig(BaseModel):
     mode: Literal["password", "jwt"] = "password"
     # jwt mode:
     jwks_url: Optional[str] = None          # IdP JWKS endpoint (RS256 verification)
-    issuer: Optional[str] = None            # expected `iss`
+    # expected `iss` — a single value OR a list of accepted issuers (Google id_tokens
+    # use either `https://accounts.google.com` or `accounts.google.com`; accept both).
+    issuer: "str | list[str] | None" = None
     audience: Optional[str] = None          # expected `aud` (verified when set)
     algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
     header: str = "Authorization"           # header the proxy puts the JWT in (Bearer stripped)

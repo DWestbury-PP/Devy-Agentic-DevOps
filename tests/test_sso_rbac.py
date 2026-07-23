@@ -67,6 +67,23 @@ def test_rejects_wrong_issuer_and_audience():
         JwtAuth(public_key=pub, issuer="idp", audience="devy").verify(tok2)
 
 
+def test_accepts_any_of_multiple_issuers():
+    # Google id_tokens carry `iss` as EITHER `https://accounts.google.com` or
+    # `accounts.google.com`; a list of allowed issuers accepts both (the fix for the
+    # live "Invalid issuer" failure). A non-listed issuer is still rejected.
+    priv, pub = _keypair()
+    ja = JwtAuth(
+        public_key=pub, audience="devy",
+        issuer=["https://accounts.google.com", "accounts.google.com"],
+    )
+    for iss in ("https://accounts.google.com", "accounts.google.com"):
+        tok = _sign(priv, {"email": "a@x.com", "iss": iss, "aud": "devy"})
+        assert ja.verify(tok)["iss"] == iss
+    bad = _sign(priv, {"email": "a@x.com", "iss": "evil", "aud": "devy"})
+    with pytest.raises(Exception):
+        ja.verify(bad)
+
+
 # -- RBAC-3: email / domain → role maps -------------------------------------
 def test_resolve_roles_unions_group_email_domain():
     from agentic_devops.proxy.auth import resolve_roles

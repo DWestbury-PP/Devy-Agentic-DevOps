@@ -249,7 +249,13 @@ class RbacConfig(BaseModel):
     truth. Roles: ``admin`` (control plane), ``operator``, ``viewer``."""
 
     group_roles: dict[str, str] = Field(default_factory=dict)  # IdP group -> devy role
-    default_role: Optional[str] = None      # role for an authenticated user with no mapped group
+    # (RBAC-3) Email/domain → role maps: the simplest role source for a Google OIDC
+    # deployment where personal accounts carry NO group claims. A user's roles are the
+    # UNION of group-, email-, and domain-mapped roles; an authenticated user matching
+    # nothing falls to `default_role`. Emails/domains are matched case-insensitively.
+    email_roles: dict[str, str] = Field(default_factory=dict)   # exact email  -> role
+    domain_roles: dict[str, str] = Field(default_factory=dict)  # email domain -> role
+    default_role: Optional[str] = None      # role for an authenticated user with no mapped group/email
     # (RBAC-2) Role assumed for assistant-plane (chat) callers whose identity ISN'T
     # verified — i.e. honor-system / password mode. Defaults to `admin` (unrestricted,
     # preserves current behaviour); in jwt mode the real role from the JWT is used.

@@ -36,7 +36,7 @@ def test_maps_groups_to_roles():
     priv, pub = _keypair()
     tok = _sign(priv, {"email": "a@x.com", "groups": ["devy-admins", "other"], "iss": "idp", "aud": "devy"})
     ja = JwtAuth(public_key=pub, issuer="idp", audience="devy")
-    p = ja.principal(tok, {"devy-admins": "admin", "devy-viewers": "viewer"}, None)
+    p = ja.principal(tok, {"devy-admins": "admin", "devy-viewers": "viewer"}, {}, {}, None)
     assert p.email == "a@x.com" and p.roles == {"admin"} and p.source == "jwt"
     assert p.actor == "a@x.com"
 
@@ -45,7 +45,7 @@ def test_default_role_when_no_group_matches():
     priv, pub = _keypair()
     tok = _sign(priv, {"email": "b@x.com", "groups": ["unmapped"], "iss": "idp", "aud": "devy"})
     ja = JwtAuth(public_key=pub, issuer="idp", audience="devy")
-    p = ja.principal(tok, {"devy-admins": "admin"}, "viewer")
+    p = ja.principal(tok, {"devy-admins": "admin"}, {}, {}, "viewer")
     assert p.roles == {"viewer"}
 
 
@@ -65,6 +65,86 @@ def test_rejects_wrong_issuer_and_audience():
     tok2 = _sign(priv, {"email": "a@x.com", "iss": "idp", "aud": "someone-else"})
     with pytest.raises(Exception):
         JwtAuth(public_key=pub, issuer="idp", audience="devy").verify(tok2)
+
+
+# -- RBAC-3: email / domain → role maps -------------------------------------
+def test_resolve_roles_unions_group_email_domain():
+    from agentic_devops.proxy.auth import resolve_roles
+
+    roles = resolve_roles(
+        groups=["devy-ops"], email="Boss@Example.COM",
+        group_roles={"devy-ops": "operator"},
+        email_roles={"boss@example.com": "admin"},   # case-insensitive match
+        domain_roles={"example.com": "viewer"},
+        default_role="viewer",
+    )
+    assert roles == {"operator", "admin", "viewer"}  # union of all three sources
+
+
+def test_resolve_roles_default_when_nothing_matches():
+    from agentic_devops.proxy.auth import resolve_roles
+
+    assert resolve_roles(
+        groups=[], email="nobody@nowhere.io", group_roles={}, email_roles={},
+        domain_roles={}, default_role="viewer",
+    ) == {"viewer"}
+
+
+def test_email_map_gives_role_without_any_groups():
+    # The Gmail case: no group claim at all, role comes purely from the email map.
+    priv, pub = _keypair()
+    tok = _sign(priv, {"email": "darrell.westbury@gmail.com", "iss": "idp", "aud": "devy"})
+    ja = JwtAuth(public_key=pub, issuer="idp", audience="devy")
+    p = ja.principal(tok, {}, {"darrell.westbury@gmail.com": "admin"}, {}, "viewer")
+    assert p.roles == {"admin"} and p.email == "darrell.westbury@gmail.com"
+
+
+def test_email_map_drives_allowed_tier(tmp_path, pool, pg_url, monkeypatch):
+    # End-to-end: an email-mapped admin gets the elevated tier on the assistant plane.
+    priv, pub = _keypair()
+    auth = Authenticator(
+        mode="jwt", admin=AdminAuth(None, None),
+        jwt_auth=JwtAuth(public_key=pub, issuer="idp", audience="devy"),
+        group_roles={}, email_roles={"boss@x.com": "admin"}, domain_roles={},
+        default_role="viewer",
+    )
+    monkeypatch.setattr("agentic_devops.proxy.app.build_authenticator", lambda settings: auth)
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",
+                          auth=AuthConfig(mode="jwt")),
+        provider=object(), router=ToolsRouter(),
+    )
+    client = TestClient(app)
+    # admin email → admin role → can reach the admin plane; unmapped → viewer → 403
+    admin_tok = "Bearer " + _sign(priv, {"email": "boss@x.com", "iss": "idp", "aud": "devy"})
+    assert client.get("/v1/admin/me", headers={"Authorization": admin_tok}).json()["roles"] == ["admin"]
+    other_tok = "Bearer " + _sign(priv, {"email": "rando@y.com", "iss": "idp", "aud": "devy"})
+    assert client.get("/v1/admin/hosts", headers={"Authorization": other_tok}).status_code == 403
+
+
+def test_jwt_identity_supersedes_spoofable_x_user_id(tmp_path, pool, pg_url, monkeypatch):
+    # In jwt mode the VERIFIED email scopes history — a caller can't read another
+    # user's sessions by passing their X-User-Id.
+    import uuid
+
+    priv, pub = _keypair()
+    auth = Authenticator(
+        mode="jwt", admin=AdminAuth(None, None),
+        jwt_auth=JwtAuth(public_key=pub, issuer="idp", audience="devy"),
+        group_roles={}, email_roles={}, domain_roles={}, default_role="viewer",
+    )
+    monkeypatch.setattr("agentic_devops.proxy.app.build_authenticator", lambda settings: auth)
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t",
+                          auth=AuthConfig(mode="jwt")),
+        provider=object(), router=ToolsRouter(),
+    )
+    client = TestClient(app)
+    me = "me-" + uuid.uuid4().hex + "@x.com"
+    tok = "Bearer " + _sign(priv, {"email": me, "iss": "idp", "aud": "devy"})
+    # X-User-Id claims to be someone else, but the JWT email wins → scoped to `me`.
+    r = client.get("/v1/sessions", headers={"Authorization": tok, "X-User-Id": "victim@x.com"})
+    assert r.status_code == 200  # scoped to the verified email, not the header
 
 
 # -- admin plane gated by role (jwt mode) -----------------------------------

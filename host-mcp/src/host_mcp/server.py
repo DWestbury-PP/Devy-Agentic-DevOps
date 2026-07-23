@@ -17,15 +17,33 @@ from host_mcp.allowlist import Allowlist
 from host_mcp.config import ServerConfig
 
 
+def _tool_list(allowlist: Allowlist) -> list[types.Tool]:
+    """Advertise the available checks as MCP tools, each carrying a standard
+    ``readOnlyHint`` annotation. A mutating check (restart/prune/…) is marked
+    ``readOnlyHint=False`` so a consuming client can tell writes from reads and
+    keep them off an assistant's callable surface. ``destructiveHint`` stays False
+    — the allow-list only holds REVERSIBLE mutations; data-destroying verbs are
+    excluded entirely, never merely hinted."""
+    return [
+        types.Tool(
+            name=c.name,
+            description=c.description,
+            inputSchema=c.json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=not c.mutating,
+                destructiveHint=False,
+            ),
+        )
+        for c in allowlist.available_checks()
+    ]
+
+
 def build_server(allowlist: Allowlist) -> Server:
     server: Server = Server("agentic-devops-host-mcp")
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(name=c.name, description=c.description, inputSchema=c.json_schema())
-            for c in allowlist.available_checks()
-        ]
+        return _tool_list(allowlist)
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[types.TextContent]:

@@ -32,6 +32,17 @@ def _sanitize(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "_-") else "_" for c in name)
 
 
+def _is_write_tool(tool: Any) -> bool:
+    """True only when a mounted tool EXPLICITLY declares itself non-read-only via
+    the MCP ``readOnlyHint=False`` annotation. Absent or None hints are treated as
+    read-only — most servers set no hints, and we must not withhold their tools —
+    so this withholds only tools that self-identify as writes (e.g. the host MCP's
+    guarded mutating verbs, reachable only via the proxy's approve-and-execute
+    path, never as a directly-callable assistant tool)."""
+    ann = getattr(tool, "annotations", None)
+    return ann is not None and getattr(ann, "readOnlyHint", None) is False
+
+
 def _render_result(result: Any) -> Any:
     """Render an MCP tool result. Text-only results return a ``str`` (the common
     case); a result carrying image content returns a ``ToolResult`` so the base64
@@ -77,6 +88,7 @@ class MCPManager:
         self._stop: Optional[asyncio.Event] = None
         self._servers: dict[str, _Server] = {}
         self._errors: list[str] = []
+        self._excluded: list[str] = []  # mounted tools withheld as writes (readOnlyHint=false)
         self._ready = threading.Event()
 
     # -- lifecycle ----------------------------------------------------------
@@ -171,11 +183,31 @@ class MCPManager:
     def errors(self) -> list[str]:
         return list(self._errors)
 
+    @property
+    def excluded_write_tools(self) -> list[str]:
+        """Mounted tools withheld from the assistant because they declared
+        themselves writes (MCP ``readOnlyHint=False``). Populated by ``tool_specs``;
+        surfaced for observability (e.g. guarded-actions reach these only via the
+        proxy's approve-and-execute path, never as a directly-callable tool)."""
+        return list(self._excluded)
+
     def tool_specs(self) -> list[ToolSpec]:
+        self._excluded = []
         specs: list[ToolSpec] = []
         for server in self._servers.values():
             category = server.cfg.category or server.cfg.name
             for tool in server.tools:
+                # Withhold any tool that EXPLICITLY declares itself non-read-only.
+                # Absent/None hints are treated as read-only, so servers that set no
+                # annotations (most) are unaffected — we only drop self-declared writes.
+                if _is_write_tool(tool):
+                    self._excluded.append(f"{server.cfg.name}:{tool.name}")
+                    logger.info(
+                        "Withholding non-read-only mounted tool %r from %r "
+                        "(readOnlyHint=false); not exposed to the assistant.",
+                        tool.name, server.cfg.name,
+                    )
+                    continue
                 specs.append(self._make_spec(server, category, tool))
         return specs
 

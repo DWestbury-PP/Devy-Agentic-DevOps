@@ -293,3 +293,47 @@ class FactStore:
                 (limit,),
             ).fetchall()
         return [r[0] for r in rows]
+
+    def list_facts(
+        self, *, subject: Optional[str] = None, current_only: bool = True, limit: int = 200
+    ) -> list[StoredFact]:
+        """Facts for the admin Memory plane — current ones first, newest first.
+        Filter by ``subject``; ``current_only`` hides already-retired/superseded rows."""
+        clauses, params = [], []
+        if subject:
+            clauses.append("subject = %s")
+            params.append(subject)
+        if current_only:
+            clauses.append("valid_to IS NULL")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_FACT_COLS} FROM memories{where} "
+                "ORDER BY (valid_to IS NULL) DESC, valid_from DESC LIMIT %s",
+                tuple(params),
+            ).fetchall()
+        return [_row_to_fact(r) for r in rows]
+
+    def retract(self, memory_id: str) -> bool:
+        """Gracefully retire a currently-true fact: set ``valid_to = now`` so it
+        stops being current (recall ignores it) while its history is preserved —
+        the bi-temporal way to 'delete'. Returns True if a current fact was
+        retracted. No-op if already retired/superseded/unknown."""
+        with self._pool.connection() as conn:
+            cur = conn.execute(
+                "UPDATE memories SET valid_to = now() WHERE memory_id = %s AND valid_to IS NULL",
+                (memory_id,),
+            )
+            return cur.rowcount > 0
+
+    def delete(self, memory_id: str) -> bool:
+        """Hard-delete a fact (for genuine garbage). Clears any ``superseded_by``
+        pointers to it first so the FK holds. Returns True if a row was removed."""
+        with self._pool.connection() as conn:
+            with conn.transaction():  # the pool is autocommit; group the two writes
+                conn.execute(
+                    "UPDATE memories SET superseded_by = NULL WHERE superseded_by = %s", (memory_id,)
+                )
+                cur = conn.execute("DELETE FROM memories WHERE memory_id = %s", (memory_id,))
+                return cur.rowcount > 0

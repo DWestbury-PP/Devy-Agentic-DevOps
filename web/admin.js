@@ -26,7 +26,7 @@ function view(name) {
   if (name === "shell") showPage(currentPage);
 }
 
-const PAGES = ["hosts", "repos", "knowledge", "secrets", "mcp"];
+const PAGES = ["hosts", "repos", "knowledge", "memory", "secrets", "mcp"];
 function showPage(name) {
   currentPage = name;
   PAGES.forEach((p) => {
@@ -36,6 +36,7 @@ function showPage(name) {
   if (name === "hosts") renderHosts();
   else if (name === "repos") renderRepos();
   else if (name === "knowledge") renderKnowledge();
+  else if (name === "memory") renderMemory();
   else if (name === "secrets") renderSecrets();
   else if (name === "mcp") renderMcp();
 }
@@ -976,6 +977,86 @@ function confirmDeleteMcp(wrap, id) {
   no.addEventListener("click", renderMcp);
   wrap.append(yes, no);
 }
+
+/* ---------- Memory (evolving fact tier) ---------- */
+const memMsg = (t, err) => { const m = $("memory-msg"); m.className = "msg" + (err ? " err" : ""); m.textContent = t || ""; };
+let memSubject = null;  // subject filter (null = all)
+
+async function renderMemory() {
+  const body = $("memory-body");
+  if (!body) return;
+  const showAll = $("memory-show-all").checked;
+  const params = new URLSearchParams({ current_only: (!showAll).toString() });
+  if (memSubject) params.set("subject", memSubject);
+  let data;
+  try {
+    data = await (await fetch(`/v1/admin/facts?${params}`, { headers: authHeaders() })).json();
+  } catch (_) { return memMsg("Couldn't reach the proxy.", true); }
+  if (!data.enabled) { body.innerHTML = ""; return memMsg("The evolving fact tier is disabled (knowledge.facts_enabled)."); }
+
+  // subject filter pills
+  const subs = $("memory-subjects");
+  subs.innerHTML = "";
+  const list = data.subjects || [];
+  subs.style.display = list.length ? "flex" : "none";
+  const mkPill = (label, val) => {
+    const p = el("span", "pill" + (memSubject === val ? " active" : ""), label);
+    p.style.cursor = "pointer";
+    p.addEventListener("click", () => { memSubject = val; renderMemory(); });
+    return p;
+  };
+  subs.appendChild(mkPill("all", null));
+  list.forEach((s) => subs.appendChild(mkPill(s, s)));
+
+  body.innerHTML = "";
+  const facts = data.facts || [];
+  if (!facts.length) return memMsg(memSubject ? `No facts for “${memSubject}”.` : "No facts stored yet.");
+  memMsg("");
+  facts.forEach((f) => body.appendChild(memRow(f)));
+}
+
+function memRow(f) {
+  const tr = el("tr");
+  tr.appendChild(el("td", null, f.subject || "—"));
+  tr.appendChild(el("td", null, f.attribute || "—"));
+  const val = el("td"); val.appendChild(el("span", null, f.content || "")); tr.appendChild(val);
+  const st = el("td");
+  st.appendChild(el("span", "pill " + (f.current ? "reachable" : "inactive"), f.current ? "current" : "retired"));
+  tr.appendChild(st);
+  const actions = el("td");
+  const wrap = el("div", "acts");
+  if (f.current) {
+    const retract = el("button", "btn ghost-btn", "Retract");
+    retract.title = "stop this fact being current (history kept)";
+    retract.addEventListener("click", () => memAction(`/v1/admin/facts/${f.memory_id}/retract`, "POST"));
+    wrap.appendChild(retract);
+  }
+  const del = el("button", "btn ghost-btn", "Delete");
+  del.addEventListener("click", () => confirmMemDelete(wrap, f.memory_id));
+  wrap.appendChild(del);
+  actions.appendChild(wrap);
+  tr.appendChild(actions);
+  return tr;
+}
+
+async function memAction(url, method) {
+  try {
+    const r = await fetch(url, { method, headers: authHeaders() });
+    if (!r.ok) return memMsg(`Failed (${r.status}).`, true);
+  } catch (_) { return memMsg("Couldn't reach the proxy.", true); }
+  renderMemory();
+}
+
+function confirmMemDelete(wrap, id) {
+  wrap.innerHTML = "";
+  const yes = el("button", "btn", "Confirm");
+  yes.addEventListener("click", () => memAction(`/v1/admin/facts/${id}`, "DELETE"));
+  const no = el("button", "btn ghost-btn", "Cancel");
+  no.addEventListener("click", renderMemory);
+  wrap.append(yes, no);
+}
+
+$("memory-show-all").addEventListener("change", renderMemory);
 
 // null = create mode; a server id = editing that server in place.
 let mcpEditId = null;

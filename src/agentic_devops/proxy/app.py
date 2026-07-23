@@ -136,12 +136,13 @@ def _register_recall_tool(router: ToolsRouter, settings: Settings, pool) -> Any:
         return None
 
 
-def _register_fact_tools(router: ToolsRouter, settings: Settings) -> None:
+def _register_fact_tools(router: ToolsRouter, settings: Settings) -> Any:
     """Register the evolving fact tier's tools — ``recall_facts`` (read) and
     ``memory_add`` (write-back). Always registered when enabled; facts accrue via
-    memory_add and are searchable immediately, so no chunks-at-boot gate."""
+    memory_add and are searchable immediately, so no chunks-at-boot gate. Returns
+    the FactStore (or None) so the admin plane can list/retract/delete facts."""
     if not (settings.knowledge.enabled and settings.knowledge.facts_enabled):
-        return
+        return None
     try:
         from agentic_devops.knowledge.factory import build_fact_store
         from agentic_devops.tools.builtin.facts import (
@@ -153,8 +154,10 @@ def _register_fact_tools(router: ToolsRouter, settings: Settings) -> None:
         router.register(build_recall_facts_tool(store))
         router.register(build_memory_add_tool(store))
         logger.info("Knowledge fact tier enabled (recall_facts, memory_add).")
+        return store
     except Exception as exc:  # noqa: BLE001 — never let fact wiring crash the proxy
         logger.warning("Fact tools not registered: %s", exc)
+        return None
 
 
 def _register_memory_index(router: ToolsRouter, settings: Settings) -> None:
@@ -286,6 +289,7 @@ def create_app(
     )
 
     mcp_manager: Optional[MCPManager] = None
+    fact_store: Any = None  # set when the fact tier is enabled; used by the admin Memory plane
     if router is None:
         router = ToolsRouter()
         # Mount configured MCP servers first so we know whether a real *host*
@@ -336,7 +340,7 @@ def create_app(
                 logger.warning("MCP mount issue: %s", err)
 
         _register_knowledge_tool(router, settings)
-        _register_fact_tools(router, settings)
+        fact_store = _register_fact_tools(router, settings)
         _register_memory_index(router, settings)
         if settings.knowledge.web_search_enabled:
             from agentic_devops.tools.builtin.web import build_web_search_tool
@@ -1154,6 +1158,38 @@ def create_app(
     def delete_corpus(corpus: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
         removed = document_store.delete_corpus(corpus)
         return {"corpus": corpus, "documents_deleted": removed}
+
+    # ---- Memory (evolving fact tier): list / retract / delete ----------------
+    def _fact_dict(f: Any) -> dict[str, Any]:
+        return {
+            "memory_id": f.memory_id, "subject": f.subject, "attribute": f.attribute,
+            "content": f.content, "current": f.is_current, "valid_from": f.valid_from,
+            "valid_to": f.valid_to, "importance": f.importance, "source": f.source,
+        }
+
+    @app.get("/v1/admin/facts")
+    def list_facts(subject: Optional[str] = None, current_only: bool = True,
+                   _: dict = Depends(require_admin)) -> dict[str, Any]:
+        if fact_store is None:
+            return {"enabled": False, "facts": [], "subjects": []}
+        facts = fact_store.list_facts(subject=subject, current_only=current_only)
+        return {
+            "enabled": True,
+            "facts": [_fact_dict(f) for f in facts],
+            "subjects": fact_store.subjects(limit=100),
+        }
+
+    @app.post("/v1/admin/facts/{memory_id}/retract")
+    def retract_fact(memory_id: str, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
+        if fact_store is None:
+            raise HTTPException(status_code=404, detail="fact tier disabled")
+        return {"memory_id": memory_id, "retracted": fact_store.retract(memory_id)}
+
+    @app.delete("/v1/admin/facts/{memory_id}")
+    def delete_fact(memory_id: str, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
+        if fact_store is None:
+            raise HTTPException(status_code=404, detail="fact tier disabled")
+        return {"memory_id": memory_id, "deleted": fact_store.delete(memory_id)}
 
     @app.get("/v1/sessions", response_model=list[SessionInfo])
     def list_sessions(

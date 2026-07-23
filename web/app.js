@@ -160,6 +160,13 @@ function initMermaid() {
   window.mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
   mermaidReady = true;
 }
+// Lightweight render for the LIVE stream: markdown structure only, no highlight.js
+// / mermaid (those are expensive per-frame and mermaid errors on incomplete input).
+// The final `renderMarkdown` on `done` does the full, authoritative pass.
+function renderStreamMarkdown(container, md) {
+  container.classList.add("answer");  // markdown typography (overrides .stream pre-wrap)
+  container.innerHTML = window.DOMPurify.sanitize(window.marked.parse(md, { breaks: true, gfm: true }));
+}
 function renderMarkdown(container, md) {
   const rawHtml = window.marked.parse(md, { breaks: true, gfm: true });
   container.innerHTML = window.DOMPurify.sanitize(rawHtml);
@@ -271,6 +278,19 @@ async function send(message, attachments = []) {
   setBusy(true);
   const ctx = startTurn(message, attachments);
   let liveText = "";
+  // Throttle live markdown rendering to one paint per animation frame — coalesces
+  // a burst of tokens into a single re-parse (cheap for marked+DOMPurify), so the
+  // answer formats as it streams without re-parsing per token.
+  let renderScheduled = false;
+  function scheduleRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      renderStreamMarkdown(ctx.stream, liveText);
+      if (atBottom()) scroll();
+    });
+  }
 
   try {
     const resp = await fetch("/v1/chat", {
@@ -305,8 +325,7 @@ async function send(message, attachments = []) {
           state.sessionId = evt.data.session_id;
         } else if (evt.type === "delta") {
           liveText += evt.data.text || "";
-          ctx.stream.textContent = liveText;
-          if (atBottom()) scroll();
+          scheduleRender();  // throttled live markdown
         } else if (evt.type === "tool_call") {
           // Pre-tool narration is dropped (mirrors the TUI); the final answer is
           // whatever streams after the last tool round.
@@ -351,15 +370,16 @@ async function send(message, attachments = []) {
           ctx.body.appendChild(el("div", "notice", evt.data.message || ""));
           if (atBottom()) scroll();
         } else if (evt.type === "done") {
-          ctx.stream.classList.add("done");
           const finalText = evt.data.text || liveText;
           if (finalText.trim()) {
-            const answer = el("div", "answer");
-            renderMarkdown(answer, finalText);
-            ctx.stream.replaceWith(answer);
+            // Finalize in place: full pass (highlight.js + mermaid) into the same
+            // element the live markdown streamed into — no replace flicker.
+            ctx.stream.classList.add("answer");
+            renderMarkdown(ctx.stream, finalText);
             addCopy(ctx.msgEl, () => finalText);
             state.transcript.push({ role: "assistant", content: finalText });
           }
+          ctx.stream.classList.add("done");  // stops the blinking cursor
           const u = evt.data.usage || {};
           const tok = u.total_tokens ? ` · ${u.total_tokens} tokens` : "";
           ctx.body.appendChild(el("div", "meta", `${evt.data.iterations} step(s)${tok}`));

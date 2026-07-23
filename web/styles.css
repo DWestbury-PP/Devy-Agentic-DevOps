@@ -217,6 +217,9 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
 
 /* streaming raw text before final render */
 .stream { white-space: pre-wrap; word-break: break-word; color: var(--fg); }
+/* Once live markdown is rendered into the stream, drop pre-wrap so block layout
+   (headings, lists, tables, inline images) reads correctly. */
+.stream.answer { white-space: normal; }
 .stream::after { content: "▋"; color: var(--green); animation: blink 1s steps(2) infinite; margin-left: 1px; }
 .stream.done::after { content: ""; }
 @keyframes blink { 50% { opacity: 0; } }

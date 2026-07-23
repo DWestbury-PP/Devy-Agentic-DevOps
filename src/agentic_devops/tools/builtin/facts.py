@@ -49,7 +49,7 @@ def _format_hits(hits: list, query: str, as_of: Optional[datetime]) -> str:
         validity = "current" if f.is_current else f"valid {f.valid_from[:10]} – {(f.valid_to or '')[:10]}"
         matched = "+".join(h.sources or ("vector",))
         text = f.content if len(f.content) <= _SNIPPET_CHARS else f.content[:_SNIPPET_CHARS] + " …"
-        cite = f"{slot}  [{validity}; source {f.source}; matched {matched}]"
+        cite = f"{slot}  [id {f.memory_id[:8]}; {validity}; source {f.source}; matched {matched}]"
         blocks.append(f"[{i}] {cite}\n{text}")
     return "\n\n".join(blocks)
 
@@ -238,4 +238,127 @@ def build_memory_add_tool(store: FactStore) -> ToolSpec:
         handler=handler,
         safety_tier="read-only",
         wants_context=True,
+    )
+
+
+def build_memory_retract_tool(store: FactStore) -> ToolSpec:
+    """Construct the ``memory_retract`` ToolSpec — the graceful expire-a-fact seam.
+
+    The autonomous complement to the admin Memory tab: it lets Devy retire a fact
+    it has learned is stale. Retirement is bi-temporal (``valid_to = now``) — the
+    fact stops surfacing in recall but its history is preserved, so it's reversible
+    from the admin plane and is NOT a hard delete. The guardrails are behavioural,
+    not RBAC: it retracts exactly ONE identified fact, echoes back what it retracted
+    (so the action is transparent in the transcript), refuses an ambiguous id rather
+    than guessing, and its description steers Devy to *supersede* (memory_add, same
+    slot) whenever there's a replacement value — retract is for "no longer true,
+    with nothing to put in its place."
+    """
+
+    def _confirm(f) -> str:
+        slot = (
+            f"{f.subject} · {f.attribute}" if f.subject and f.attribute
+            else (f.subject or "(slotless)")
+        )
+        snippet = f.content if len(f.content) <= 200 else f.content[:200] + " …"
+        return (
+            f"Retracted fact {f.memory_id[:8]} ({slot}): \"{snippet}\". It will no "
+            "longer surface in recall; its history is preserved, so an operator can "
+            "restore it from the Memory admin tab if needed."
+        )
+
+    def handler(args: dict[str, Any]) -> str:
+        subject = (args.get("subject") or "").strip() or None
+        attribute = (args.get("attribute") or "").strip() or None
+        memory_id = (args.get("memory_id") or "").strip() or None
+
+        # Path 1 — by slot: retract the single currently-true fact for (subject, attribute).
+        if subject and attribute:
+            f = store.current_for_slot(subject, attribute)
+            if f is None:
+                return (
+                    f"No currently-true fact for {subject} · {attribute} — nothing to "
+                    "retract (it may already be retired, or was never recorded). Check "
+                    "with recall_facts."
+                )
+            store.retract(f.memory_id)
+            return _confirm(f)
+        if subject or attribute:
+            return (
+                "ERROR: a slot needs BOTH 'subject' and 'attribute'. Provide both, or "
+                "pass a 'memory_id' from recall_facts instead."
+            )
+
+        # Path 2 — by id: full, or the 8-char prefix recall_facts prints.
+        if memory_id:
+            matches = store.resolve_current(memory_id)
+            if not matches:
+                return (
+                    f"No current fact matches id {memory_id!r} — it may already be "
+                    "retired or superseded, or the id is wrong. Use recall_facts to "
+                    "find the current fact and its id."
+                )
+            if len(matches) > 1:
+                ids = ", ".join(m.memory_id[:8] for m in matches)
+                return (
+                    f"Ambiguous: {len(matches)} current facts match id prefix "
+                    f"{memory_id!r} ({ids}). Give more characters of the id."
+                )
+            store.retract(matches[0].memory_id)
+            return _confirm(matches[0])
+
+        return (
+            "ERROR: nothing to target. Provide either subject+attribute (to retract "
+            "the current fact in that slot) or a memory_id (from recall_facts)."
+        )
+
+    return ToolSpec(
+        name="memory_retract",
+        category="knowledge",
+        description=(
+            "Retract a durable FACT that has gone stale or turned out wrong, so it "
+            "stops surfacing in recall_facts. Graceful and reversible: the fact's "
+            "history is preserved (an operator can restore it) — NOT a hard delete. "
+            "Identify the fact by its slot (subject + attribute → retracts the one "
+            "current fact there) or by its id from recall_facts. IMPORTANT: if the "
+            "fact merely CHANGED to a new value, do NOT retract — deposit the new "
+            "value with memory_add using the same subject + attribute and it "
+            "supersedes the old one automatically (history kept). Retract is only for "
+            "'no longer true, with no replacement.'"
+        ),
+        when_to_use=(
+            "When you've established that a stored fact is no longer true AND there's "
+            "no successor value to record — a service was decommissioned, an owner "
+            "left with no replacement, an id/resource was retired. If there IS a new "
+            "value, use memory_add (same slot) instead, which supersedes. Confirm the "
+            "fact with recall_facts first so you retract the right one."
+        ),
+        use_cases=[
+            "that service was decommissioned — forget its facts",
+            "this stored fact is wrong and has no replacement",
+            "the owner left and there's no successor yet",
+            "retract the stale fact I just found with recall_facts",
+        ],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "type": "string",
+                    "description": "The fact's subject (e.g. 'svc:pricing', 'host:edge-gw-01'). "
+                    "Pair with 'attribute' to retract the current fact in that slot.",
+                },
+                "attribute": {
+                    "type": "string",
+                    "description": "The fact's attribute (e.g. 'port', 'owner'). Required together "
+                    "with 'subject' for slot-based retraction.",
+                },
+                "memory_id": {
+                    "type": "string",
+                    "description": "The fact's id — full, or the 8-char prefix recall_facts shows. "
+                    "Use for slotless facts or to target one fact precisely.",
+                },
+            },
+        },
+        handler=handler,
+        safety_tier="read-only",
     )

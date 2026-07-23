@@ -18,6 +18,7 @@ from agentic_devops.knowledge.embeddings import Embedder
 from agentic_devops.knowledge.facts import FactStore
 from agentic_devops.tools.builtin.facts import (
     build_memory_add_tool,
+    build_memory_retract_tool,
     build_recall_facts_tool,
 )
 
@@ -221,6 +222,87 @@ def test_fact_tools_share_knowledge_category(store):
     # memory_add takes request context (provenance); recall_facts does not.
     assert build_memory_add_tool(store).wants_context is True
     assert build_recall_facts_tool(store).wants_context is False
+
+
+def test_recall_facts_output_includes_short_id(store):
+    # recall_facts prints the 8-char id so Devy can hand it to memory_retract.
+    f = store.add_fact("owner is bob", source="t", subject="svc:rid", attribute="owner")
+    out = build_recall_facts_tool(store).handler({"query": "owner bob"})
+    assert f"id {f.memory_id[:8]}" in out
+
+
+# -- memory_retract: the graceful expire-a-fact seam ------------------------
+def test_resolve_current_prefix_hex_and_excludes_retired(store):
+    f = store.add_fact("owner is alice", source="t", subject="svc:rc", attribute="owner")
+    # full id and 8-char prefix both resolve to the one current fact
+    assert [m.memory_id for m in store.resolve_current(f.memory_id)] == [f.memory_id]
+    assert [m.memory_id for m in store.resolve_current(f.memory_id[:8])] == [f.memory_id]
+    # non-hex input can't match — guards against LIKE-wildcard smuggling
+    assert store.resolve_current("svc:rc") == []
+    assert store.resolve_current("%") == []
+    assert store.resolve_current("") == []
+    # retired facts are excluded (you can only retract what's currently believed)
+    store.retract(f.memory_id)
+    assert store.resolve_current(f.memory_id[:8]) == []
+
+
+def test_memory_retract_tool_by_slot(store):
+    store.add_fact("panel uid is old-123", source="t", subject="grafana:cpu", attribute="uid")
+    tool = build_memory_retract_tool(store)
+    out = tool.handler({"subject": "grafana:cpu", "attribute": "uid"})
+    assert out.startswith("Retracted fact") and "grafana:cpu · uid" in out
+    assert store.current_for_slot("grafana:cpu", "uid") is None  # gone from current
+
+
+def test_memory_retract_tool_by_id_prefix(store):
+    f = store.add_fact("region is us-east-1", source="t", subject="svc:ret", attribute="region")
+    tool = build_memory_retract_tool(store)
+    out = tool.handler({"memory_id": f.memory_id[:8]})
+    assert out.startswith("Retracted fact") and f.memory_id[:8] in out
+    assert store.current_for_slot("svc:ret", "region") is None
+    # history preserved — the row still exists, just not current
+    kept = store.get(f.memory_id)
+    assert kept is not None and kept.is_current is False
+
+
+def test_memory_retract_tool_empty_slot_is_friendly_not_error(store):
+    out = build_memory_retract_tool(store).handler({"subject": "svc:nope", "attribute": "port"})
+    assert not out.startswith("ERROR") and "nothing to" in out.lower()
+
+
+def test_memory_retract_tool_partial_slot_errors(store):
+    out = build_memory_retract_tool(store).handler({"subject": "svc:x"})
+    assert out.startswith("ERROR") and "attribute" in out
+
+
+def test_memory_retract_tool_requires_a_target(store):
+    assert build_memory_retract_tool(store).handler({}).startswith("ERROR")
+
+
+def test_memory_retract_tool_unknown_id(store):
+    out = build_memory_retract_tool(store).handler({"memory_id": "deadbeef"})
+    assert "No current fact matches" in out
+
+
+def test_memory_retract_tool_refuses_ambiguous_id(store, monkeypatch):
+    a = store.add_fact("x one", source="t", subject="svc:amb", attribute="k1")
+    b = store.add_fact("x two", source="t", subject="svc:amb", attribute="k2")
+    tool = build_memory_retract_tool(store)
+    # Two current facts match the prefix → refuse rather than guess which to retire.
+    monkeypatch.setattr(
+        store, "resolve_current",
+        lambda v: [store.get(a.memory_id), store.get(b.memory_id)],
+    )
+    out = tool.handler({"memory_id": "abcd"})
+    assert "Ambiguous" in out and "2 current facts" in out
+    # Nothing was retracted.
+    assert store.current_for_slot("svc:amb", "k1") is not None
+    assert store.current_for_slot("svc:amb", "k2") is not None
+
+
+def test_memory_retract_is_read_only_knowledge_seam(store):
+    t = build_memory_retract_tool(store)
+    assert t.category == "knowledge" and t.wants_context is False and t.safety_tier == "read-only"
 
 
 # -- admin hygiene: list / retract / delete ---------------------------------

@@ -88,6 +88,18 @@ def build_blob_store(settings: Any) -> Optional[BlobStore]:
     ac = getattr(settings, "attachments", None)
     if ac is None or not ac.enabled:
         return None
+    # Guard: in dev, the S3 endpoint MUST be LocalStack (AWS_ENDPOINT_URL). Without
+    # it, boto3's default chain would resolve ambient AWS creds (a laptop's
+    # AWS_PROFILE, CI keys) and silently create/use a bucket in a REAL account.
+    # Refuse and disable attachments instead. Prod (or an explicit endpoint) is fine.
+    mode = getattr(getattr(settings, "secrets", None), "mode", "dev")
+    if mode != "prod" and not os.environ.get("AWS_ENDPOINT_URL"):
+        logger.warning(
+            "attachments enabled in dev mode but AWS_ENDPOINT_URL (LocalStack) is unset — "
+            "refusing to touch real AWS S3; attachments disabled. Set AWS_ENDPOINT_URL "
+            "(dev/LocalStack) or DEVY_MODE=prod (real S3 via IAM)."
+        )
+        return None
     import boto3
     from botocore.config import Config
 

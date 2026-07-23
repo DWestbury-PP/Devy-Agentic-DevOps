@@ -113,10 +113,17 @@ def secrets():
 def _patch_app_secrets(monkeypatch):
     """Make every create_app() in the suite use an in-memory secrets backend whose
     writability tracks settings.secrets.mode (so prod read-only / 403 tests work),
-    instead of a real boto3 client. Patched on the app module (where it's bound)."""
+    instead of a real boto3 client. Patched on the app module (where it's bound).
+
+    ALSO neutralize build_blob_store: attachments default to enabled, and
+    build_blob_store eagerly builds a real boto3 S3 client + ensure_bucket(). On a
+    host with ambient AWS creds (AWS_PROFILE) and no AWS_ENDPOINT_URL that would
+    create a bucket in a REAL account. Tests that exercise blobs patch it back to a
+    fake store themselves (this per-test monkeypatch wins over the autouse one)."""
     from agentic_devops.proxy.secrets import SecretsProvider
 
     def _fake_build(settings):
         return SecretsProvider(_FakeSMClient(), writable=settings.secrets.mode == "dev")
 
     monkeypatch.setattr("agentic_devops.proxy.app.build_secrets_provider", _fake_build)
+    monkeypatch.setattr("agentic_devops.proxy.app.build_blob_store", lambda settings: None)

@@ -85,6 +85,14 @@ assume it's metrics-only, and never declare a capability missing without checkin
 incidents\") first. At the start of an investigation, and whenever you're asked \
 what you can do, survey your ACTUAL tools with `find_tools` before answering — \
 your real reach is often wider than you'd guess.
+- Rendering dashboard panels (e.g. Grafana `get_panel_image`): NEVER guess panel \
+IDs, and never render a whole dashboard's panels blindly. First read the panel \
+list WITH each panel's `type` (e.g. `$.panels[*]` giving id + title + type), then \
+render ONLY real visualization panels and SKIP `type: "row"` entries — those are \
+collapsible section headers, not charts, and render as blank/garbage. Curate to \
+the handful of panels actually relevant to the question rather than rendering \
+everything; a focused set of the right charts beats a wall of panels (including \
+empty rows).
 - Scope first: pin down the symptom, the affected service/component, and the \
 time window (when did it start, is it ongoing).
 - Gather just enough to move forward. Collect the smallest slice of data that \

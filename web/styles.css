@@ -282,6 +282,11 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
   max-width: 100%; height: auto; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg-soft);
 }
+/* Images Devy embeds inline in its answer (e.g. rendered Grafana panels). */
+.answer img {
+  display: block; max-width: min(560px, 100%); height: auto; margin: 10px 0;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-soft);
+}
 
 /* system / welcome note */
 .note { color: var(--fg-dim); margin: 0 auto 18px; white-space: pre-wrap; }

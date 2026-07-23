@@ -326,6 +326,13 @@ class Settings(BaseSettings):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rbac: RbacConfig = Field(default_factory=RbacConfig)
 
+    # Optional operator note about THIS deployment/environment, injected into the
+    # model context each turn (e.g. "Host: Mac Mini, macOS 26, Apple Silicon,
+    # Homebrew; single-node dev box."). Gives Devy ground-truth about where it runs
+    # so it doesn't have to infer host identity from tool output. The mounted tool
+    # sources are listed automatically alongside it.
+    deployment_context: Optional[str] = None
+
     # Harness behavior. max_iterations bounds tool-calling rounds per turn; an
     # adaptive RCA investigation needs room to gather across passes (raise it in
     # config.yaml for deeper investigations).

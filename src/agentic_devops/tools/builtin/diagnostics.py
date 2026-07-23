@@ -194,12 +194,14 @@ def build_diagnostics_tool(
         name = "proxy_self_diagnostics"
         category = "proxy-diagnostics"
         description = (
-            "Inspect the PROXY's OWN container/process environment (the box Devy's "
-            "proxy runs in) via safe, allow-listed checks. This is NOT the target "
-            "host: disk/memory/CPU here reflect the container, and there is no host "
-            "syslog. For the REAL host — disk, memory, reboot history, system logs — "
-            "use the mounted host MCP tools (host_journal, host_reboot_history, "
-            "host_disk, …) via find_tools(category='host')."
+            "Runs safe, allow-listed shell diagnostics inside the PROXY's OWN "
+            "container. Scope is mixed and worth knowing: CPU/memory reflect the "
+            "CONTAINER's cgroup view, but because parts of the host filesystem are "
+            "bind-mounted in, disk usage and load average can reflect the HOST — so "
+            "don't over-trust a single reading as purely container-local. There is no "
+            "host syslog here. For authoritative host state — disk, memory, reboot "
+            "history, system logs, services — use the mounted host MCP tools "
+            "(host_journal, host_reboot_history, host_disk, …) via find_tools(category='host')."
         )
         when_to_use = (
             "Only when asked specifically about the proxy's OWN container/process "

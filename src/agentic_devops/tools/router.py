@@ -117,6 +117,14 @@ class ToolsRouter:
                             "description": "Optional category filter. Known categories: "
                             + (", ".join(self.categories()) or "(none yet)"),
                         },
+                        "list_only": {
+                            "type": "boolean",
+                            "description": "Survey mode: return the FULL catalog (names + "
+                            "one-line summaries, grouped by source/category) WITHOUT loading "
+                            "the tools. Use it to see everything a source (e.g. a mounted MCP) "
+                            "offers in one call; then call find_tools with an `intent` to load "
+                            "the specific tools you need. Pair with `category` to survey one source.",
+                        },
                     },
                 },
             },

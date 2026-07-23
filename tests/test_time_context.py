@@ -160,3 +160,18 @@ def test_working_context_strips_ts_from_model_payload():
     for m in s.working_context():
         assert "ts" not in m  # provider must never see the display-only annotation
         assert m["role"] in ("system", "user", "assistant")
+
+
+def test_deployment_context_injected_as_system_note():
+    from agentic_devops.proxy.prompts import deployment_context
+    s = Session(id="t")
+    note = deployment_context(["host (host & Docker diagnostics, read-only)", "Grafana Cloud (metrics, logs)"],
+                              "Host: Mac Mini, macOS, Apple Silicon")
+    msgs = assemble_messages(s, "how's the host?", now=NOW, deployment=note)
+    # a second system message carries the live 'what's mounted + where I run' note
+    systems = [m for m in msgs if m["role"] == "system"]
+    assert len(systems) == 2
+    assert "Mounted tool sources" in systems[1]["content"]
+    assert "Grafana Cloud" in systems[1]["content"] and "Mac Mini" in systems[1]["content"]
+    # no deployment note → no extra system message (back-compat)
+    assert len([m for m in assemble_messages(s, "hi", now=NOW) if m["role"] == "system"]) == 1

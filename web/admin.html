@@ -125,6 +125,17 @@
       <div id="login-msg" class="msg"></div>
     </section>
 
+    <!-- Signed in via SSO but without the admin role — a password box would be
+         futile (login is disabled in jwt mode), so we explain instead. -->
+    <section id="forbidden" class="card hidden">
+      <h1>Not authorized</h1>
+      <div id="forbidden-msg" class="sub">This account doesn't have the admin role.</div>
+      <div class="field">
+        <a class="btn ghost-btn" href="./index.html">← back to chat</a>
+        <a class="btn ghost-btn" href="/oauth2/sign_out">sign out</a>
+      </div>
+    </section>
+
     <section id="shell" class="card hidden">
       <h1>Control plane</h1>
       <div class="nav">

@@ -63,7 +63,9 @@ secrets:
 # auth:
 #   mode: jwt
 #   jwks_url: https://www.googleapis.com/oauth2/v3/certs
-#   issuer:  https://accounts.google.com
+#   issuer:                               # Google id_tokens use EITHER form — accept both
+#     - https://accounts.google.com
+#     - accounts.google.com
 #   audience: ${OAUTH2_PROXY_CLIENT_ID}   # your Google OAuth Client ID (from .env)
 #   header:  Authorization
 #   email_claim: email

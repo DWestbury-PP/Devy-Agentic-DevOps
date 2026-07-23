@@ -155,7 +155,10 @@ class JwtAuth:
     jwks_url: Optional[str] = None
     public_key: Any = None
     algorithms: tuple[str, ...] = ("RS256",)
-    issuer: Optional[str] = None
+    # A single issuer, or several accepted ones. Google id_tokens carry `iss` as
+    # EITHER `https://accounts.google.com` or `accounts.google.com` (Google's docs
+    # say verifiers must accept both), so a list is supported and any match passes.
+    issuer: "str | list[str] | None" = None
     audience: Optional[str] = None
     email_claim: str = "email"
     groups_claim: str = "groups"
@@ -176,14 +179,28 @@ class JwtAuth:
             return self._jwk_client.get_signing_key_from_jwt(token).key
         raise RuntimeError("JwtAuth has no jwks_url or public_key configured")
 
+    def _allowed_issuers(self) -> Optional[set[str]]:
+        if not self.issuer:
+            return None
+        return {self.issuer} if isinstance(self.issuer, str) else set(self.issuer)
+
     def verify(self, token: str) -> dict[str, Any]:
         import jwt
 
-        return jwt.decode(
+        # Signature + audience via PyJWT; issuer checked manually so we can accept
+        # ANY of several allowed issuers (e.g. both Google `iss` forms) — PyJWT's
+        # built-in `issuer=` only matches one string across versions.
+        claims = jwt.decode(
             token, self._key(token), algorithms=list(self.algorithms),
-            issuer=self.issuer, audience=self.audience,
+            audience=self.audience,
             options={"verify_aud": self.audience is not None},
         )
+        allowed = self._allowed_issuers()
+        if allowed is not None and claims.get("iss") not in allowed:
+            raise jwt.InvalidIssuerError(
+                f"iss {claims.get('iss')!r} is not one of {sorted(allowed)}"
+            )
+        return claims
 
     def principal(
         self,

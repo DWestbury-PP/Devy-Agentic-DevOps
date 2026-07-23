@@ -682,8 +682,16 @@ def create_app(
             if token:
                 try:
                     return authenticator.principal(token).actor
-                except Exception:  # noqa: BLE001 — invalid/expired token → anonymous
+                except Exception as exc:  # noqa: BLE001 — invalid/expired token → anonymous
+                    # A silent verify failure would look like "auth works but history
+                    # isn't scoped" — surface it so it's diagnosable.
+                    logger.warning("assistant-plane JWT identity failed to verify: %s", exc)
                     return None
+            else:
+                logger.warning(
+                    "jwt mode but no bearer token on %s — is the edge forwarding it?",
+                    authenticator.header,
+                )
             return None
         return fallback
 

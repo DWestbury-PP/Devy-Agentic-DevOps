@@ -149,6 +149,21 @@ Google's JWKS (`auth.mode: jwt`).
    only way in. Open `http://localhost:8080` → Google login. The web shows your signed-in
    email (with a **sign out** link); history and audit are scoped to the verified email.
 
+**Gotchas (verified live on this setup):**
+
+- **Use `http://localhost:8080`, NOT `http://127.0.0.1:8080`.** They're different cookie
+  hosts. The registered `redirect_uri` is `localhost`, so if you start the flow on
+  `127.0.0.1` the CSRF cookie is set on the wrong host and the callback fails with
+  *403 "Unable to find a valid CSRF token."* (Add a `127.0.0.1` redirect URI in Google if
+  you want both to work.)
+- **Google id_tokens use EITHER `https://accounts.google.com` or `accounts.google.com`**
+  for `iss`. Configure `auth.issuer` as a **list of both** (see above) or verification
+  fails with *"Invalid issuer"* — which shows up as "login works but history isn't scoped
+  to my email" (identity silently falls back to anonymous). Devy logs JWT verify failures,
+  so `docker logs <proxy>` will show the reason.
+- **Image attachments need a larger body limit** — nginx defaults to 1 MB, so a
+  screenshot 413s. The bundled `web/nginx.conf` sets `client_max_body_size 25m`.
+
 For **production**, pin the oauth2-proxy image version, serve over **HTTPS** (Google
 requires https redirects off-localhost; set `OAUTH2_PROXY_COOKIE_SECURE=true`), and add
 the prod redirect URI to the Google client. Needs Docker Compose ≥ 2.24 (`!override`).

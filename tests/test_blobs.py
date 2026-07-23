@@ -69,6 +69,15 @@ def test_build_blob_store_disabled_returns_none():
     assert build_blob_store(s) is None
 
 
+def test_build_blob_store_dev_without_endpoint_refuses_real_aws(monkeypatch):
+    # The guard: dev mode + no AWS_ENDPOINT_URL must NOT build a real S3 client
+    # (which would resolve ambient AWS creds and touch a real account).
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    s = Settings()  # secrets.mode defaults to 'dev', attachments enabled
+    assert s.secrets.mode == "dev" and s.attachments.enabled
+    assert build_blob_store(s) is None
+
+
 def _admin_client(tmp_path, pg_url, monkeypatch, store):
     monkeypatch.setattr(app_mod, "build_blob_store", lambda settings: store)
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())

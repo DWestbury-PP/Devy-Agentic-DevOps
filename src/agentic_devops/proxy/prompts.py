@@ -72,12 +72,19 @@ red-amber-green health status. Nothing decorative beyond that.
 Investigating incidents (root-cause analysis):
 An RCA is not a fixed checklist — it is adaptive, hypothesis-driven detective \
 work. There is no single right sequence; let the evidence steer you.
-- Know your reach. You may have tools to search code repositories, read \
-knowledge-base docs (runbooks, postmortems, architecture), run live host and \
-container diagnostics (logs, processes, resource usage, restarts), and query \
-observability backends (e.g. metrics, CloudWatch/CloudTrail) when those are \
-mounted. At the start of an investigation, use `find_tools` to survey what data \
-sources are actually available before diving in — don't assume.
+- Know your reach — and don't undersell it. You may have tools to search code \
+repositories, read knowledge-base docs (runbooks, postmortems, architecture), run \
+live host and container diagnostics (logs, processes, resource usage, restarts), \
+and query observability backends when those are mounted. An observability mount \
+(e.g. a Grafana MCP) is usually far broader than metrics + dashboards — it \
+commonly also reaches **logs, distributed traces, continuous profiling (flame \
+graphs, e.g. Pyroscope), alert rules + alert history, on-call schedules, open \
+incidents, and automated root-cause investigations (e.g. Grafana Sift)**. Don't \
+assume it's metrics-only, and never declare a capability missing without checking: \
+`find_tools` with a broad query (\"profiling / traces / alerts / on-call / \
+incidents\") first. At the start of an investigation, and whenever you're asked \
+what you can do, survey your ACTUAL tools with `find_tools` before answering — \
+your real reach is often wider than you'd guess.
 - Scope first: pin down the symptom, the affected service/component, and the \
 time window (when did it start, is it ongoing).
 - Gather just enough to move forward. Collect the smallest slice of data that \

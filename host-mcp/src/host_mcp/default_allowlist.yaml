@@ -341,6 +341,61 @@ checks:
     description: "Docker disk usage (images, containers, volumes)."
     argv: ["docker", "system", "df"]
 
+  # ---- Mutating remediations (Tier A: reversible / self-healing / rebuildable) ----
+  #      GATED OFF BY DEFAULT. Exposed only when HOST_MCP_ALLOW_MUTATIONS=true — a
+  #      dedicated, single-purpose switch independent of the read profile, so a
+  #      SecOps team controls "can this host act?" with one auditable boolean.
+  #      Even when enabled, in the Devy deployment these are never called directly
+  #      by the agent: the proxy PROPOSES an action and a human APPROVES it before
+  #      the proxy's executor invokes the verb (guarded-actions design). Only
+  #      reversible verbs live here by design — NO stop, NO rm, NO volume/path
+  #      deletion, NO shell. Those (Tier C) are excluded permanently.
+  restart_service:
+    profile: diagnostic
+    mutating: true
+    description: "Restart a service/daemon — the classic self-healing remediation for a crash-looping or wedged service. Cross-OS: `systemctl restart <unit>` on Linux (systemd), `brew services restart <name>` on macOS (Homebrew-managed). Reversible in effect: the service comes back after a brief restart. Requires HOST_MCP_ALLOW_MUTATIONS."
+    platform:
+      Linux: ["systemctl", "restart", "{name}"]
+      Darwin: ["brew", "services", "restart", "{name}"]
+    args:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "Service identifier — a systemd unit on Linux (nginx.service) or a Homebrew service name on macOS (alloy)."
+
+  restart_container:
+    profile: diagnostic
+    mutating: true
+    description: "Restart a Docker container by name/id (`docker restart <container>`) — self-healing remediation for a wedged or unhealthy container; its state returns. Requires HOST_MCP_ALLOW_MUTATIONS."
+    argv: ["docker", "restart", "{container}"]
+    args:
+      container:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        description: "Container name or id."
+
+  reload_config:
+    profile: diagnostic
+    mutating: true
+    description: "Reload a service's configuration WITHOUT a full restart (`systemctl reload <unit>`) — the gentlest remediation (no downtime) when a service supports live reload. Linux/systemd only; on macOS reload isn't uniformly supported (use restart_service). Requires HOST_MCP_ALLOW_MUTATIONS."
+    platform:
+      Linux: ["systemctl", "reload", "{name}"]
+    args:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "systemd unit, e.g. nginx.service."
+
+  prune_images:
+    profile: diagnostic
+    mutating: true
+    timeout: 60
+    description: "Reclaim disk by removing ALL unused Docker images (`docker image prune -a -f`) — images not referenced by any container. Tier-A safe: unused images are rebuildable or re-pullable from a registry (e.g. ECR), so this frees space without destroying data. Does NOT touch volumes (that would be data loss and is excluded by design). Requires HOST_MCP_ALLOW_MUTATIONS."
+    argv: ["docker", "image", "prune", "-a", "-f"]
+
   # ---- Elevated examples — NOT exposed at the default 'diagnostic' profile.
   #      (For everyday read-only service status prefer the cross-OS `service_status`
   #      above; this remains as the profile-gating example.)

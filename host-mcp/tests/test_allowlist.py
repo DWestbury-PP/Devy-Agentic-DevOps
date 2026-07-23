@@ -1,13 +1,17 @@
+import pytest
 import yaml
 
 import host_mcp.allowlist as al_mod
+import host_mcp.config as cfg_mod
 from host_mcp.allowlist import Allowlist
 from host_mcp.config import DEFAULT_ALLOWLIST
 
 
-def _allowlist(profile="diagnostic"):
+def _allowlist(profile="diagnostic", allow_mutations=False):
     data = yaml.safe_load(DEFAULT_ALLOWLIST.read_text())
-    return Allowlist.from_dict(data, active_profile=profile)
+    return Allowlist.from_dict(
+        data, active_profile=profile, allow_mutations=allow_mutations
+    )
 
 
 def test_profile_gating():
@@ -360,8 +364,127 @@ def test_tail_file_reads_allowlisted_logs_only():
     assert err is None and "2000" in argv
 
 
-def test_no_mutating_docker_checks_present():
-    # The allowlist must never expose shell or state-changing docker verbs.
-    names = set(_allowlist("elevated")._checks)  # every defined check, any profile
-    for forbidden in ("docker_exec", "docker_run", "docker_rm", "docker_stop", "shell", "bash"):
+def test_no_tier_c_verbs_ever_present():
+    # Tier-C (data-destroying / shell) verbs are excluded permanently — not even
+    # defined in the allow-list, so no switch can unlock them.
+    names = set(_allowlist("elevated", allow_mutations=True)._checks)
+    for forbidden in (
+        "docker_exec", "docker_run", "docker_rm", "docker_stop", "docker_volume_rm",
+        "docker_system_prune", "rm_rf", "shell", "bash",
+    ):
         assert forbidden not in names
+
+
+# -- guarded mutating actions (G-1): default-off, cross-OS, fail-closed ------
+_MUTATING = {"restart_service", "restart_container", "reload_config", "prune_images"}
+
+
+def test_only_curated_reversible_verbs_are_mutating():
+    # The ENTIRE mutating surface is exactly the Tier-A reversible set — nothing
+    # else in the allow-list is tagged `mutating`, so flipping the switch can never
+    # unlock a surprise destructive verb.
+    al = _allowlist("elevated", allow_mutations=True)
+    tagged = {name for name, c in al._checks.items() if c.mutating}
+    assert tagged == _MUTATING
+
+
+def test_mutating_checks_hidden_by_default():
+    # Default (allow_mutations=False): no mutating verb is exposed at ANY profile.
+    for profile in ("read-only", "diagnostic", "elevated"):
+        names = {c.name for c in _allowlist(profile).available_checks()}
+        assert not (_MUTATING & names), f"{profile} leaked mutating checks"
+    # ...and they're genuinely unavailable — can't be resolved or run by name.
+    al = _allowlist("diagnostic")
+    _, err = al.build_argv("restart_service", {"name": "nginx.service"})
+    assert err and "unavailable" in err
+    assert al.run("prune_images", {}).startswith("ERROR")
+
+
+def test_mutating_checks_exposed_only_when_enabled():
+    names = {c.name for c in _allowlist("diagnostic", allow_mutations=True).available_checks()}
+    assert _MUTATING <= names
+
+
+def test_mutations_still_require_profile_not_just_the_flag():
+    # The flag governs "can act"; the read profile still governs exposure. Mutating
+    # checks are profile=diagnostic, so read-only never exposes them even with the
+    # flag on — read-only stays strictly look-but-don't-touch.
+    names = {c.name for c in _allowlist("read-only", allow_mutations=True).available_checks()}
+    assert not (_MUTATING & names)
+
+
+def test_mutating_verbs_are_cross_os(monkeypatch):
+    al = _allowlist("diagnostic", allow_mutations=True)
+    # restart_service: systemd on Linux, brew services on macOS
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("restart_service", {"name": "nginx.service"})
+    assert err is None and argv == ["systemctl", "restart", "nginx.service"]
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    argv, err = al.build_argv("restart_service", {"name": "alloy"})
+    assert err is None and argv == ["brew", "services", "restart", "alloy"]
+    # reload_config is Linux/systemd only — clean "not supported" on macOS
+    _, err = al.build_argv("reload_config", {"name": "nginx.service"})
+    assert err and "not supported" in err
+    # restart_container + prune_images are docker (any OS)
+    argv, err = al.build_argv("restart_container", {"container": "web"})
+    assert err is None and argv == ["docker", "restart", "web"]
+    argv, err = al.build_argv("prune_images", {})
+    assert err is None and argv == ["docker", "image", "prune", "-a", "-f"]
+
+
+def test_mutating_verbs_reject_injection():
+    al = _allowlist("diagnostic", allow_mutations=True)
+    _, err = al.build_argv("restart_service", {"name": "a; rm -rf /"})
+    assert err
+    _, err = al.build_argv("restart_container", {"container": "a; reboot"})
+    assert err
+    _, err = al.build_argv("restart_service", {})  # name required
+    assert err
+
+
+# -- config: the SecOps switch + fail-closed network auth --------------------
+def _clear_host_mcp_env(monkeypatch):
+    for k in ("HOST_MCP_ALLOW_MUTATIONS", "HOST_MCP_TRANSPORT", "HOST_MCP_TOKEN",
+              "HOST_MCP_PROFILE", "HOST_MCP_ALLOWLIST", "HOST_MCP_AUDIT"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_allow_mutations_env_flag_default_off(monkeypatch):
+    _clear_host_mcp_env(monkeypatch)
+    assert cfg_mod.load().allowlist.allow_mutations is False
+    monkeypatch.setenv("HOST_MCP_ALLOW_MUTATIONS", "true")
+    assert cfg_mod.load().allowlist.allow_mutations is True
+
+
+def test_fail_closed_http_mutations_without_token(monkeypatch):
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_ALLOW_MUTATIONS", "true")
+    monkeypatch.setenv("HOST_MCP_TRANSPORT", "http")
+    with pytest.raises(SystemExit):  # network mutations with no token → refuse
+        cfg_mod.load()
+
+
+def test_http_mutations_with_token_ok(monkeypatch):
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_ALLOW_MUTATIONS", "true")
+    monkeypatch.setenv("HOST_MCP_TRANSPORT", "http")
+    monkeypatch.setenv("HOST_MCP_TOKEN", "secret")
+    cfg = cfg_mod.load()
+    assert cfg.token == "secret" and cfg.allowlist.allow_mutations is True
+
+
+def test_stdio_mutations_without_token_ok(monkeypatch):
+    # stdio is a local pipe, not network-reachable — exempt from the token rule.
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_ALLOW_MUTATIONS", "true")
+    cfg = cfg_mod.load()
+    assert cfg.transport == "stdio" and cfg.allowlist.allow_mutations is True
+
+
+def test_read_only_http_without_token_unchanged(monkeypatch):
+    # Back-compat: only mutations are fail-closed; read-only http with no token
+    # still starts exactly as before.
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_TRANSPORT", "http")
+    cfg = cfg_mod.load()  # no SystemExit
+    assert cfg.allowlist.allow_mutations is False

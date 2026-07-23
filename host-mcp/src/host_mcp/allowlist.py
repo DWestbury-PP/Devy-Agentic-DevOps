@@ -112,6 +112,13 @@ class Check:
     # macOS unified-log query, `log show`) legitimately take longer than the
     # 20s default when scanning a wide time window.
     timeout: Optional[int] = None
+    # A state-CHANGING check (restart a service, prune images, …) as opposed to a
+    # read-only diagnostic. Mutating checks are exposed ONLY when the server is
+    # started with mutations explicitly enabled (see Allowlist.allow_mutations) —
+    # a dedicated, default-off switch independent of the read profile. The
+    # allow-list still permits only reversible, enumerated verbs; there is never a
+    # shell, and no path/volume deletion.
+    mutating: bool = False
 
     def base_argv(self) -> Optional[list[str]]:
         if self.platform:
@@ -141,16 +148,26 @@ class Allowlist:
         checks: dict[str, Check],
         active_profile: str = "diagnostic",
         audit_path: Optional[Path] = None,
+        allow_mutations: bool = False,
     ) -> None:
         if active_profile not in PROFILES:
             raise ValueError(f"unknown profile {active_profile!r}; valid: {list(PROFILES)}")
         self._checks = checks
         self.active_profile = active_profile
         self._audit_path = audit_path
+        # The dedicated, single-purpose mutation gate (default OFF). Independent of
+        # the read profile: no mutating check is ever exposed, resolved, or run
+        # unless this is true — so a SecOps team controls "can this host act?" with
+        # one auditable boolean, and the sidecar is incapable of mutation by default.
+        self.allow_mutations = allow_mutations
 
     @classmethod
     def from_dict(
-        cls, data: dict, active_profile: Optional[str] = None, audit_path: Optional[Path] = None
+        cls,
+        data: dict,
+        active_profile: Optional[str] = None,
+        audit_path: Optional[Path] = None,
+        allow_mutations: bool = False,
     ) -> "Allowlist":
         checks: dict[str, Check] = {}
         for name, raw in (data.get("checks") or {}).items():
@@ -165,12 +182,21 @@ class Allowlist:
                 platform=raw.get("platform"),
                 args=args,
                 timeout=raw.get("timeout"),
+                mutating=bool(raw.get("mutating", False)),
             )
         profile = active_profile or data.get("profile", "diagnostic")
-        return cls(checks, active_profile=profile, audit_path=audit_path)
+        return cls(checks, active_profile=profile, audit_path=audit_path, allow_mutations=allow_mutations)
 
     def _allowed(self, check: Check) -> bool:
-        return PROFILES.get(check.profile, 99) <= PROFILES[self.active_profile]
+        # Two independent gates: the read profile (how much it can SEE) and the
+        # mutation switch (whether it can ACT at all). A mutating check needs BOTH
+        # its profile satisfied AND mutations explicitly enabled — so mutations are
+        # off by default even at the elevated profile, and never at read-only.
+        if PROFILES.get(check.profile, 99) > PROFILES[self.active_profile]:
+            return False
+        if check.mutating and not self.allow_mutations:
+            return False
+        return True
 
     def available_checks(self) -> list[Check]:
         return [c for c in self._checks.values() if self._allowed(c)]

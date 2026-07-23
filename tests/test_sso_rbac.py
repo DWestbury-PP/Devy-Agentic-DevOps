@@ -203,6 +203,40 @@ def test_login_disabled_in_jwt_mode(jwt_stack):
     assert client.post("/v1/admin/login", json={"password": "x"}).status_code == 400
 
 
+# -- /v1/whoami (auth-aware header) -----------------------------------------
+def test_whoami_returns_verified_identity_roles_and_picture(jwt_stack):
+    client, priv = jwt_stack
+    hdr = {"Authorization": "Bearer " + _sign(priv, {
+        "email": "a@x.com", "groups": ["devy-admins"], "name": "Ada L",
+        "picture": "https://pic/a.png", "iss": "idp", "aud": "devy"})}
+    j = client.get("/v1/whoami", headers=hdr).json()
+    assert j["authenticated"] is True and j["email"] == "a@x.com"
+    assert j["is_admin"] is True and "admin" in j["roles"]
+    assert j["name"] == "Ada L" and j["picture"] == "https://pic/a.png"
+
+
+def test_whoami_viewer_is_not_admin(jwt_stack):
+    client, priv = jwt_stack
+    j = client.get("/v1/whoami", headers=_bearer(priv, ["devy-viewers"], "v@x.com")).json()
+    assert j["authenticated"] is True and j["is_admin"] is False
+
+
+def test_whoami_anonymous_in_jwt_mode_without_token(jwt_stack):
+    client, _ = jwt_stack
+    j = client.get("/v1/whoami").json()
+    assert j["authenticated"] is False and j["is_admin"] is False
+
+
+def test_whoami_dev_mode_is_honor_system(tmp_path, pool, pg_url):
+    # No auth configured (password mode, no secrets) → unauthenticated, is_admin unknown.
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t"),
+        provider=object(), router=ToolsRouter(),
+    )
+    j = TestClient(app).get("/v1/whoami", headers={"X-User-Id": "dev"}).json()
+    assert j["authenticated"] is False and j["is_admin"] is None and j["name"] == "dev"
+
+
 def test_password_mode_still_grants_admin(tmp_path, pool, pg_url, monkeypatch):
     monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
     monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)

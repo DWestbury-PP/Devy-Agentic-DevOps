@@ -29,6 +29,19 @@
       <button id="copy-btn" class="ghost" title="copy this conversation as Markdown">⧉ copy</button>
       <button id="hist-btn" class="ghost" title="conversation history">☰ history</button>
       <button id="new-btn" class="ghost" title="start a new conversation">+ new</button>
+      <a id="admin-link" class="ghost" href="./admin.html" title="admin console" hidden>⚙ admin</a>
+      <!-- Auth-aware account chip: Google avatar (or initial) + a popover with the
+           signed-in email and a sign-out action. Shown only when signed in via SSO. -->
+      <div id="user-menu" class="user-menu" hidden>
+        <button id="user-chip" class="user-chip" title="account" aria-haspopup="true" aria-expanded="false">
+          <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+        </button>
+        <div id="user-pop" class="user-pop" hidden>
+          <div class="user-pop-email" id="user-pop-email"></div>
+          <div class="user-pop-roles" id="user-pop-roles"></div>
+          <a id="user-signout" class="user-pop-signout" href="/oauth2/sign_out">Sign out</a>
+        </div>
+      </div>
     </div>
   </header>
 

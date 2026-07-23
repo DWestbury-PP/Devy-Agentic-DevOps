@@ -752,6 +752,36 @@ def create_app(
             )
         return _action_public(action_store.get(action_id))
 
+    @app.get("/v1/whoami")
+    def whoami(request: Request, x_user_id: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        """Auth-aware identity for the web header (assistant plane — any signed-in
+        user, not just admins). In jwt mode we decode the forwarded id_token → the
+        VERIFIED email/roles/picture (the enabler for the avatar chip + the
+        conditional Admin nav). In password/dev mode there's no per-request identity,
+        so we echo the honor-system name and report ``authenticated: false`` — the UI
+        keeps its localStorage-name behaviour. ``is_admin`` reflects verified roles in
+        jwt mode; in dev mode it's ``null`` (unknown — the admin console gates itself)."""
+        if authenticator.mode == "jwt" and authenticator.enabled:
+            token = authenticator.extract_token(request.headers.get(authenticator.header))
+            if token:
+                try:
+                    p = authenticator.principal(token)
+                except Exception as exc:  # noqa: BLE001 — invalid/expired → anonymous
+                    logger.warning("whoami JWT identity failed to verify: %s", exc)
+                else:
+                    claims = p.claims or {}
+                    return {
+                        "authenticated": True, "mode": "jwt", "id": p.id, "email": p.email,
+                        "name": claims.get("name") or claims.get("given_name"),
+                        "picture": claims.get("picture"),
+                        "roles": sorted(p.roles), "is_admin": "admin" in p.roles,
+                    }
+            return {"authenticated": False, "mode": "jwt", "id": None, "email": None,
+                    "name": None, "picture": None, "roles": [], "is_admin": False}
+        # password / dev — honor-system identity, no verified roles
+        return {"authenticated": False, "mode": authenticator.mode, "id": x_user_id,
+                "email": None, "name": x_user_id, "picture": None, "roles": [], "is_admin": None}
+
     @app.post("/v1/admin/login", response_model=AdminToken)
     def admin_login(body: AdminLogin) -> AdminToken:
         if not authenticator.login_enabled:

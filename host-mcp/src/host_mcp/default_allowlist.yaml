@@ -41,7 +41,7 @@ checks:
 
   network:
     profile: read-only
-    description: "Listening TCP/UDP sockets (no process names; no root needed)."
+    description: "Listening TCP/UDP sockets — WHICH PORTS are open, no process attribution and no root needed. Answers 'what is this host listening on?' (e.g. is the exporter's port bound). For WHICH PROCESS owns a socket, or to see ESTABLISHED connections to a remote endpoint, use `connections` instead. Cross-OS: `ss -tuln` on Linux, `netstat -an` on macOS."
     platform:
       Linux: ["ss", "-tuln"]
       Darwin: ["netstat", "-an", "-p", "tcp"]
@@ -61,14 +61,14 @@ checks:
   # ---- Host: diagnostic -------------------------------------------------
   processes:
     profile: diagnostic
-    description: "Processes sorted by CPU usage."
+    description: "A quick ranked list of processes by CPU (pid, ppid, %cpu, %mem, command) — the fast answer to 'what is eating CPU right now?'. Just the process table; no system-wide totals, threads, or state. For a fuller snapshot (load average, memory totals, per-process state/threads) use `top_snapshot`."
     platform:
       Linux: ["ps", "-eo", "pid,ppid,%cpu,%mem,comm", "--sort=-%cpu"]
       Darwin: ["ps", "-Ao", "pid,ppid,%cpu,%mem,comm", "-r"]
 
   top_snapshot:
     profile: diagnostic
-    description: "One-shot snapshot of top processes (not streaming)."
+    description: "A one-shot `top` snapshot (not streaming): system-wide load average and memory/CPU totals PLUS the busiest processes with state and thread counts — the broader 'how loaded is this box, and by what?' picture. Heavier than `processes` (which is just a ranked CPU list); use `processes` when you only need to see which command is burning CPU."
     platform:
       Linux: ["top", "-bn1"]
       Darwin: ["top", "-l", "1", "-n", "20"]

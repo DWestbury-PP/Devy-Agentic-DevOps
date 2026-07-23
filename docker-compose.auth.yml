@@ -1,0 +1,58 @@
+# Google SSO edge (Auth arc, Phase B) — an OPT-IN overlay over docker-compose.yml.
+#
+# The base stack is deliberately auth-free (password-mode bootstrap; see
+# docs/deployment.md). Layer this file ON TOP to put the whole app behind Google
+# login via oauth2-proxy:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d --build
+#
+# It (1) adds `oauth2-proxy` as the sole :8080 entry point, (2) un-publishes the
+# chat-ui and proxy host ports so the edge is the ONLY way in (no auth bypass), and
+# (3) hands the proxy the Client ID so config.yaml's `audience: ${OAUTH2_PROXY_CLIENT_ID}`
+# resolves. Requires OAUTH2_PROXY_CLIENT_ID / _CLIENT_SECRET / _COOKIE_SECRET in .env,
+# and config.yaml switched to `auth.mode: jwt` (see config.example.yaml). Needs Docker
+# Compose ≥ 2.24 for the `!override` tag.
+
+services:
+  # The edge: authenticates every request with Google, then proxies to the web UI
+  # with the verified OIDC id_token in `Authorization: Bearer` (which the proxy
+  # verifies against Google's JWKS → email → role). No token ever reaches the browser.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest   # pin a version tag for prod
+    container_name: agentic-devops-oauth2-proxy
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      OAUTH2_PROXY_PROVIDER: google
+      OAUTH2_PROXY_CLIENT_ID: "${OAUTH2_PROXY_CLIENT_ID:?set OAUTH2_PROXY_CLIENT_ID in .env}"
+      OAUTH2_PROXY_CLIENT_SECRET: "${OAUTH2_PROXY_CLIENT_SECRET:?set OAUTH2_PROXY_CLIENT_SECRET in .env}"
+      OAUTH2_PROXY_COOKIE_SECRET: "${OAUTH2_PROXY_COOKIE_SECRET:?generate with openssl rand -base64 32}"
+      OAUTH2_PROXY_REDIRECT_URL: "http://localhost:8080/oauth2/callback"
+      OAUTH2_PROXY_UPSTREAMS: "http://chat-ui:8080"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:8080"
+      OAUTH2_PROXY_SCOPE: "openid email profile"
+      # Only test users (added in Google Cloud → Audience) can even authenticate;
+      # inside that gate, ANY authenticated Google email is admitted and Devy's
+      # rbac.email_roles assigns the role (unmapped → default_role).
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Pass the OIDC id_token to the upstream as `Authorization: Bearer <jwt>`.
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # localhost is plain http in dev → non-secure cookie. PROD (https) sets this true.
+      OAUTH2_PROXY_COOKIE_SECURE: "false"
+    depends_on:
+      - chat-ui
+    restart: unless-stopped
+
+  # The web UI is now internal-only — reachable solely THROUGH oauth2-proxy.
+  chat-ui:
+    ports: !override []
+
+  # Close direct host access to the assistant plane so the edge is the only entry
+  # (no unauthenticated bypass on :8765). Reachable in-network as proxy:8765 still.
+  # Also hand the proxy the Client ID for the JWT `audience` check.
+  proxy:
+    ports: !override []
+    environment:
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID:-}

@@ -511,6 +511,29 @@ def create_app(
             return message
         return [{"type": "text", "text": message}, *refs]
 
+    def _persist_tool_image(im: Any) -> Optional[str]:
+        """Blob-store an image a tool RENDERED (e.g. a Grafana panel) and return its
+        ref, so it can be attached to the stored assistant turn (survives history).
+        The harness calls this via its image_sink seam. None if attachments off."""
+        if blob_store is None:
+            return None
+        try:
+            raw = base64.b64decode(im.data)
+        except (binascii.Error, ValueError):
+            return None
+        ref = blob_store.put(raw, im.mime)
+        attachment_store.record(ref, im.mime, len(raw))
+        return ref
+
+    def _assistant_content(text: str, rendered: list[dict[str, Any]]) -> Any:
+        """The assistant turn as stored: plain text, or text + image_ref parts when
+        the turn rendered images — so the transcript (and history reload) keep them."""
+        if not rendered:
+            return text
+        return [{"type": "text", "text": text},
+                *({"type": "image_ref", "ref": r["ref"], "mime": r["mime"], "name": r.get("name")}
+                  for r in rendered)]
+
     def _ensure_digests(session: Any) -> dict[str, Any]:
         """One-time vision digests for the PAST images in this session's window, so
         the model carries their description (not the pixels). Generated once per
@@ -1265,6 +1288,7 @@ def create_app(
                 lambda e: tracer.event(session.id, e),
                 {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
                 tracer,
+                _persist_tool_image,
             )
         except ProviderError as exc:  # friendly message instead of a raw 500 blob
             raise HTTPException(status_code=502, detail=exc.user_message) from exc
@@ -1275,7 +1299,7 @@ def create_app(
 
         if req.session_id:
             session.add_user(_stored_user_content(req.prompt, refs))
-            session.add_assistant(result.text)
+            session.add_assistant(_assistant_content(result.text, result.rendered_images))
             session.add_findings(result.tool_findings, settings.tool_finding_max_chars)
             if not session.title and len(session.messages) >= 2:
                 session.title = await run_in_threadpool(
@@ -1319,7 +1343,7 @@ def create_app(
                 gen = run_turn_streaming(
                     provider, router, settings, messages, tier,
                     {"user_id": user_id, "session_id": session.id, "allowed_tier": allowed_tier},
-                    tracer,
+                    tracer, image_sink=_persist_tool_image,
                 )
                 try:
                     while True:
@@ -1353,7 +1377,7 @@ def create_app(
             result = result_holder.get("result")
             if result is not None:
                 session.add_user(_stored_user_content(req.message, refs))
-                session.add_assistant(result.text)
+                session.add_assistant(_assistant_content(result.text, result.rendered_images))
                 session.add_findings(result.tool_findings, settings.tool_finding_max_chars)
                 if not session.title and len(session.messages) >= 2:
                     session.title = await run_in_threadpool(

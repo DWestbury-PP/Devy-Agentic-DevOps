@@ -94,12 +94,12 @@ def _flatten_content(content: Any, digests: Optional[dict[str, str]] = None) -> 
             digest = (digests or {}).get(ref)
             if digest:
                 parts.append(
-                    f'[Image the user attached earlier — "{name}" (id: {ref}). '
+                    f'[Image shown earlier — "{name}" (id: {ref}). '
                     f"Description: {digest}\n"
                     "Call view_image with this id to look at the actual image again.]"
                 )
             else:
-                parts.append(f'[Image the user attached earlier — "{name}" (id: {ref})]')
+                parts.append(f'[Image shown earlier — "{name}" (id: {ref})]')
     return "\n".join(x for x in parts if x).strip()
 
 
@@ -154,7 +154,11 @@ class Session:
         (the blob hash), never the base64."""
         self.messages.append({"role": "user", "content": content, "ts": time.time()})
 
-    def add_assistant(self, content: str) -> None:
+    def add_assistant(self, content: Any) -> None:
+        """Store an assistant turn. ``content`` is a plain string, or a list of
+        parts ``[{type:"text",...}, {type:"image_ref", ...}]`` when the turn
+        RENDERED images (e.g. Grafana panels) — the transcript keeps the image
+        reference so they survive in history, like a user attachment."""
         self.messages.append({"role": "assistant", "content": content, "ts": time.time()})
         self.updated_at = time.time()
 

@@ -213,10 +213,20 @@ function renderMessage(role, content) {
     addCopy(u.el, () => contentToMarkdown(content));
   } else {
     const d = msg("devy", "Devy");
+    const { text, images } = splitStoredContent(content);  // Devy may have rendered panels
     const answer = el("div", "answer");
-    renderMarkdown(answer, content || "");
+    renderMarkdown(answer, text || "");
     d.body.appendChild(answer);
-    addCopy(d.el, () => content);
+    if (images.length) {
+      const gal = el("div", "msg-images");
+      images.forEach((im) => {
+        const i = document.createElement("img");
+        i.className = "msg-image"; i.loading = "lazy"; i.src = im.src; i.alt = im.name || "panel";
+        gal.appendChild(i);
+      });
+      d.body.appendChild(gal);
+    }
+    addCopy(d.el, () => contentToMarkdown(content));
   }
 }
 
@@ -714,8 +724,7 @@ async function loadConversation(id) {
 
 async function copyConversation() {
   const md = state.transcript
-    .map((m) => (m.role === "user" ? "**You:**\n\n" : "**Devy:**\n\n") +
-      (m.role === "user" ? contentToMarkdown(m.content) : (m.content || "")))
+    .map((m) => (m.role === "user" ? "**You:**\n\n" : "**Devy:**\n\n") + contentToMarkdown(m.content))
     .join("\n\n---\n\n");
   if (!md) { note("Nothing to copy yet."); return; }
   try {

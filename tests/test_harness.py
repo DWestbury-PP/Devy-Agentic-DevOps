@@ -272,3 +272,24 @@ def test_rendered_tool_image_is_persisted_and_returned():
     f = [x for x in result.tool_findings if x["tool"] == "get_panel_image"][0]
     assert "![caption](/v1/blobs/hash-PNGBYTES)" in f["result"]
     assert "PNGBYTES" not in f["result"].replace("hash-PNGBYTES", "")  # no raw base64
+
+
+def test_find_tools_list_only_surveys_without_loading():
+    """find_tools(list_only=true) returns the catalog grouped by category but does
+    NOT make the tools callable — a survey, not a load."""
+    router = ToolsRouter()
+    for name, cat in [("host_disk", "host"), ("host_memory", "host"), ("query_prom", "grafana")]:
+        router.register(ToolSpec(name=name, category=cat, description=f"{name} desc",
+                                 when_to_use="x", input_schema={"type": "object", "properties": {}},
+                                 handler=lambda a: "ok"))
+    provider = FakeProvider([
+        ProviderResponse(tool_calls=[ToolCall(id="c1", name="find_tools",
+                                              arguments={"category": "host", "list_only": True})]),
+        ProviderResponse(text="surveyed"),
+    ])
+    result = run_turn(provider, router, _settings(),
+                      messages=[{"role": "user", "content": "what host tools exist?"}],
+                      tier=ModelTier(model="fake"))
+    # the survey did NOT load host tools into the callable set → the 2nd call was
+    # offered only find_tools (survey doesn't append tool schemas)
+    assert provider.offered_tool_names[1] == ["find_tools"]

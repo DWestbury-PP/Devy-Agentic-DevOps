@@ -190,6 +190,11 @@ tiers:
 #   # separate store config. The embedding column is dimension-agnostic, so you
 #   # can swap embedders without a migration.
 
+# Operator note about THIS deployment, injected into Devy's context each turn so it
+# knows where it runs (and doesn't infer host identity from tool output). The mounted
+# MCP tool sources are listed automatically alongside it.
+# deployment_context: "Host: web-prod-1 (Ubuntu 22.04, x86_64), 3-node k8s cluster; prod."
+
 # --- Optional service / harness overrides (defaults shown) ---
 # host: 127.0.0.1
 # port: 8765

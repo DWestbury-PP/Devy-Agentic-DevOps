@@ -31,7 +31,7 @@ from agentic_devops.config import Settings, load_settings
 from agentic_devops.db import apply_schema, get_pool
 from agentic_devops.proxy.errors import ProviderError, classify
 from agentic_devops.proxy.harness import run_turn, run_turn_streaming
-from agentic_devops.proxy.prompts import assemble_messages
+from agentic_devops.proxy.prompts import assemble_messages, deployment_context
 from agentic_devops.proxy.providers import ProviderClient
 from agentic_devops.proxy.schemas import (
     AdminLogin,
@@ -472,6 +472,23 @@ def create_app(
             return settings.resolve_tier(name)
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _deployment_note() -> Optional[str]:
+        """A live 'what's mounted + where I run' note for the model: the current
+        MCP tool sources (config-mounted + DB registry) + the operator's optional
+        deployment description. Cheap; computed per turn so it tracks live mounts."""
+        sources: list[str] = []
+        for s in settings.mcp_servers:
+            cat = getattr(s, "category", None) or s.name
+            sources.append(f"{s.name} (host & Docker diagnostics, read-only)"
+                           if cat == "host" else s.name)
+        try:
+            for m in mcp_server_store.list(enabled_only=True):
+                desc = (m.description or "").strip()
+                sources.append(f"{m.name} ({desc})" if desc else m.name)
+        except Exception:  # noqa: BLE001 — never block a turn on the registry read
+            pass
+        return deployment_context(sources, settings.deployment_context)
 
     def _ingest_attachments(attachments: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Validate + store the turn's images. Returns ``(pixels, refs)``: pixels
@@ -1280,7 +1297,8 @@ def create_app(
         pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
         digests = await run_in_threadpool(_ensure_digests, session)
         messages = assemble_messages(session, req.prompt, req.context, req.system,
-                                     tz=x_client_tz, attachments=pixels, digests=digests)
+                                     tz=x_client_tz, attachments=pixels, digests=digests,
+                                     deployment=_deployment_note())
 
         try:
             result = await run_in_threadpool(
@@ -1337,7 +1355,8 @@ def create_app(
         pixels, refs = await run_in_threadpool(_ingest_attachments, req.attachments)
         digests = await run_in_threadpool(_ensure_digests, session)
         messages = assemble_messages(session, req.message, req.context, tz=x_client_tz,
-                                     attachments=pixels, digests=digests)
+                                     attachments=pixels, digests=digests,
+                                     deployment=_deployment_note())
 
         async def event_stream():
             queue: asyncio.Queue = asyncio.Queue()

@@ -156,19 +156,33 @@ def _process_tool_calls(
         with turn_span.tool(f"tool: {tc.name}", tc.arguments) as span:
             if tc.name == FIND_TOOLS_NAME:
                 specs = router.find(tc.arguments.get("intent"), tc.arguments.get("category"))
-                for spec in specs:
-                    if spec.name not in loaded:
-                        available_tools.append(spec.openai_schema())
-                        loaded.add(spec.name)
-                content = json.dumps(
-                    {
-                        "found": [s.summary() for s in specs],
-                        "note": "These tools are now callable. Call them directly to proceed.",
-                    }
-                )
-                events.append({"type": "tools_found", "names": [s.name for s in specs]})
-                span.outputs({"found": [s.name for s in specs]},
-                             ok=True, meta={"tool": tc.name, "n_found": len(specs)})
+                if tc.arguments.get("list_only"):
+                    # Survey: return the catalog grouped by source/category, do NOT load.
+                    catalog: dict[str, list[str]] = {}
+                    for s in specs:
+                        catalog.setdefault(s.category, []).append(f"{s.name} — {s.description}")
+                    content = json.dumps({
+                        "catalog": catalog,
+                        "note": "Survey only — NOT loaded. Call find_tools with an `intent` "
+                                "to load the specific tools you need.",
+                    })
+                    events.append({"type": "tools_found", "names": [], "survey": True})
+                    span.outputs({"surveyed": len(specs)}, ok=True,
+                                 meta={"tool": tc.name, "list_only": True, "n": len(specs)})
+                else:
+                    for spec in specs:
+                        if spec.name not in loaded:
+                            available_tools.append(spec.openai_schema())
+                            loaded.add(spec.name)
+                    content = json.dumps(
+                        {
+                            "found": [s.summary() for s in specs],
+                            "note": "These tools are now callable. Call them directly to proceed.",
+                        }
+                    )
+                    events.append({"type": "tools_found", "names": [s.name for s in specs]})
+                    span.outputs({"found": [s.name for s in specs]},
+                                 ok=True, meta={"tool": tc.name, "n_found": len(specs)})
             else:
                 tools_used.append(tc.name)
                 # RBAC-2: gate by the caller's permitted tier (from tool_context). Absent

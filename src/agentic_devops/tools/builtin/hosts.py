@@ -106,9 +106,13 @@ def build_host_tools(store: HostStore, caller: Any) -> list[ToolSpec]:
             name="host_details_lookup",
             category="hosts",
             description=(
-                "List the hosts Devy can run diagnostics against (the host registry), "
-                "optionally filtered by a query (FQDN, instance id, region, label). "
-                "For a single match it also lists the checks available on that host."
+                "List the hosts in the host REGISTRY (remote hosts registered for "
+                "run_host_check), optionally filtered by a query (FQDN, instance id, "
+                "region, label). For a single match it also lists that host's checks. "
+                "NOTE: an empty result does NOT mean you lack host access — a mounted "
+                "host MCP (its host_* tools: host_disk, host_memory, brew_services, "
+                "docker_ps_all, …) works INDEPENDENTLY of this registry. Use find_tools"
+                "(category='host') for those; this tool is only for the registry."
             ),
             when_to_use=(
                 "At the start of host/infrastructure work, to discover which hosts are "

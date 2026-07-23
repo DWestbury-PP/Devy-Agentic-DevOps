@@ -97,6 +97,14 @@ the point where it's relevant — the tool result gives you the exact Markdown \
 (`![caption](/v1/blobs/…)`); put each panel next to the section that discusses it, \
 rather than describing panels in text and leaving the images in a lump. Give each \
 a short caption.
+- Prefer the cheapest tool that answers the question. Panel renders and wide \
+metric pulls cost latency and API calls; a scalar/instant query (e.g. PromQL \
+instant) is far cheaper. Render a panel — or pull a full time series — ONLY when \
+the shape of the data over time IS the finding (a trend, a spike, several series \
+moving together). When you just need a current value, query it. Don't render a \
+stat panel to read one number for yourself — though rendering one for the USER's \
+benefit (a familiar visual anchor in a report) is fine; just be deliberate about \
+which panels you render for analysis vs for presentation.
 - Scope first: pin down the symptom, the affected service/component, and the \
 time window (when did it start, is it ongoing).
 - Gather just enough to move forward. Collect the smallest slice of data that \
@@ -187,6 +195,26 @@ def time_context(session: Session, now: float, tz: Optional[str] = None) -> str:
     return "[context: " + "; ".join(parts) + "]"
 
 
+def deployment_context(sources: Optional[list[str]] = None, operator: Optional[str] = None) -> Optional[str]:
+    """A live "what's connected + where I run" note for the model — the tool
+    sources currently mounted (so Devy front-loads its surface instead of probing
+    with find_tools, and never hedges 'I may not have access to X' before checking)
+    plus an optional operator-set environment description. Returns None if empty."""
+    lines: list[str] = []
+    if sources:
+        lines.append("Mounted tool sources: " + ", ".join(sources) + ".")
+        lines.append(
+            "Assume these are reachable; load specific tools with find_tools (or "
+            "survey a source with find_tools list_only) rather than assuming a "
+            "capability is missing."
+        )
+    if operator:
+        lines.append(operator.strip())
+    if not lines:
+        return None
+    return "[environment: " + " ".join(lines) + "]"
+
+
 def assemble_messages(
     session: Session,
     user_message: str,
@@ -196,6 +224,7 @@ def assemble_messages(
     tz: Optional[str] = None,
     attachments: Optional[list[dict[str, Any]]] = None,
     digests: Optional[dict[str, str]] = None,
+    deployment: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Build the message list for one turn: system + derived context channel + user.
 
@@ -214,6 +243,8 @@ def assemble_messages(
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_override or SYSTEM_PROMPT}
     ]
+    if deployment:  # live "what's mounted + where I run" — a small dynamic system note
+        messages.append({"role": "system", "content": deployment})
     messages.extend(session.working_context(digests))
 
     time_ctx = time_context(session, time.time() if now is None else now, tz)

@@ -147,13 +147,15 @@ def _register_fact_tools(router: ToolsRouter, settings: Settings) -> Any:
         from agentic_devops.knowledge.factory import build_fact_store
         from agentic_devops.tools.builtin.facts import (
             build_memory_add_tool,
+            build_memory_retract_tool,
             build_recall_facts_tool,
         )
 
         store = build_fact_store(settings)
         router.register(build_recall_facts_tool(store))
         router.register(build_memory_add_tool(store))
-        logger.info("Knowledge fact tier enabled (recall_facts, memory_add).")
+        router.register(build_memory_retract_tool(store))
+        logger.info("Knowledge fact tier enabled (recall_facts, memory_add, memory_retract).")
         return store
     except Exception as exc:  # noqa: BLE001 — never let fact wiring crash the proxy
         logger.warning("Fact tools not registered: %s", exc)

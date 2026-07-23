@@ -269,6 +269,25 @@ class FactStore:
             ).fetchone()
         return _row_to_fact(row) if row else None
 
+    def resolve_current(self, id_or_prefix: str) -> list[StoredFact]:
+        """Currently-true facts whose ``memory_id`` equals or starts with the given
+        value — the 8-char prefix ``recall_facts`` prints is enough. Retired/
+        superseded facts are excluded (you can only retract what's currently
+        believed). memory_ids are hex, so a non-hex input can't match and can't
+        smuggle a LIKE wildcard; the result is capped small so an over-broad prefix
+        surfaces as ambiguity rather than a wall of rows."""
+        value = (id_or_prefix or "").strip().lower()
+        if not value or any(c not in "0123456789abcdef" for c in value):
+            return []
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_FACT_COLS} FROM memories "
+                "WHERE valid_to IS NULL AND memory_id LIKE %s "
+                "ORDER BY valid_from DESC LIMIT 5",
+                (value + "%",),
+            ).fetchall()
+        return [_row_to_fact(r) for r in rows]
+
     def superseded_by(self, memory_id: str) -> Optional[str]:
         """The id that retired ``memory_id`` (None if it's current/never retired)."""
         with self._pool.connection() as conn:

@@ -95,6 +95,12 @@ services:
   localstack:
     image: localstack/localstack:3
     container_name: agentic-devops-localstack
+    # Dev convenience: publish the edge to host loopback so an operator's AWS CLI can
+    # inspect the dev secrets/blob store (e.g. `aws --profile ls-devy s3 ls
+    # s3://devy-blobs/`). Loopback-only — never network-exposed. In prod these back
+    # onto real AWS (SM + S3) via the instance IAM role, and this mapping is moot.
+    ports:
+      - "127.0.0.1:4566:4566"
     environment:
       SERVICES: secretsmanager,s3   # secrets + attachment blob store
       DEBUG: ${LOCALSTACK_DEBUG:-0}

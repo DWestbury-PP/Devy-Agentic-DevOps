@@ -18,11 +18,16 @@ function el(tag, cls, text) {
   return n;
 }
 
+// The signed-in principal (from /v1/admin/me): {source, email, roles}. In jwt mode
+// source==="jwt" and sign-out must go through the SSO edge, not just clear a token.
+let principal = null;
+const isSSO = () => principal && principal.source === "jwt";
+
 let currentPage = "hosts";
 function view(name) {
-  ["login", "shell", "disabled"].forEach(hide);
+  ["login", "shell", "disabled", "forbidden"].forEach(hide);
   show(name);
-  $("logout").classList.toggle("hidden", name !== "shell");
+  $("logout").classList.toggle("hidden", !(name === "shell"));
   if (name === "shell") showPage(currentPage);
 }
 
@@ -43,11 +48,22 @@ function showPage(name) {
 PAGES.forEach((p) => $(`tab-${p}`).addEventListener("click", () => showPage(p)));
 
 async function checkSession() {
-  if (!getToken()) return view("login");
+  // Try the identity endpoint FIRST — under SSO the edge injects the verified
+  // bearer on every request, so an admin needs no password (and the password form
+  // is disabled in jwt mode anyway). 200 → in; 403 → signed in but not an admin;
+  // 503 → admin plane off; 401/network → fall back to the password form (dev mode).
   try {
     const r = await fetch("/v1/admin/me", { headers: authHeaders() });
-    if (r.ok) return view("shell");
+    if (r.ok) { principal = await r.json(); return view("shell"); }
     if (r.status === 503) return view("disabled");
+    if (r.status === 403) {
+      // Authenticated via SSO but lacking the admin role — a password box is futile.
+      try { principal = await r.json(); } catch (_) {}
+      const who = (principal && principal.email) || "your account";
+      $("forbidden-msg").textContent =
+        `Signed in as ${who}, but this account doesn't have the admin role.`;
+      return view("forbidden");
+    }
     setToken(null);
     view("login");
   } catch (_) {
@@ -83,10 +99,15 @@ $("login-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("logout").addEventListener("click", () => {
+function signOut() {
+  // Under SSO, sign-out is the edge's job (clears the oauth2-proxy session cookie);
+  // in password mode we just drop the local token.
+  if (isSSO()) { window.location.href = "/oauth2/sign_out"; return; }
   setToken(null);
+  principal = null;
   view("login");
-});
+}
+$("logout").addEventListener("click", signOut);
 
 /* ---------- host registry ---------- */
 const hostsMsg = (text, err) => {

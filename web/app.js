@@ -884,12 +884,18 @@ function applySignedIn(who) {
   identInput.disabled = true;
   identInput.title = "signed in via Google SSO";
   identInput.placeholder = "";
-  // Header chip: Google picture if present, else the email's first initial.
+  // Header chip: Google headshot if present, else the email's first initial.
+  const initial = (email[0] || "?");
+  userAvatar.textContent = initial;  // shown until (and unless) a picture loads
   if (who.picture) {
-    userAvatar.style.backgroundImage = `url("${who.picture}")`;
-    userAvatar.textContent = "";
-  } else {
-    userAvatar.textContent = (email[0] || "?");
+    const img = new Image();
+    img.alt = "";
+    // Google's lh3.googleusercontent.com 403s when a cross-origin Referer is sent.
+    img.referrerPolicy = "no-referrer";
+    img.className = "avatar-img";
+    img.onload = () => { userAvatar.textContent = ""; userAvatar.appendChild(img); };
+    img.onerror = () => { userAvatar.textContent = initial; };
+    img.src = who.picture;
   }
   userChip.title = email;
   userPopEmail.textContent = email;

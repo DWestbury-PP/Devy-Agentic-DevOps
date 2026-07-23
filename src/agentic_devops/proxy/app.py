@@ -71,7 +71,12 @@ from agentic_devops.proxy.schemas import (
     ToolInfo,
     UploadResult,
 )
-from agentic_devops.proxy.auth import Principal, build_authenticator, max_tier_for_roles
+from agentic_devops.proxy.auth import (
+    Principal,
+    build_authenticator,
+    max_tier_for_roles,
+    tier_allows,
+)
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.attachments import AttachmentStore, DigestService
 from agentic_devops.proxy.blobs import build_blob_store
@@ -258,6 +263,37 @@ def create_app(
     host_store = HostStore(pool, secrets)
     host_mcp = HostMCPClient()
 
+    # Guarded mutating actions (G-2b): proposal store + FAIL-CLOSED enable decision.
+    # A human-approval guardrail is only real behind real identity, so actions require
+    # auth.mode=jwt unless an explicit insecure-dev override is set (local testing).
+    from agentic_devops.proxy.actions import (
+        ActionExecutor,
+        ActionStore,
+        guarded_actions_status,
+    )
+
+    action_store = ActionStore(pool)
+    actions_on, actions_reason = guarded_actions_status(
+        enabled=settings.actions.enabled,
+        allow_insecure_dev=settings.actions.allow_insecure_dev,
+        auth_mode=settings.auth.mode,
+    )
+
+    def _resolve_action_target(host: Optional[str]):
+        """host identifier → (url, token, auth_header) for the executor. v1: the
+        config-mounted `host`-category sidecar (default when host omitted); a
+        registered host by identifier otherwise."""
+        for s in (settings.mcp_servers or []):
+            if getattr(s, "category", None) == "host" and (host is None or host == s.name):
+                return (s.url, s.token, getattr(s, "auth_header", None))
+        if host:
+            rh = host_store.resolve(host)
+            if rh is not None:
+                return (rh.url, rh.token, None)
+        return None
+
+    action_executor = ActionExecutor(host_mcp, _resolve_action_target)
+
     # GitHub connector (Phase D-1): account registry (secrets-backed PAT) + client.
     github_store = GitHubAccountStore(pool, secrets)
 
@@ -369,6 +405,27 @@ def create_app(
                 router.register(spec)
             except ValueError:
                 logger.warning("repo tool name clash, skipping: %s", spec.name)
+        # Guarded actions: register the PROPOSE-only tool when actions are enabled
+        # (fail-closed on auth). Devy has no tool that executes a mutation — this
+        # only writes a proposal a human must approve. The mutating host verbs
+        # themselves are withheld from the router by the G-2a readOnlyHint filter.
+        if actions_on:
+            from agentic_devops.tools.builtin.actions import build_request_action_tool
+
+            _host_srv = next(
+                (s.name for s in (settings.mcp_servers or [])
+                 if getattr(s, "category", None) == "host"), None,
+            )
+            try:
+                router.register(build_request_action_tool(
+                    action_store, ttl_seconds=settings.actions.ttl_seconds,
+                    default_host=_host_srv,
+                ))
+                logger.info("Guarded actions enabled (request_action; auth=%s).", actions_reason)
+            except ValueError:
+                logger.warning("request_action tool name clash, skipping")
+        else:
+            logger.info("Guarded actions disabled (%s).", actions_reason)
     else:
         mem_store = None
 
@@ -610,6 +667,87 @@ def create_app(
         if roles is None:
             roles = {settings.rbac.assistant_role}
         return max_tier_for_roles(roles)
+
+    # ---- guarded mutating actions (assistant plane; tier-gated) ---------------
+    def _action_public(a: Any) -> dict:
+        return {
+            "id": a.id, "verb": a.verb, "label": a.label, "target": a.target,
+            "host": a.host, "args": a.args, "rationale": a.rationale,
+            "reversibility": a.reversibility, "status": a.status,
+            "decided_by": a.decided_by, "result": a.result, "returncode": a.returncode,
+            "created_at": a.created_at, "decided_at": a.decided_at,
+            "executed_at": a.executed_at, "expires_at": a.expires_at,
+        }
+
+    def _approver_identity(request: Request, x_user_id: Optional[str]) -> str:
+        """Who approved, for the audit trail: the verified email in jwt mode, else
+        the honor-system X-User-Id (dev)."""
+        if authenticator.mode == "jwt" and authenticator.enabled:
+            token = authenticator.extract_token(request.headers.get(authenticator.header))
+            if token:
+                try:
+                    p = authenticator.principal(token)
+                    return getattr(p, "actor", None) or getattr(p, "id", None) or "unknown"
+                except Exception:  # noqa: BLE001
+                    pass
+        return x_user_id or "unknown"
+
+    def _require_approve_tier(request: Request) -> None:
+        tier = _allowed_tier(request)
+        if not tier_allows(tier, "elevated"):
+            raise HTTPException(
+                status_code=403,
+                detail=f"approving an action requires the 'elevated' tier; your role allows up to {tier!r}",
+            )
+
+    @app.get("/v1/actions")
+    def list_actions(session_id: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
+        if not actions_on:
+            raise HTTPException(status_code=503, detail="guarded actions are not enabled")
+        return [_action_public(a) for a in action_store.list(session_id=session_id, status=status)]
+
+    @app.post("/v1/actions/{action_id}/approve")
+    def approve_action(
+        action_id: str, request: Request, x_user_id: Optional[str] = Header(default=None),
+    ) -> dict:
+        if not actions_on:
+            raise HTTPException(status_code=503, detail="guarded actions are not enabled")
+        _require_approve_tier(request)
+        decided_by = _approver_identity(request, x_user_id)
+        # Compare-and-set: only the winner of proposed→executing runs it (double-
+        # approve + TTL guard). None ⇒ already decided / expired / unknown.
+        claimed = action_store.claim_for_execution(action_id, decided_by)
+        if claimed is None:
+            existing = action_store.get(action_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="no such action")
+            raise HTTPException(
+                status_code=409,
+                detail=f"action is {existing.status!r} (must be an unexpired 'proposed' to approve)",
+            )
+        result, rc = action_executor.execute(claimed)
+        final = action_store.record_result(
+            action_id, status="executed" if rc == 0 else "failed", result=result, returncode=rc,
+        )
+        return _action_public(final)
+
+    @app.post("/v1/actions/{action_id}/deny")
+    def deny_action(
+        action_id: str, request: Request, x_user_id: Optional[str] = Header(default=None),
+    ) -> dict:
+        if not actions_on:
+            raise HTTPException(status_code=503, detail="guarded actions are not enabled")
+        _require_approve_tier(request)
+        decided_by = _approver_identity(request, x_user_id)
+        if not action_store.deny(action_id, decided_by):
+            existing = action_store.get(action_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="no such action")
+            raise HTTPException(
+                status_code=409,
+                detail=f"action is {existing.status!r} (only a 'proposed' action can be denied)",
+            )
+        return _action_public(action_store.get(action_id))
 
     @app.post("/v1/admin/login", response_model=AdminToken)
     def admin_login(body: AdminLogin) -> AdminToken:

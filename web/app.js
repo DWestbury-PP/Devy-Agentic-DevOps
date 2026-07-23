@@ -598,6 +598,25 @@ composer.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
 tierSelect.addEventListener("change", () => { state.tier = tierSelect.value; });
 newBtn.addEventListener("click", newConversation);
 
+/* ---------- image lightbox (click any chat image to zoom) ---------- */
+const lightbox = el("div", "lightbox");
+const lightboxImg = document.createElement("img");
+lightbox.appendChild(lightboxImg);
+document.body.appendChild(lightbox);
+function openLightbox(src, alt) {
+  lightboxImg.src = src; lightboxImg.alt = alt || "";
+  lightbox.classList.add("open");
+}
+function closeLightbox() { lightbox.classList.remove("open"); lightboxImg.src = ""; }
+lightbox.addEventListener("click", closeLightbox);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
+// Delegate: any image inside the message area zooms (inline panels, attachments,
+// tool-trail renders) — works for streamed and history-loaded images alike.
+screen.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t && t.tagName === "IMG" && t.src) { e.preventDefault(); openLightbox(t.src, t.alt); }
+});
+
 /* ---------- history slide-out ---------- */
 function relTime(iso) {
   const t = Date.parse(iso);

@@ -287,6 +287,20 @@ select:focus-visible, .ghost:focus-visible { outline: 1px solid var(--green-deep
   display: block; max-width: min(560px, 100%); height: auto; margin: 10px 0;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-soft);
 }
+/* Any chat image invites a closer look. */
+.answer img, .msg-image, .tool-image { cursor: zoom-in; }
+
+/* Click-to-zoom lightbox overlay. */
+.lightbox {
+  position: fixed; inset: 0; z-index: 1000; display: none;
+  align-items: center; justify-content: center; padding: 24px;
+  background: rgba(0, 0, 0, 0.86); cursor: zoom-out;
+}
+.lightbox.open { display: flex; }
+.lightbox img {
+  max-width: 95vw; max-height: 95vh; border-radius: var(--radius);
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.6); border: 1px solid var(--line);
+}
 
 /* system / welcome note */
 .note { color: var(--fg-dim); margin: 0 auto 18px; white-space: pre-wrap; }

@@ -221,3 +221,73 @@ def test_fact_tools_share_knowledge_category(store):
     # memory_add takes request context (provenance); recall_facts does not.
     assert build_memory_add_tool(store).wants_context is True
     assert build_recall_facts_tool(store).wants_context is False
+
+
+# -- admin hygiene: list / retract / delete ---------------------------------
+def test_retract_makes_fact_non_current_but_keeps_history(store):
+    f = store.add_fact("panel uid is old-123", source="test",
+                       subject="grafana:cpu", attribute="uid")
+    assert store.current_for_slot("grafana:cpu", "uid") is not None
+
+    assert store.retract(f.memory_id) is True
+    # no longer current, slot is now empty
+    assert store.current_for_slot("grafana:cpu", "uid") is None
+    # but the row is preserved (bi-temporal): still fetchable, with valid_to set
+    kept = store.get(f.memory_id)
+    assert kept is not None and kept.valid_to is not None and kept.is_current is False
+    # retracting again is a no-op
+    assert store.retract(f.memory_id) is False
+
+
+def test_delete_removes_row_and_clears_superseded_pointers(store):
+    a = store.add_fact("region is us-east-1", source="test",
+                       subject="svc:del", attribute="region")
+    b = store.add_fact("region is us-west-2", source="test",
+                       subject="svc:del", attribute="region")
+    assert b.superseded == [a.memory_id]  # b retired a (a.superseded_by = b)
+
+    # hard-delete the current fact b — its superseded_by pointer from a must be
+    # cleared first so the FK holds (no crash)
+    assert store.delete(b.memory_id) is True
+    assert store.get(b.memory_id) is None
+    assert store.get(a.memory_id) is not None            # a survives
+    assert store.superseded_by(a.memory_id) is None       # pointer cleared
+
+    assert store.delete("nonexistent-id") is False
+
+
+def test_list_facts_scoped_and_current_first(store):
+    store.add_fact("v-current", source="test", subject="svc:list", attribute="k")
+    store.add_fact("v-newer", source="test", subject="svc:list", attribute="k")  # retires the first
+    rows = store.list_facts(subject="svc:list", current_only=False)
+    assert len(rows) == 2 and rows[0].is_current  # current sorts first
+    only_current = store.list_facts(subject="svc:list", current_only=True)
+    assert len(only_current) == 1 and only_current[0].content == "v-newer"
+
+
+# -- admin endpoints: gating + graceful-disabled -----------------------------
+def test_admin_facts_endpoints_gated_and_graceful(pool, pg_url, tmp_path, monkeypatch):
+    import bcrypt
+    from fastapi.testclient import TestClient
+
+    from agentic_devops.config import DatabaseConfig, Settings
+    from agentic_devops.proxy.app import create_app
+    from agentic_devops.tools.router import ToolsRouter
+
+    monkeypatch.setenv("DEVY_ADMIN_PASSWORD_HASH", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "0" * 64)
+    # router passed in → the fact tier isn't wired in this app, so endpoints
+    # degrade gracefully (enabled: false) rather than erroring.
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t"),
+        provider=object(), router=ToolsRouter(),
+    )
+    c = TestClient(app)
+    assert c.get("/v1/admin/facts").status_code == 401  # admin-gated
+    tok = c.post("/v1/admin/login", json={"password": "pw"}).json()["token"]
+    c.headers.update({"Authorization": f"Bearer {tok}"})
+
+    body = c.get("/v1/admin/facts").json()
+    assert body["enabled"] is False and body["facts"] == []
+    assert c.post("/v1/admin/facts/x/retract").status_code == 404
+    assert c.delete("/v1/admin/facts/x").status_code == 404

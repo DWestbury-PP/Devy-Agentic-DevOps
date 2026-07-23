@@ -129,6 +129,7 @@
         <button id="tab-hosts" class="tab active">Hosts</button>
         <button id="tab-repos" class="tab">Repos</button>
         <button id="tab-knowledge" class="tab">Knowledge</button>
+        <button id="tab-memory" class="tab">Memory</button>
         <button id="tab-secrets" class="tab">Secrets</button>
         <button id="tab-mcp" class="tab">MCP</button>
       </div>
@@ -304,6 +305,22 @@
         </table>
         <div id="secrets-msg" class="msg"></div>
       </div><!-- /secrets-page -->
+
+      <!-- ===== Memory page (evolving fact tier) ===== -->
+      <div id="memory-page" class="tab-page hidden">
+        <div class="row-between">
+          <div class="sub">Durable facts Devy remembers across conversations (subject &middot; attribute &middot; value). <b>Retract</b> stops a fact being current (history kept); <b>Delete</b> removes it. Prune stale ones — an outdated UID Devy still trusts is worse than none.</div>
+        </div>
+        <div id="memory-subjects" class="attach-chips" style="display:none;flex-wrap:wrap;gap:6px;margin:8px 0"></div>
+        <label class="chk" style="margin:6px 0"><input id="memory-show-all" type="checkbox" /> Include retired / superseded facts</label>
+        <table class="tbl">
+          <thead>
+            <tr><th>Subject</th><th>Attribute</th><th>Value</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody id="memory-body"></tbody>
+        </table>
+        <div id="memory-msg" class="msg"></div>
+      </div><!-- /memory-page -->
 
       <!-- ===== MCP Servers page ===== -->
       <div id="mcp-page" class="tab-page hidden">

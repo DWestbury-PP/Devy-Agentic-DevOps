@@ -850,31 +850,66 @@ identInput.addEventListener("change", () => { setUserId(identInput.value); loadH
 copyBtn.addEventListener("click", copyConversation);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
 
-/* ---------- SSO identity (Phase B) ---------- */
+/* ---------- SSO identity + auth-aware header (Phase B) ---------- */
+const userMenu = document.getElementById("user-menu");
+const userChip = document.getElementById("user-chip");
+const userAvatar = document.getElementById("user-avatar");
+const userPop = document.getElementById("user-pop");
+const userPopEmail = document.getElementById("user-pop-email");
+const userPopRoles = document.getElementById("user-pop-roles");
+const adminLink = document.getElementById("admin-link");
+
 async function detectSSO() {
-  // oauth2-proxy answers /oauth2/userinfo with the authenticated user when the SSO
-  // edge is in front. Absent (404/network) → password/dev mode, honor-system name.
+  // /v1/whoami is served by the proxy in BOTH modes: behind the SSO edge it decodes
+  // the forwarded id_token → verified email/roles/picture; in password/dev it returns
+  // {authenticated:false} and we keep the honor-system name. (Supersedes the old
+  // oauth2-proxy /oauth2/userinfo probe — this one also carries roles for the Admin nav.)
   try {
-    const r = await fetch("/oauth2/userinfo", { headers: { Accept: "application/json" } });
+    const r = await fetch("/v1/whoami", { headers: { Accept: "application/json" } });
     if (r.ok) {
       const j = await r.json();
-      if (j && j.email) { ssoEmail = j.email; applySignedIn(j.email); }
+      if (j && j.authenticated && j.email) applySignedIn(j);
+      // is_admin is null in dev mode (unknown); the admin console gates itself, so we
+      // only surface the shortcut when a verified role confirms it.
+      if (j && j.is_admin === true && adminLink) adminLink.hidden = false;
     }
-  } catch (_) { /* no edge → honor-system identity */ }
+  } catch (_) { /* no proxy reachable → honor-system identity */ }
 }
-function applySignedIn(email) {
+
+function applySignedIn(who) {
+  const email = who.email;
+  ssoEmail = email;
+  // Drawer identity input: locked to the verified email.
   identInput.value = email;
   identInput.disabled = true;
   identInput.title = "signed in via Google SSO";
   identInput.placeholder = "";
-  const wrap = identInput.parentElement;
-  if (wrap && !wrap.querySelector(".signout")) {
-    const a = document.createElement("a");
-    a.href = "/oauth2/sign_out";
-    a.textContent = "sign out";
-    a.className = "signout";
-    wrap.appendChild(a);
+  // Header chip: Google picture if present, else the email's first initial.
+  if (who.picture) {
+    userAvatar.style.backgroundImage = `url("${who.picture}")`;
+    userAvatar.textContent = "";
+  } else {
+    userAvatar.textContent = (email[0] || "?");
   }
+  userChip.title = email;
+  userPopEmail.textContent = email;
+  const roles = (who.roles || []);
+  userPopRoles.textContent = roles.length ? roles.join(" · ") : "";
+  userPopRoles.hidden = !roles.length;
+  if (userMenu) userMenu.hidden = false;
+}
+
+function toggleUserPop(show) {
+  const open = show === undefined ? userPop.hidden : show;
+  userPop.hidden = !open;
+  userChip.setAttribute("aria-expanded", String(open));
+}
+if (userChip) {
+  userChip.addEventListener("click", (e) => { e.stopPropagation(); toggleUserPop(); });
+  document.addEventListener("click", (e) => {
+    if (!userPop.hidden && !userMenu.contains(e.target)) toggleUserPop(false);
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleUserPop(false); });
 }
 
 /* ---------- boot ---------- */

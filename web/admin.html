@@ -11,7 +11,9 @@
   <link rel="stylesheet" href="./styles.css" />
   <style>
     /* Admin control plane (Phase 9). Reuses the terminal theme. */
-    .admin-wrap { width: min(960px, 94%); margin: 36px auto; }
+    /* Match the chat surface's generous single-column measure (was min(960px,94%)
+       and felt cramped — tables over-wrapped). --measure = min(1280px, 92%). */
+    .admin-wrap { width: var(--measure); margin: 36px auto; }
     .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--green-deep);
             border-radius: var(--radius); padding: 22px; }
     .card h1 { color: var(--green); text-shadow: var(--glow); margin: 0 0 4px; font-size: 18px; }

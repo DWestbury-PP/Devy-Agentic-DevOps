@@ -95,6 +95,25 @@ def _turn_inputs(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
+def _image_tool_content(raw: ToolResult, refs: list[str]) -> str:
+    """The tool-result text a model sees when a tool rendered image(s). When the
+    images were persisted (``refs``), it hands the model an embeddable Markdown URL
+    per image so it can place each one INLINE in its answer where it's relevant —
+    not appended in a lump. No base64 (the pixels arrive as a separate vision
+    message)."""
+    if not refs:
+        return raw.placeholder()
+    n = len(refs)
+    it = "them" if n > 1 else "it"
+    embeds = "  ".join(f"![caption](/v1/blobs/{r})" for r in refs)
+    base = (raw.text + "\n") if raw.text else ""
+    return (
+        f"{base}Rendered {n} image(s) and shown you {it} above. To DISPLAY {it} to the "
+        f"user, embed the image inline in your written answer at the point where it's "
+        f"relevant, using Markdown (replace 'caption' with a short label): {embeds}"
+    )
+
+
 def _image_message(images: list[ToolImage]) -> dict[str, Any]:
     """A user-role multimodal message carrying rendered images for a vision model
     (portable ``image_url`` data-URI parts — LiteLLM maps these per provider)."""
@@ -168,11 +187,21 @@ def _process_tool_calls(
                     try:
                         raw = router.execute(tc.name, tc.arguments, context=tool_context)
                         if isinstance(raw, ToolResult):
-                            # base64 stays OUT of the model's text context + findings;
-                            # the image goes to the UI and (for vision models) as an
-                            # image message injected after the tool results.
-                            content = raw.placeholder()
                             tc_images = raw.images
+                            # Persist first (base64 never enters the model's text
+                            # context) so we can hand the model an embeddable URL for
+                            # each image — it places them INLINE in its answer.
+                            tc_refs: list[str] = []
+                            if image_sink is not None:
+                                for im in tc_images:
+                                    try:
+                                        ref = image_sink(im)
+                                    except Exception:  # noqa: BLE001 — never fail a turn on a blob write
+                                        ref = None
+                                    if ref:
+                                        tc_refs.append(ref)
+                                        rendered.append({"ref": ref, "mime": im.mime, "name": tc.name})
+                            content = _image_tool_content(raw, tc_refs)
                         else:
                             content = str(raw)
                         ok = True
@@ -189,16 +218,6 @@ def _process_tool_calls(
                     if tc_images:
                         event["images"] = [{"mime": im.mime, "data": im.data} for im in tc_images]
                         collected_images.extend(tc_images)
-                        # Persist each rendered image to the blob store so it survives
-                        # in the transcript (like a user attachment), not just live.
-                        if image_sink is not None:
-                            for im in tc_images:
-                                try:
-                                    ref = image_sink(im)
-                                except Exception:  # noqa: BLE001 — never fail a turn on a blob write
-                                    ref = None
-                                if ref:
-                                    rendered.append({"ref": ref, "mime": im.mime, "name": tc.name})
                     events.append(event)
                     findings.append(
                         {

@@ -526,13 +526,18 @@ def create_app(
         return ref
 
     def _assistant_content(text: str, rendered: list[dict[str, Any]]) -> Any:
-        """The assistant turn as stored: plain text, or text + image_ref parts when
-        the turn rendered images — so the transcript (and history reload) keep them."""
+        """The assistant turn as stored. Devy is asked to embed each rendered image
+        INLINE in its answer as `![](/v1/blobs/<ref>)`, so the text usually carries
+        them in place — store it as-is. Any image it DIDN'T embed is appended as an
+        image_ref part (a bottom-gallery fallback) so nothing is ever lost."""
         if not rendered:
+            return text
+        unembedded = [r for r in rendered if f"/v1/blobs/{r['ref']}" not in (text or "")]
+        if not unembedded:
             return text
         return [{"type": "text", "text": text},
                 *({"type": "image_ref", "ref": r["ref"], "mime": r["mime"], "name": r.get("name")}
-                  for r in rendered)]
+                  for r in unembedded)]
 
     def _ensure_digests(session: Any) -> dict[str, Any]:
         """One-time vision digests for the PAST images in this session's window, so

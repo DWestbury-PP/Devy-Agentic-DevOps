@@ -92,7 +92,11 @@ render ONLY real visualization panels and SKIP `type: "row"` entries — those a
 collapsible section headers, not charts, and render as blank/garbage. Curate to \
 the handful of panels actually relevant to the question rather than rendering \
 everything; a focused set of the right charts beats a wall of panels (including \
-empty rows).
+empty rows). When you render an image, EMBED it inline in your written answer at \
+the point where it's relevant — the tool result gives you the exact Markdown \
+(`![caption](/v1/blobs/…)`); put each panel next to the section that discusses it, \
+rather than describing panels in text and leaving the images in a lump. Give each \
+a short caption.
 - Scope first: pin down the symptom, the affected service/component, and the \
 time window (when did it start, is it ongoing).
 - Gather just enough to move forward. Collect the smallest slice of data that \

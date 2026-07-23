@@ -267,6 +267,8 @@ def test_rendered_tool_image_is_persisted_and_returned():
     # persisted once, ref surfaced for the assistant turn
     assert stored == [("PNGBYTES", "image/png")]
     assert result.rendered_images == [{"ref": "hash-PNGBYTES", "mime": "image/png", "name": "get_panel_image"}]
-    # base64 not in the stored finding (context stays clean)
+    # the model is handed an embeddable inline URL (not base64) so it can place the
+    # image where it's relevant in its answer
     f = [x for x in result.tool_findings if x["tool"] == "get_panel_image"][0]
-    assert "PNGBYTES" not in f["result"]
+    assert "![caption](/v1/blobs/hash-PNGBYTES)" in f["result"]
+    assert "PNGBYTES" not in f["result"].replace("hash-PNGBYTES", "")  # no raw base64

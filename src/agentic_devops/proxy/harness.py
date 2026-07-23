@@ -45,6 +45,10 @@ class TurnResult:
     # Distilled tool evidence for the context channel: {tool, intent, result, ok}.
     # The display transcript stays clean; these feed Devy's working memory.
     tool_findings: list[dict[str, Any]] = field(default_factory=list)
+    # Images a tool RENDERED this turn (e.g. Grafana panels), persisted to the blob
+    # store: {ref, mime, name}. The endpoint attaches these to the stored assistant
+    # turn so they survive in the transcript (history reload), like user attachments.
+    rendered_images: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _assistant_tool_call_message(response: ProviderResponse) -> dict[str, Any]:
@@ -111,17 +115,20 @@ def _process_tool_calls(
     tools_used: list[str],
     tool_context: Optional[dict[str, Any]] = None,
     turn_span: Span = NOOP_SPAN,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    image_sink: Optional[Any] = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Handle one round of tool calls.
 
     Mutates ``available_tools`` (find_tools auto-load), ``loaded``, and
-    ``tools_used``. Returns ``(tool_result_messages, events, findings)`` in order.
-    ``findings`` captures real tool evidence (not find_tools discovery) for the
-    session's context channel.
+    ``tools_used``. Returns ``(tool_result_messages, events, findings, rendered)``.
+    ``findings`` captures real tool evidence; ``rendered`` are images a tool
+    produced, persisted via ``image_sink(ToolImage) -> ref`` (blob store) so they
+    can be attached to the stored assistant turn.
     """
     messages: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
+    rendered: list[dict[str, Any]] = []
     collected_images: list[ToolImage] = []
 
     for tc in response.tool_calls:
@@ -182,6 +189,16 @@ def _process_tool_calls(
                     if tc_images:
                         event["images"] = [{"mime": im.mime, "data": im.data} for im in tc_images]
                         collected_images.extend(tc_images)
+                        # Persist each rendered image to the blob store so it survives
+                        # in the transcript (like a user attachment), not just live.
+                        if image_sink is not None:
+                            for im in tc_images:
+                                try:
+                                    ref = image_sink(im)
+                                except Exception:  # noqa: BLE001 — never fail a turn on a blob write
+                                    ref = None
+                                if ref:
+                                    rendered.append({"ref": ref, "mime": im.mime, "name": tc.name})
                     events.append(event)
                     findings.append(
                         {
@@ -203,7 +220,7 @@ def _process_tool_calls(
     if collected_images:
         messages.append(_image_message(collected_images))
 
-    return messages, events, findings
+    return messages, events, findings, rendered
 
 
 def _accumulate_usage(target: dict[str, Any], source: dict[str, Any]) -> None:
@@ -221,6 +238,7 @@ def run_turn(
     on_event: Optional[EventCallback] = None,
     tool_context: Optional[dict[str, Any]] = None,
     tracer: Optional[Tracer] = None,
+    image_sink: Optional[Any] = None,
 ) -> TurnResult:
     """Run one user turn to completion (non-streaming)."""
 
@@ -233,6 +251,7 @@ def run_turn(
     loaded: set[str] = set()
     tools_used: list[str] = []
     tool_findings: list[dict[str, Any]] = []
+    rendered_images: list[dict[str, Any]] = []
     usage: dict[str, Any] = {}
     final_text = ""
     iterations = 0
@@ -263,10 +282,12 @@ def run_turn(
                 break
 
             working.append(_assistant_tool_call_message(response))
-            tool_messages, events, findings = _process_tool_calls(
-                response, router, available_tools, loaded, tools_used, tool_context, turn
+            tool_messages, events, findings, rendered = _process_tool_calls(
+                response, router, available_tools, loaded, tools_used, tool_context, turn,
+                image_sink,
             )
             tool_findings.extend(findings)
+            rendered_images.extend(rendered)
             for event in events:
                 emit(event)
             working.extend(tool_messages)
@@ -281,7 +302,7 @@ def run_turn(
     emit({"type": "done", "iterations": iterations, "usage": usage})
     return TurnResult(
         text=final_text, messages=working, tools_used=tools_used, iterations=iterations,
-        usage=usage, tool_findings=tool_findings,
+        usage=usage, tool_findings=tool_findings, rendered_images=rendered_images,
     )
 
 
@@ -293,6 +314,7 @@ def run_turn_streaming(
     tier: ModelTier,
     tool_context: Optional[dict[str, Any]] = None,
     tracer: Optional[Tracer] = None,
+    image_sink: Optional[Any] = None,
 ) -> Generator[dict[str, Any], None, TurnResult]:
     """Run one user turn, yielding events as they happen.
 
@@ -305,6 +327,7 @@ def run_turn_streaming(
     loaded: set[str] = set()
     tools_used: list[str] = []
     tool_findings: list[dict[str, Any]] = []
+    rendered_images: list[dict[str, Any]] = []
     usage: dict[str, Any] = {}
     final_text = ""
     iterations = 0
@@ -338,10 +361,12 @@ def run_turn_streaming(
                 break
 
             working.append(_assistant_tool_call_message(response))
-            tool_messages, events, findings = _process_tool_calls(
-                response, router, available_tools, loaded, tools_used, tool_context, turn
+            tool_messages, events, findings, rendered = _process_tool_calls(
+                response, router, available_tools, loaded, tools_used, tool_context, turn,
+                image_sink,
             )
             tool_findings.extend(findings)
+            rendered_images.extend(rendered)
             for event in events:
                 yield event
             working.extend(tool_messages)
@@ -356,5 +381,5 @@ def run_turn_streaming(
     yield {"type": "done", "iterations": iterations, "usage": usage, "text": final_text}
     return TurnResult(
         text=final_text, messages=working, tools_used=tools_used, iterations=iterations,
-        usage=usage, tool_findings=tool_findings,
+        usage=usage, tool_findings=tool_findings, rendered_images=rendered_images,
     )

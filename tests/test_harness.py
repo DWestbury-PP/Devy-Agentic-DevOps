@@ -235,3 +235,38 @@ def test_no_notice_when_primary_serves():
         on_event=events.append,
     )
     assert not any(e["type"] == "notice" for e in events)
+
+
+def test_rendered_tool_image_is_persisted_and_returned():
+    """A tool that renders an image → the harness persists it via image_sink and
+    returns the ref in TurnResult.rendered_images (so the endpoint can attach it to
+    the stored assistant turn). Base64 still never enters the model's text context."""
+    from agentic_devops.tools.base import ToolImage, ToolResult
+
+    router = ToolsRouter()
+    router.register(ToolSpec(
+        name="get_panel_image", category="grafana", description="render a panel",
+        when_to_use="render", input_schema={"type": "object", "properties": {}},
+        handler=lambda args: ToolResult(text="", images=[ToolImage(data="PNGBYTES", mime="image/png")]),
+    ))
+    stored = []
+
+    def sink(im):
+        stored.append((im.data, im.mime))
+        return "hash-" + im.data  # pretend blob ref
+
+    provider = FakeProvider([
+        ProviderResponse(tool_calls=[ToolCall(id="c1", name="get_panel_image", arguments={})]),
+        ProviderResponse(text="Here's the panel."),
+    ])
+    result = run_turn(
+        provider, router, _settings(),
+        messages=[{"role": "user", "content": "render it"}],
+        tier=ModelTier(model="anthropic/claude-x"), image_sink=sink,
+    )
+    # persisted once, ref surfaced for the assistant turn
+    assert stored == [("PNGBYTES", "image/png")]
+    assert result.rendered_images == [{"ref": "hash-PNGBYTES", "mime": "image/png", "name": "get_panel_image"}]
+    # base64 not in the stored finding (context stays clean)
+    f = [x for x in result.tool_findings if x["tool"] == "get_panel_image"][0]
+    assert "PNGBYTES" not in f["result"]

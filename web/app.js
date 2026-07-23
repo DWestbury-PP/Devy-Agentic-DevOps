@@ -40,14 +40,20 @@ const state = {
  * Cloudflare+Okta JWT carrying an email) slots in by changing authHeaders()
  * to read that token/claim — nothing else in the app needs to know. */
 const USER_KEY = "devy_user";
-const getUserId = () => (localStorage.getItem(USER_KEY) || "").trim();
+// Behind the Google SSO edge (Phase B) the authenticated email is authoritative and
+// replaces the honor-system name; detected via oauth2-proxy's /oauth2/userinfo. Null
+// in password/dev mode (no edge) → the localStorage name is used as before.
+let ssoEmail = null;
+const getUserId = () => (ssoEmail || localStorage.getItem(USER_KEY) || "").trim();
 function setUserId(v) {
   v = (v || "").trim();
   if (v) localStorage.setItem(USER_KEY, v); else localStorage.removeItem(USER_KEY);
 }
 function authHeaders() {
   const u = getUserId();
-  const h = u ? { "X-User-Id": u } : {};
+  // Under SSO the server derives identity from the verified JWT — don't send a
+  // (spoofable, ignored) X-User-Id. In dev, the honor-system name is the identity.
+  const h = (!ssoEmail && u) ? { "X-User-Id": u } : {};
   // Client IANA timezone → server does DST-correct local-time conversion (never the model).
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -844,8 +850,36 @@ identInput.addEventListener("change", () => { setUserId(identInput.value); loadH
 copyBtn.addEventListener("click", copyConversation);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
 
+/* ---------- SSO identity (Phase B) ---------- */
+async function detectSSO() {
+  // oauth2-proxy answers /oauth2/userinfo with the authenticated user when the SSO
+  // edge is in front. Absent (404/network) → password/dev mode, honor-system name.
+  try {
+    const r = await fetch("/oauth2/userinfo", { headers: { Accept: "application/json" } });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.email) { ssoEmail = j.email; applySignedIn(j.email); }
+    }
+  } catch (_) { /* no edge → honor-system identity */ }
+}
+function applySignedIn(email) {
+  identInput.value = email;
+  identInput.disabled = true;
+  identInput.title = "signed in via Google SSO";
+  identInput.placeholder = "";
+  const wrap = identInput.parentElement;
+  if (wrap && !wrap.querySelector(".signout")) {
+    const a = document.createElement("a");
+    a.href = "/oauth2/sign_out";
+    a.textContent = "sign out";
+    a.className = "signout";
+    wrap.appendChild(a);
+  }
+}
+
 /* ---------- boot ---------- */
 async function boot() {
+  await detectSSO();
   await loadTiers();
   greet();
   input.focus();

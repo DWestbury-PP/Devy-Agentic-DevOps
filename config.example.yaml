@@ -55,23 +55,33 @@ secrets:
 # operator password → token). For production, put Devy behind an SSO edge proxy and
 # switch to `jwt`: Devy verifies the forwarded JWT against your IdP's JWKS and maps
 # IdP groups → roles. There is no in-app login in jwt mode.
+# Google SSO via the oauth2-proxy edge (docker-compose.auth.yml). oauth2-proxy runs
+# the Google login and forwards the OIDC id_token; Devy verifies it against Google's
+# JWKS. `audience` is your OAuth Client ID — read from the same env var the edge uses,
+# so you set it once in .env. Personal Google accounts carry no group claims, so map
+# roles by EMAIL (rbac.email_roles) rather than groups.
 # auth:
 #   mode: jwt
-#   jwks_url: https://<your-idp>/.well-known/jwks.json
-#   issuer:  https://<your-idp>/
-#   audience: devy-admin
-#   header:  Authorization           # or a proxy header, e.g. Cf-Access-Jwt-Assertion
+#   jwks_url: https://www.googleapis.com/oauth2/v3/certs
+#   issuer:  https://accounts.google.com
+#   audience: ${OAUTH2_PROXY_CLIENT_ID}   # your Google OAuth Client ID (from .env)
+#   header:  Authorization
 #   email_claim: email
-#   groups_claim: groups
 # rbac:
-#   group_roles:                     # IdP group -> Devy role (admin | operator | viewer)
-#     devy-admins: admin
-#     devy-operators: operator
-#     devy-viewers: viewer
-#   default_role: viewer             # role for an authenticated user with no mapped group (optional)
-#   assistant_role: admin            # (RBAC-2) role assumed for chat callers whose identity isn't
-#                                    # verified (honor-system/dev). Default admin = unrestricted; in
-#                                    # jwt mode the real role is used. Tighten if running chat without SSO.
+#   email_roles:                     # exact email -> role (admin | operator | viewer)
+#     you@gmail.com: admin
+#   domain_roles:                    # optional: email domain -> role (a team domain)
+#     yourcompany.com: operator
+#   group_roles: {}                  # Google Workspace groups -> role (needs Admin SDK; usually empty for Gmail)
+#   default_role: viewer             # authenticated but unmapped → viewer (read-only)
+#   assistant_role: admin            # (RBAC-2) role for chat callers whose identity isn't verified
+#                                    # (honor-system/PASSWORD mode). Default admin = unrestricted; jwt
+#                                    # mode uses the real role. Tighten if running chat without SSO.
+#
+# BOOTSTRAP: leave auth in the default `password` mode for a fresh deployment (you
+# can't use SSO to configure SSO). Set the admin password, configure email_roles +
+# the OAuth client, THEN switch to `jwt`. password mode also stays your break-glass
+# way back in if SSO ever breaks — never delete it. See docs/deployment.md.
 # RBAC-2: each role caps the tool safety tier the agent may call —
 #   viewer → read-only · operator → +diagnostic (host checks) · admin → +elevated (writes).
 

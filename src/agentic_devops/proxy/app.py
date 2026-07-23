@@ -672,18 +672,20 @@ def create_app(
     # ---- guarded mutating actions (assistant plane; tier-gated) ---------------
     _action_public = action_public  # shared serializer (also feeds the action_proposed event)
 
-    def _approver_identity(request: Request, x_user_id: Optional[str]) -> str:
-        """Who approved, for the audit trail: the verified email in jwt mode, else
-        the honor-system X-User-Id (dev)."""
+    def _identity(request: Request, fallback: Optional[str]) -> Optional[str]:
+        """The caller's identity for history + audit (RBAC-3). In jwt mode the
+        VERIFIED email is authoritative and X-User-Id is NOT trusted (it's spoofable);
+        with no valid token the caller is anonymous (None). In password/dev mode, the
+        honor-system fallback (X-User-Id) — preserving current behaviour until SSO."""
         if authenticator.mode == "jwt" and authenticator.enabled:
             token = authenticator.extract_token(request.headers.get(authenticator.header))
             if token:
                 try:
-                    p = authenticator.principal(token)
-                    return getattr(p, "actor", None) or getattr(p, "id", None) or "unknown"
-                except Exception:  # noqa: BLE001
-                    pass
-        return x_user_id or "unknown"
+                    return authenticator.principal(token).actor
+                except Exception:  # noqa: BLE001 — invalid/expired token → anonymous
+                    return None
+            return None
+        return fallback
 
     def _require_approve_tier(request: Request) -> None:
         tier = _allowed_tier(request)
@@ -706,7 +708,7 @@ def create_app(
         if not actions_on:
             raise HTTPException(status_code=503, detail="guarded actions are not enabled")
         _require_approve_tier(request)
-        decided_by = _approver_identity(request, x_user_id)
+        decided_by = _identity(request, x_user_id) or "unknown"
         # Compare-and-set: only the winner of proposed→executing runs it (double-
         # approve + TTL guard). None ⇒ already decided / expired / unknown.
         claimed = action_store.claim_for_execution(action_id, decided_by)
@@ -731,7 +733,7 @@ def create_app(
         if not actions_on:
             raise HTTPException(status_code=503, detail="guarded actions are not enabled")
         _require_approve_tier(request)
-        decided_by = _approver_identity(request, x_user_id)
+        decided_by = _identity(request, x_user_id) or "unknown"
         if not action_store.deny(action_id, decided_by):
             existing = action_store.get(action_id)
             if existing is None:
@@ -1371,10 +1373,13 @@ def create_app(
 
     @app.get("/v1/sessions", response_model=list[SessionInfo])
     def list_sessions(
+        request: Request,
         user_id: Optional[str] = None,
         x_user_id: Optional[str] = Header(default=None),
     ) -> list[SessionInfo]:
-        uid = user_id or x_user_id
+        # jwt mode: scope to the VERIFIED email (a caller can't list another user's
+        # history by passing someone else's id); password/dev: honor-system.
+        uid = _identity(request, user_id or x_user_id)
         if not uid:
             raise HTTPException(status_code=400, detail="user_id is required to list sessions")
         return [
@@ -1420,7 +1425,7 @@ def create_app(
         x_client_tz: Optional[str] = Header(default=None),
     ) -> CompleteResponse:
         tier = _resolve_tier(req.tier)
-        user_id = req.user_id or x_user_id
+        user_id = _identity(request, req.user_id or x_user_id)
         allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         if req.session_id:
@@ -1481,7 +1486,7 @@ def create_app(
         x_client_tz: Optional[str] = Header(default=None),
     ):
         tier = _resolve_tier(req.tier)
-        user_id = req.user_id or x_user_id
+        user_id = _identity(request, req.user_id or x_user_id)
         allowed_tier = _allowed_tier(request)
         session = sessions.load(req.session_id, user_id=user_id)
         await run_in_threadpool(sessions.compact_if_needed, session, provider, tier, settings)

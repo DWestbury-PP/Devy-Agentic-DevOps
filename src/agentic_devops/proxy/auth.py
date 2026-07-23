@@ -94,6 +94,34 @@ def tier_allows(allowed: str, required: str) -> bool:
     return TIER_ORDER.get(required, 0) <= TIER_ORDER.get(allowed, 2)
 
 
+def resolve_roles(
+    *,
+    groups: Any,
+    email: Optional[str],
+    group_roles: dict[str, str],
+    email_roles: dict[str, str],
+    domain_roles: dict[str, str],
+    default_role: Optional[str],
+) -> set[str]:
+    """A principal's roles = UNION of group-, email-, and domain-mapped roles (RBAC-3).
+    Falls to ``default_role`` when an authenticated user matches nothing. Email/domain
+    lookups are case-insensitive. The email map is the pragmatic role source for a
+    Google OIDC deployment where personal accounts carry no group claims."""
+    roles = {group_roles[g] for g in (groups or []) if g in group_roles}
+    if email:
+        e = email.lower()
+        el = {k.lower(): v for k, v in (email_roles or {}).items()}
+        dl = {k.lower(): v for k, v in (domain_roles or {}).items()}
+        if e in el:
+            roles.add(el[e])
+        domain = e.rsplit("@", 1)[1] if "@" in e else None
+        if domain and domain in dl:
+            roles.add(dl[domain])
+    if not roles and default_role:
+        roles = {default_role}
+    return roles
+
+
 # -- Identity + roles (RBAC-1) ----------------------------------------------
 @dataclass
 class Principal:
@@ -157,15 +185,23 @@ class JwtAuth:
             options={"verify_aud": self.audience is not None},
         )
 
-    def principal(self, token: str, group_roles: dict[str, str], default_role: Optional[str]) -> Principal:
+    def principal(
+        self,
+        token: str,
+        group_roles: dict[str, str],
+        email_roles: dict[str, str],
+        domain_roles: dict[str, str],
+        default_role: Optional[str],
+    ) -> Principal:
         claims = self.verify(token)
         email = claims.get(self.email_claim)
         groups = claims.get(self.groups_claim) or []
         if isinstance(groups, str):
             groups = [groups]
-        roles = {group_roles[g] for g in groups if g in group_roles}
-        if not roles and default_role:
-            roles = {default_role}
+        roles = resolve_roles(
+            groups=groups, email=email, group_roles=group_roles,
+            email_roles=email_roles, domain_roles=domain_roles, default_role=default_role,
+        )
         return Principal(
             id=email or str(claims.get("sub", "unknown")), email=email,
             roles=roles, source="jwt", claims=claims,
@@ -185,6 +221,8 @@ class Authenticator:
     jwt_auth: Optional[JwtAuth]
     group_roles: dict[str, str]
     default_role: Optional[str]
+    email_roles: dict[str, str] = field(default_factory=dict)
+    domain_roles: dict[str, str] = field(default_factory=dict)
     header: str = "Authorization"
 
     @property
@@ -211,7 +249,9 @@ class Authenticator:
                 roles={"admin"}, source="password", claims=claims,
             )
         assert self.jwt_auth is not None
-        return self.jwt_auth.principal(token, self.group_roles, self.default_role)
+        return self.jwt_auth.principal(
+            token, self.group_roles, self.email_roles, self.domain_roles, self.default_role,
+        )
 
 
 def build_authenticator(settings: Any) -> Authenticator:
@@ -227,5 +267,6 @@ def build_authenticator(settings: Any) -> Authenticator:
     return Authenticator(
         mode=ac.mode, admin=admin, jwt_auth=jwt_auth,
         group_roles=dict(settings.rbac.group_roles), default_role=settings.rbac.default_role,
+        email_roles=dict(settings.rbac.email_roles), domain_roles=dict(settings.rbac.domain_roles),
         header=ac.header,
     )

@@ -1,14 +1,18 @@
 # Roadmap
 
 > **Forward-looking.** Phases 0–9 are built, tested, and live-verified (see the
-> [README status](../../README.md#status--roadmap)). Everything below is **planned,
-> not yet implemented** — a dependency-ordered chain where each phase unlocks the
-> next. Numbering continues from the completed **Phase 9** (admin control plane).
+> [README status](../../README.md#status--roadmap)). Most later phases are still
+> **planned** — a dependency-ordered chain where each phase unlocks the next — but a
+> few have been **delivered ahead of the chain** and are marked **✅ shipped** inline:
+> **Grafana MCP** (Phase 13), **Identity & access / SSO + RBAC** (Phase 10), and the
+> product-defining **guarded actions** (Phase 16). Numbering continues from the
+> completed **Phase 9** (admin control plane).
 
 The thread runs from *foundation* → *expanded reach* → *the leap from observing to
-acting*. The two product-defining destinations are **guarded actions** (Phase 16)
-and **proactive / ChatOps** (Phase 17); everything before them is the platform and
-safety groundwork that makes them trustworthy on real infrastructure.
+acting*. The product-defining destination **guarded actions** (Phase 16) has now
+shipped; the remaining headline is **proactive / ChatOps** (Phase 17). Everything
+around them is the platform and safety groundwork that makes acting trustworthy on
+real infrastructure.
 
 Several phases depend on systems that only exist in a real (often work) deployment —
 a cloud account, a Grafana tenant, an SSO provider. Those are marked
@@ -130,20 +134,23 @@ shared and reaching real systems. Builds on RBAC (10) and observability (11).
 
 **Unlocks:** the safety substrate guarded actions (16) record into and depend on.
 
-## Phase 16 — Guarded actions (observe → act)
+## Phase 16 — Guarded actions (observe → act) ✅ shipped
 
-**Why this late:** this is the product-defining leap, and it depends on everything
-before it — real identity + RBAC (*who may act*), the audit trail (*every action
-recorded*), redaction, and eval (*trusting the agent's judgment*). Today every verb
-Devy has is read-only by design; this adds a **safe write path**.
+**The product-defining leap — delivered.** Devy can now *propose* a reversible
+remediation and a human *approves* it before anything runs; the proxy (never the
+agent) then executes it on the host MCP.
 
-- A mutating capability (restart a unit, roll back a deploy, cordon a node, run an
-  approved remediation) that Devy can only **propose** — surfaced as an explicit
-  **approve / deny in the UI** before anything runs.
-- Gated to the `elevated` profile, authorized by RBAC, and written to the audit
-  trail. DB-broker mutations (14) are the same shape.
+- Propose-only `request_action` tool (restart a service/container, reload config,
+  prune images — Tier-A reversible verbs only); a human **approves / denies in the
+  UI** before execution.
+- **Triple-gated:** a host-MCP deployment switch (`HOST_MCP_ALLOW_MUTATIONS`), the
+  RBAC **`elevated`** tier, and per-action human approval (CAS + TTL). Devy has no
+  directly-mutating tool ("never self-approve" is structural), and any mounted
+  write-tool is withheld from it by a `readOnlyHint` filter. Fail-closed unless
+  `auth.mode: jwt` (or an explicit dev opt-in). DB-broker mutations (14) will follow
+  the same shape.
 
-**Unlocks:** Devy stops being a copilot that only *tells* you what's wrong and
+**Delivered:** Devy stops being a copilot that only *tells* you what's wrong and
 starts helping *fix* it — under human control.
 
 ## Phase 17 — Proactive & ChatOps (the teammate leap)

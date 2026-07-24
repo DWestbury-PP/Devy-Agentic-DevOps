@@ -99,8 +99,14 @@ cp .env.example        ~/.config/agentic-devops/.env          # add provider key
 #    separate from the config .env above.
 echo "HOST_MCP_TOKEN=$(openssl rand -hex 24)" >> .env
 
-# 3. Start the stack: postgres + proxy (:8765) + host-mcp + web chat (:8080)
-docker compose up -d --build
+# 3. Start the stack: postgres + proxy (:8765) + host-mcp + web chat (:8080).
+#    ./devy.sh wraps `docker compose`, assembling the right overlays + mode so you
+#    never forget one. A fresh clone has no SSO yet → bootstrap in password mode:
+./devy.sh --no-auth up
+#    Later, turn on Google SSO (adds the oauth2-proxy edge) with plain `./devy.sh up`
+#    — see docs/deployment.md for the SSO setup + order of operations.
+#    (Raw `docker compose up -d --build` still works; the wrapper just adds the -f
+#     files, mode env, and conveniences like `./devy.sh doctor` / `rebuild` / `psql`.)
 #   The bundled Postgres (pgvector) self-bootstraps its schema on first start.
 #   Managed DB instead? Set DATABASE_URL, run `agentic-devops db init` once,
 #   and start only proxy/host-mcp/chat-ui. See docs/deployment.md.
@@ -144,6 +150,13 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
   — survey reachable data, gather just enough, follow the evidence, build a
   correlated timeline, and converge on a ranked cause with citations. There's a
   **live crash-loop demo** ([below](#try-the-rca-demo)).
+- **Propose and run remediations — with a human in the loop.** Beyond read-only
+  analysis, Devy can *propose* a reversible fix (restart a service or container,
+  reload config, prune images); a person **approves** it in the chat UI, and only
+  then does the proxy execute it on the host MCP. Devy has **no tool that mutates
+  directly** — "never self-approve" is structural — and every action is **triple-gated**
+  (a host-MCP mutation switch, the RBAC *elevated* tier, and per-action human
+  approval). → [Security](docs/security.md)
 - **Remember across conversations.** Two-channel memory (a lossless transcript +
   a compact, token-triggered working summary) and a `recall_history` tool that
   pulls back specifics — within a chat or across prior ones. → [Memory](docs/memory.md)
@@ -157,9 +170,11 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
   waterfall — the turn → its LLM calls → its tool calls — with token usage and
   timings, for debugging and auditing the agent loop (full detail in dev,
   metadata-only in prod). → [Configuration](docs/configuration.md)
-- **Meet you where you work.** A terminal-themed [web chat](web/README.md) with a
-  conversation-history slide-out, a native Go [`ask` TUI](tui/README.md), and a
-  one-shot HTTP endpoint for scripting. → [API](docs/api.md)
+- **Meet you where you work.** A terminal-themed [web chat](web/README.md) — attach
+  or paste **screenshots and dashboards** and Devy reasons over the pixels, while the
+  Grafana panels it renders come back **inline** — with a conversation-history
+  slide-out; a native Go [`ask` TUI](tui/README.md); and a one-shot HTTP endpoint for
+  scripting. → [API](docs/api.md)
 
 <p align="center">
   <img src="assets/devy-chat-history.png" width="820"
@@ -251,12 +266,24 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
   `repo_*` code/diff/history tools, Markdown crawl) + **LLM doc generation** (Devy
   reads a repo's *code* → OKF architecture docs, diff-driven, redacted-before-disk);
   an **MCP Servers registry** to mount external HTTP MCP tool sources (read-only by
-  default, write tools opt-in); and native **web search** (Tavily).
+  default, write tools opt-in, per-server `auth_header`), including the official
+  **Grafana** MCP mounted read-only (dashboards, Prometheus/Loki queries, panel
+  rendering); and native **web search** (Tavily).
 - **Observability**: opt-in **LangSmith** waterfall tracing of every turn — LLM
   and tool spans with token usage and timings; payload verbosity gated by mode
   (dev = full I/O, prod = metadata-only, following `DEVY_MODE`).
 - **Incident RCA** as an adaptive mode of reasoning + a `correlate_timeline` helper.
-- **Surfaces**: web chat (with history slide-out), native `ask` TUI, one-shot HTTP.
+- **Guarded mutating actions**: Devy *proposes* a reversible remediation (restart a
+  service/container, reload config, prune images); a human *approves* it in the UI,
+  then the proxy executes it on the host MCP. **Triple-gated** (host-MCP mutation
+  switch + RBAC *elevated* tier + per-action approval); Devy has no directly-mutating
+  tool, and any mounted write-tool is withheld from it by a `readOnlyHint` filter.
+- **Multimodal**: attach or paste images (screenshots, dashboards) — stored in a
+  content-addressed **S3 blob store** (LocalStack dev / real S3 prod) and reasoned
+  over as vision input; past-turn images flatten to a one-time digest + an on-demand
+  `view_image` tool, and tool-rendered panels (e.g. Grafana) are inlined in answers.
+- **Surfaces**: web chat (history slide-out, avatar/SSO-aware header, themed error
+  screens), native `ask` TUI, one-shot HTTP; a `./devy.sh` compose wrapper.
 - **Persistence**: Postgres + pgvector (bundled or managed/RDS), self-bootstrapping.
 - **Conversation memory**: two-channel history + token-triggered structured
   compaction, and `recall_history` for cross-conversation recall.

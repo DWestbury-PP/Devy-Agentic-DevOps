@@ -38,13 +38,26 @@ Registered tool metadata (discovery surface).
     "when_to_use": "…", "safety_tier": "read-only" } ]
 ```
 
+### `GET /v1/whoami` — the caller's identity (auth-aware)
+Feeds the web header (avatar chip + conditional Admin nav). In **jwt** mode returns
+the **verified** identity decoded from the forwarded id_token; in password/dev mode
+returns the honor-system name with `authenticated: false`.
+```json
+{ "authenticated": true, "mode": "jwt", "email": "you@example.com",
+  "name": "You", "picture": "https://…", "roles": ["admin"], "is_admin": true }
+```
+
 ### `POST /v1/chat` — multi-turn, streamed (SSE)
 Request body:
 ```json
 { "message": "is the disk ok?", "session_id": "abc123",
   "tier": "balanced", "context": "optional piped/page context",
-  "user_id": "darrell" }
+  "user_id": "darrell",
+  "attachments": [ { "mime": "image/png", "data": "<base64>", "name": "graph.png" } ] }
 ```
+`attachments` are optional images (screenshots, dashboards) — stored in the
+content-addressed blob store and reasoned over as vision input; past-turn images
+flatten to a one-time digest (see `GET /v1/blobs/{hash}`).
 Returns a `text/event-stream`. Each event has an `event:` type and a JSON `data:`
 payload:
 
@@ -106,6 +119,26 @@ Removes the session and its conversation-memory rows.
 { "id": "abc123", "deleted": true }
 ```
 
+### `GET /v1/blobs/{hash}` — fetch a stored image
+Content-addressed (sha256) fetch from the blob store — backs image attachments and
+tool-rendered images (Devy embeds them inline as `![](/v1/blobs/<hash>)`). Returns
+the image bytes with their stored content type.
+
+### Guarded actions — human-approved remediations
+Devy can **propose** a reversible remediation (via its `request_action` tool) but
+never executes one itself; a person approves it here, and only then does the proxy
+run it on the host MCP. Approving/denying requires the **`elevated`** tier (RBAC).
+The plane is `503` unless guarded actions are enabled.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/actions` | List actions (optional `?session_id=`/`?status=`). Each: `{id, verb, args, rationale, reversibility, status, …}` |
+| `POST /v1/actions/{id}/approve` | Approve → execute on the host MCP (CAS: only an unexpired `proposed` action runs; returns the executed action with `returncode`/`result`) |
+| `POST /v1/actions/{id}/deny` | Deny a proposed action (no execution) |
+
+Verbs are Tier-A reversible only (`restart_service` / `restart_container` /
+`reload_config` / `prune_images`). See [Security → Guarded actions](security.md#guarded-mutating-actions).
+
 ## Admin control plane — `/v1/admin/*`
 
 A **privileged** plane, separate from the assistant endpoints above, for managing
@@ -143,6 +176,22 @@ are **never returned** (only `has_token`).
 | `DELETE /v1/admin/hosts/{id}` | Remove. |
 | `POST /v1/admin/hosts/{id}/check` | Test reachability → `{ "status": "reachable"\|"unreachable", "checks": [...] }`; updates `last_status`. |
 | `GET /v1/admin/mcp-mounts` | Statically-mounted MCP servers from `config.yaml` (`mcp_servers`) as read-only **built-in** hosts — always includes the local host MCP on Devy's own network (a guaranteed test target). Each: `name`, `transport`, `address`, `url`, `reachable`, `checks`. Not removable (config-managed). |
+
+### MCP servers registry — `/v1/admin/mcp-servers`
+
+General external HTTP MCP tool sources (distinct from `hosts`), mountable at runtime.
+**Read-only by default** (`allow_writes` opts in; a mounted tool that self-declares as
+a writer via `readOnlyHint=false` is withheld from Devy unless allowed). Bearer tokens
+live in the **secrets manager** (`secret_ref`, never returned).
+
+| Method / path | Purpose |
+|---|---|
+| `GET /v1/admin/mcp-servers` | List registered servers. |
+| `POST /v1/admin/mcp-servers` | Register (**`201`**). Body: `name` (not a reserved built-in category), `url`, `category`, `secret_ref`, `allow_writes`, and **`auth_header`** — the header carrying the bearer when it isn't `Authorization: Bearer` (e.g. `X-Grafana-Api-Key` for the Grafana MCP). |
+| `PATCH /v1/admin/mcp-servers/{id}` | Update. |
+| `DELETE /v1/admin/mcp-servers/{id}` | Remove. |
+| `POST /v1/admin/mcp-servers/{id}/test` | Probe reachability + auth (invokes a read-only zero-arg tool to catch a masked upstream `401`). |
+| `POST /v1/admin/mcp-servers/{id}/refresh` | Re-snapshot the server's tool list. |
 
 ### GitHub connector — `/v1/admin/github/*`
 

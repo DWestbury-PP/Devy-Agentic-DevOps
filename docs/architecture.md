@@ -23,7 +23,10 @@ that came before — see the [background journey](JOURNEY.md).
   the system prompt.
 - **Safe by default.** Anything touching a live host is an allow-listed,
   profile-gated, audited check — never a shell. This is the posture that gets
-  Devy past security review and onto real infrastructure.
+  Devy past security review and onto real infrastructure. Writes exist only via a
+  gated propose → approve → execute path (a deployment mutation switch + the RBAC
+  `elevated` tier + per-action human approval), never direct execution — Devy has
+  no directly-mutating tool.
 - **Provider-agnostic and observable.** A thin model layer (LiteLLM) talks to any
   provider; tracing makes the agent's loop visible.
 
@@ -41,6 +44,9 @@ src/agentic_devops/
 │   ├── prompts.py      system prompt + message assembly
 │   ├── tokens.py       token estimation for the compaction trigger
 │   ├── mcp_client.py   mounts external MCP servers into the tools-router
+│   ├── mcp_registry.py  MCP servers registry (admin-managed HTTP tool sources)
+│   ├── actions.py      guarded mutations: ACTION_CATALOG / ActionStore / ActionExecutor
+│   ├── blobs.py        content-addressed S3 blob store (image attachments + tool images)
 │   ├── tracing.py      pluggable tracing (JSONL default, LangSmith optional)
 │   │   # ── admin control plane (Phase 9) ──
 │   ├── auth.py             bcrypt password → HS256 token; JWT/JWKS SSO + RBAC
@@ -52,7 +58,8 @@ src/agentic_devops/
 ├── tools/          the tools-router + tool definitions
 │   ├── router.py       registry + find_tools discovery + execution
 │   ├── base.py         ToolSpec (the metadata that powers discovery)
-│   └── builtin/        native tools: diagnostics, correlate_timeline, recall, hosts
+│   └── builtin/        native tools: diagnostics, correlate_timeline, recall, hosts,
+│                        actions (propose-only request_action)
 ├── knowledge/      the retrieval subsystem
 │   ├── ingest.py       sweep → chunk → enrich → embed → store
 │   ├── chunking.py     structural Markdown chunking
@@ -84,6 +91,13 @@ framework. One turn:
 4. **Repeat** until the model answers without calling a tool (bounded by
    `max_iterations`).
 
+**Mutating proposals.** Devy has no directly-mutating tool. To change a live host
+it calls the propose-only `request_action` tool; the proxy writes a
+`pending_actions` row and **pauses for human approval**. Only after
+`POST /v1/actions/{id}/approve` does the proxy (not Devy) execute the reversible
+verb on the host MCP. "Never self-approve" is therefore structural, not a prompt
+instruction.
+
 Both the non-streaming path (`run_turn`, used by `/v1/complete`) and the
 streaming path (`run_turn_streaming`, used by the `/v1/chat` SSE route) share the
 same tool-handling core.
@@ -101,6 +115,11 @@ A tool that needs **request identity** (like `recall_history`, which must scope 
 the current user) sets `wants_context=True`; the router then calls it as
 `handler(args, context)` where the harness threads `{user_id, session_id}` from
 the request. Identity comes from context, never from model-supplied arguments.
+
+A tool can also return **images** (e.g. a rendered Grafana panel). The harness
+blob-stores each image and passes it to the model as a vision block; Devy inlines
+it into the answer as `![](/v1/blobs/<ref>)`, so rendered panels persist and
+display alongside the reasoning that cited them.
 
 ## Request flow
 
@@ -124,6 +143,8 @@ One **Postgres + pgvector** instance backs everything that survives a restart:
   structured working summary + distilled findings). See [Memory](memory.md).
 - `chunks` — knowledge-base chunks + embeddings. See [Knowledge](knowledge.md).
 - `conversation_memories` — per-exchange embeddings for `recall_history`.
+- `pending_actions` — guarded-action proposals with their approval/execution state.
+- `attachments` — image blob refs + one-time vision digests of past-turn images.
 
 The DSN (`database.url` / `$DATABASE_URL`) is the single deployment knob — the
 bundled compose container or a managed instance (RDS/Aurora). The idempotent

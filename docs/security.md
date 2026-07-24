@@ -18,10 +18,13 @@ hosts.** All host and container inspection goes through the
 - **Profile-gated.** The server runs at one active profile —
   `read-only` < `diagnostic` < `elevated` — and exposes only the checks at or
   below it. Run target hosts at the lowest profile that does the job.
-- **Read-only by default.** The packaged allow-list contains **no mutating or
-  shell verbs** — no `docker exec/run/rm/stop`, no arbitrary `cat`/`tail`, no
-  `dmesg`. The boundary is the allow-list itself, not the Docker socket's mount
-  mode.
+- **Read-only by default.** The packaged allow-list contains **no shell verbs** —
+  no `docker exec/run/rm`, no arbitrary `cat`/`tail`, no `dmesg`. The boundary is
+  the allow-list itself, not the Docker socket's mount mode. A small set of
+  **reversible** mutating verbs (restart a service/container, reload config, prune
+  images) exists, but they are **off unless the deployment opts in**
+  (`HOST_MCP_ALLOW_MUTATIONS`) and only ever run through the human-approved
+  [guarded-action path](#guarded-mutating-actions) — never on the agent's own say-so.
 - **Authenticated & audited.** The HTTP transport requires a bearer token (front
   it with TLS); every invocation (check, args, resolved `argv`, exit, duration)
   can be appended to a JSONL audit log.
@@ -218,22 +221,57 @@ from the assistant endpoints** and **off unless explicitly configured**:
   verified `email` in jwt mode (`admin`/`system` in password mode).
 - **Role-gated tools (RBAC-2).** Each role caps the tool **safety tier** the agent
   may invoke on that caller's behalf: `viewer` → read-only, `operator` → +diagnostic
-  (host checks), `admin` → +elevated (e.g. opted-in MCP writes). The harness refuses
-  an over-tier tool with a clear message. On the chat plane, the tier comes from the
-  verified JWT role in jwt mode, or `rbac.assistant_role` (default `admin` =
-  unrestricted) when identity isn't verified — tighten it if you run chat without SSO.
+  (host checks), `admin` → +elevated (proposing a [guarded action](#guarded-mutating-actions),
+  opted-in MCP writes). The harness refuses an over-tier tool with a clear message. On
+  the chat plane, the tier comes from the verified JWT role in jwt mode, or
+  `rbac.assistant_role` (default `admin` = unrestricted) when identity isn't verified —
+  tighten it if you run chat without SSO. **Approving** an action requires the
+  `elevated` tier too.
 
 Generate the password-mode secrets with `agentic-devops admin set-password`; they
 live in `~/.config/agentic-devops/.env` (never committed).
+
+## Guarded mutating actions
+
+Devy can help *fix* things, not just report them — but the write path is built so a
+prompt injection (or a bad-day model) cannot mutate infrastructure on its own. Devy
+**proposes**; a human **approves**; the proxy **executes**. There is **no tool that
+mutates directly** — the propose/approve split is structural, so "never self-approve"
+isn't a rule the model can be talked out of.
+
+Three independent gates must all be open for a mutation to run:
+
+1. **Deployment switch.** The host MCP sidecar refuses every mutating verb unless it
+   was started with **`HOST_MCP_ALLOW_MUTATIONS`** — a dedicated, default-off switch
+   orthogonal to the profile, so a SecOps team controls whether *any* write is even
+   possible on a given host.
+2. **RBAC — `elevated` tier.** Only an `elevated`-tier caller can approve an action
+   (`POST /v1/actions/{id}/approve`). Viewers/operators can see proposals but not run
+   them.
+3. **Per-action human approval.** Each proposal is a `pending_actions` row with a TTL;
+   approval is a compare-and-set (only one unexpired `proposed` action executes), and
+   the whole set is **fail-closed** — the actions plane won't enable without
+   `auth.mode: jwt` (or an explicit dev opt-in), so it stays off through the
+   unauthenticated bootstrap.
+
+Only **reversible** verbs exist (`restart_service`/`restart_container`/`reload_config`/
+`prune_images`) — no `rm`, volume deletion, or shell, locked by test. As a
+defence-in-depth backstop, the host MCP annotates each tool with **`readOnlyHint`**, and
+the proxy **withholds any mounted tool that self-declares as a writer** (`readOnlyHint=false`)
+from the agent's tool set — so even a mounted third-party MCP can't hand Devy a direct
+write verb.
 
 ## Agent / prompt-injection posture
 
 Devy reads data from tools, documents, and (potentially) untrusted systems. Two
 mitigations are built in, and one is your responsibility:
 
-- **Tools are the guardrail.** Because host access is an allow-list of read-only
+- **Tools are the guardrail.** Because host access is an allow-list of scoped
   checks, a prompt-injection attempt in a log line or document can't escalate into
-  arbitrary execution — there is no tool that runs arbitrary commands.
+  arbitrary execution — no tool runs arbitrary commands, and the only mutating verbs
+  are reversible ones that a human must approve (see [Guarded mutating
+  actions](#guarded-mutating-actions)). A prompt injection can, at most, cause Devy
+  to *propose* an action — which a person still has to approve before it runs.
 - **Findings are data, not control.** Tool output is fed back as content the model
   reasons over, and stored as plain text — it is never executed.
 - **Your responsibility:** vet the **MCP servers** you mount and the **profile**

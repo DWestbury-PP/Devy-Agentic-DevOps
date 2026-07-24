@@ -71,6 +71,25 @@ data.
 and operators can reason about. For anything touching a live host, prefer the
 [host MCP's](#the-host-mcp) allow-list model over a bespoke tool.
 
+### Actions (mutating capability, safely)
+
+Read-only tools return directly. A *mutating* capability must never execute
+straight from the agent — expose it as a **proposal** instead. `request_action`
+([`tools/builtin/actions.py`](../src/agentic_devops/tools/builtin/actions.py),
+`category="actions"`, `safety_tier="elevated"`) is the reference: Devy calls it to
+**propose** a reversible remediation, but the tool only writes a `pending_actions`
+row — it executes nothing. A human then approves via
+`POST /v1/actions/{id}/approve`, and the **proxy** (not the agent) runs the action
+on the host MCP. "Never self-approve" is structural: Devy has no tool that mutates
+directly.
+
+Follow the same pattern for any mutating capability you add — expose it as a
+proposal that a human approves out-of-band, never as a directly-executing tool.
+Two backstops reinforce it: the host MCP gates all mutations behind
+`HOST_MCP_ALLOW_MUTATIONS` (default off), and it emits `readOnlyHint` annotations
+so the proxy **withholds any self-declared write-tool** from the agent's set
+unless you've explicitly opted in.
+
 ## MCP servers
 
 Devy is an **MCP client**: mount any [Model Context Protocol](https://modelcontextprotocol.io)
@@ -161,6 +180,16 @@ image block, so a vision model can read the panel — not just link to it. The b
 never enters the model's text context, the stored transcript, or the rolling
 summary (a `[rendered image]` placeholder stands in there); a non-vision fallback
 model degrades to that placeholder automatically.
+
+**User-uploaded images (surface authors).** The path above covers images a *tool*
+returns; users can also *attach* images. A surface sends them on the request as
+`attachments: [{mime, data, name}]` (the web composer does this via a paperclip
+button and clipboard paste). Uploads land in the content-addressed **blob store**
+— history holds `image_refs`, never base64. Only the current turn inlines the
+pixels; images from past turns are flattened to a **one-time vision digest**
+(a short text description, cached), and the model can re-pull the pixels on demand
+via the `view_image(ref)` tool. Build your surface to POST attachments and render
+returned image refs; the process-once handling is automatic.
 
 ## Models & tiers
 

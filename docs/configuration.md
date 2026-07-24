@@ -126,6 +126,7 @@ mcp_servers:
 | `transport` | `stdio` (proxy spawns it) or `http` (connect to a running server) |
 | `command` / `args` / `env` | stdio: how to spawn the server |
 | `url` / `token` | http: endpoint and bearer token |
+| `auth_header` | http: non-standard header to carry the bearer (default `Authorization: Bearer`; e.g. `X-Grafana-Api-Key` for the Grafana MCP) |
 | `category` / `safety_tier` | optional UX overrides |
 
 ## Knowledge & embeddings
@@ -173,6 +174,50 @@ Conversation compaction triggers when the assembled context exceeds
 `compaction_ratio × (tier.context_window or default_context_window)`. See
 [Memory](memory.md) for the mechanics.
 
+## Guarded actions
+
+Devy *proposes* reversible remediations; a human *approves*; the proxy *executes*
+on the host MCP. Devy has no tool that mutates directly.
+
+```yaml
+actions:
+  enabled: false          # turn the guarded-action plane on/off
+  allow_insecure_dev: false  # permit actions without SSO (dev only)
+  ttl_seconds: 900        # how long a proposed action stays approvable
+```
+
+**Fail-closed:** the actions plane refuses to enable unless `auth.mode: jwt` **or**
+`allow_insecure_dev: true` — so it stays off through the unauthenticated bootstrap.
+A second, deployment-level gate lives on the host-MCP sidecar
+(`HOST_MCP_ALLOW_MUTATIONS`, below): both must be set for any mutating verb to run.
+
+## Attachments & blob store
+
+Image attachments (composer paperclip/paste) and tool-rendered images (e.g.
+Grafana panels) are stored in a content-addressed (sha256) **S3 blob store** —
+LocalStack in dev, real S3 in prod (same `DEVY_MODE` + AWS wiring as secrets;
+dev needs `AWS_ENDPOINT_URL` set, else attachments are disabled). Blobs are served
+via `GET /v1/blobs/{hash}`. User turns store image *refs*, never base64.
+
+## Auth
+
+Identity/RBAC live in `config.yaml` under `auth:` — full treatment in
+[Security → Identity](security.md#identity). `mode: password` (default,
+bootstrap/break-glass) or `jwt` (verify an edge-forwarded id_token).
+
+```yaml
+auth:
+  mode: password                       # password | jwt
+  jwks_url: https://www.googleapis.com/oauth2/v3/certs
+  issuer:                              # string, or a list (Google needs both)
+    - https://accounts.google.com
+    - accounts.google.com
+  audience: ${OAUTH2_PROXY_CLIENT_ID}  # OAuth Client ID the forwarded JWT is checked against
+  header: Authorization                # header the edge forwards the JWT in (Bearer stripped); e.g. Cf-Access-Jwt-Assertion
+  groups_claim: groups                 # JWT claim → RBAC groups
+  email_claim: email                   # JWT claim → verified identity
+```
+
 ## Service & tracing
 
 ```yaml
@@ -192,6 +237,7 @@ Only the keys for the providers you actually use are needed.
 | `DEVY_ADMIN_PASSWORD_HASH` / `DEVY_ADMIN_SECRET` | Enable the admin control plane (`agentic-devops admin set-password`); unset = admin disabled (bootstrap — gates admin itself) |
 | `DEVY_MODE` | `dev` (LocalStack SM, writable) or `prod` (real AWS SM via IAM role) |
 | `HOST_MCP_TOKEN` | Bootstrap for the host-MCP **server** only; the proxy resolves its copy from the vault (`devy/mcp/host`) |
+| `HOST_MCP_ALLOW_MUTATIONS` | Host-MCP **sidecar** switch (default OFF); must be set for any mutating verb to execute. Orthogonal to the profile — a deployment-level gate for guarded actions |
 
 Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `TAVILY_API_KEY`, `LANGSMITH_API_KEY`, embedder keys like `VOYAGE_API_KEY`) are

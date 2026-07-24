@@ -25,6 +25,31 @@ docker compose down -v              # stop AND drop the DB volume (destroys data
 docker compose up -d --build chat-ui  # rebuild just the web surface after edits
 ```
 
+### `./devy.sh` — the canonical wrapper (use this)
+
+Raw `docker compose` is easy to get wrong once the **SSO overlay** is in play: run
+`docker compose up -d` *without* `-f docker-compose.auth.yml` and the proxy loses
+`OAUTH2_PROXY_CLIENT_ID`, so the JWT `audience` check fails ("Audience doesn't
+match") and login **silently breaks**. [`./devy.sh`](../devy.sh) assembles the right
+`-f` files (and mode env) for you and prints a banner so you always see what's
+included:
+
+```bash
+./devy.sh up                 # start (dev + SSO edge). alias for: up -d
+./devy.sh rebuild chat-ui    # rebuild + restart one service
+./devy.sh logs proxy         # follow logs
+./devy.sh psql               # psql into the app DB
+./devy.sh doctor             # ps + a mode/.env preflight
+./devy.sh mode               # print active mode + compose files
+./devy.sh down -v            # (guarded — confirms before dropping the DB volume)
+./devy.sh <any compose subcommand> …   # ps, exec, images, config, restart, …
+```
+
+Modes: **dev** (default — base + SSO overlay + LocalStack) or **`--prod`** (adds
+`docker-compose.prod.yml`: real AWS via IAM role, no LocalStack, secure cookies —
+a *scaffold*, validated by the Terraform deployment). `--no-auth` runs the base
+stack only (password-mode bootstrap / break-glass). Pure bash, no dependencies.
+
 Config and secrets are read from a mounted directory (default
 `~/.config/agentic-devops`, override with `$AGENTIC_DEVOPS_CONFIG_DIR`) — the same
 `config.yaml` + `.env` a native install uses. Compose reads a `.env` next to

@@ -1,0 +1,45 @@
+# PROD overlay — SCAFFOLD (not yet validated).
+#
+# Layers ON TOP of docker-compose.yml + docker-compose.auth.yml to flip the stack
+# from the local-dev backing services to production ones:
+#
+#   ./devy.sh --prod up      (or: DEVY_MODE=prod ./devy.sh up)
+#
+# The REAL production deployment is Terraform-provisioned in a separate repo
+# (Devy infra + Amazon-Linux/Ubuntu test VMs running the host MCP) — that work
+# will exercise and finalize this delta. Until then this file DOCUMENTS the
+# dev→prod compose difference and is intentionally minimal:
+#
+#   • DEVY_MODE=prod          → boto3 talks to real AWS Secrets Manager + S3
+#   • AWS_ENDPOINT_URL=""      → no LocalStack; use the real AWS endpoints
+#   • credentials             → the instance/task IAM ROLE (Terraform-provisioned),
+#                               NOT keys in compose. The dev test-keys are left as-is
+#                               here only because a real deploy supplies the role out
+#                               of band; do not bake real keys into this file.
+#   • LocalStack              → omitted entirely (profile-gated below)
+#   • cookies                 → Secure (HTTPS). The prod redirect URL / domain and
+#                               TLS termination are deployment-specific (Terraform).
+
+services:
+  proxy:
+    environment:
+      DEVY_MODE: prod
+      AWS_ENDPOINT_URL: ""        # real AWS, not LocalStack
+    # Real AWS Secrets Manager + S3 — no dependency on the (now-absent) LocalStack.
+    depends_on: !override
+      host-mcp:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Off-localhost the edge must be HTTPS, so the session cookie is Secure. TLS
+  # termination + the prod redirect URL are provided by the deployment (Terraform).
+  oauth2-proxy:
+    environment:
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+
+  # LocalStack is a DEV-only backing service. Assigning it a profile that prod never
+  # activates keeps it out of the prod stack (dev, which omits this overlay, still
+  # starts it normally).
+  localstack:
+    profiles: ["localstack-dev-only"]

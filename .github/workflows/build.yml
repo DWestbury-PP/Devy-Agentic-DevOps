@@ -1,0 +1,201 @@
+name: Build & push images (ECR)
+
+# Manual, parameterized container build for the Devy platform.
+#
+# Builds ONE, several, or ALL components in parallel (a matrix, one runner each) and
+# pushes immutable tags to their per-component ECRs. Registry-driven: the component
+# list and each build's Dockerfile/context come from the ECR provenance tags
+# (Project/Component/SourceRepo/Dockerfile), so a new component ECR is picked up by
+# "all" with no change here. Deliberate/dispatch-only — no auto-build on push (the
+# release model is coordinated, not GitOps). See aws-ansible/docs/deploy-design.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build from"
+        type: string
+        default: main
+      components:
+        description: "Comma-separated components (e.g. proxy,chat-ui) or 'all'"
+        type: string
+        default: all
+      push:
+        description: "Push to ECR (uncheck for a build-only dry run)"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write # OIDC -> assume the build role
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  BUILD_ROLE_ARN: arn:aws:iam::083084509839:role/westbury-gha-devy-build-dev
+  PROJECT_PREFIX: devy
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the build matrix from the registry: which repos, and for each its
+  # Dockerfile + context (= dirname of the Dockerfile). "all" => every devy-* repo.
+  # ---------------------------------------------------------------------------
+  matrix:
+    name: Resolve build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      count: ${{ steps.resolve.outputs.count }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.BUILD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve components -> matrix (registry-driven)
+        id: resolve
+        env:
+          COMPONENTS: ${{ inputs.components }}
+        run: |
+          set -euo pipefail
+
+          # Which repos? 'all' => every ${PREFIX}-* repo; else the named components.
+          if [ "${COMPONENTS}" = "all" ]; then
+            mapfile -t repos < <(aws ecr describe-repositories \
+              --query "repositories[?starts_with(repositoryName, '${PROJECT_PREFIX}-')].repositoryName" \
+              --output text | tr '\t' '\n' | sort)
+          else
+            repos=()
+            IFS=',' read -ra sel <<< "${COMPONENTS}"
+            for c in "${sel[@]}"; do
+              c="$(echo "$c" | xargs)"   # trim
+              [ -z "$c" ] && continue
+              repos+=("${PROJECT_PREFIX}-${c}")
+            done
+          fi
+
+          if [ "${#repos[@]}" -eq 0 ]; then
+            echo "::error::No repositories resolved from components='${COMPONENTS}'."
+            exit 1
+          fi
+
+          # For each repo, read its provenance tags -> one matrix include entry.
+          include='[]'
+          for repo in "${repos[@]}"; do
+            arn="$(aws ecr describe-repositories --repository-names "$repo" \
+                   --query 'repositories[0].repositoryArn' --output text 2>/dev/null || true)"
+            if [ -z "$arn" ] || [ "$arn" = "None" ]; then
+              echo "::error::ECR repository '$repo' not found — add its block to the registry stack (ADR-022)."
+              exit 1
+            fi
+            tags="$(aws ecr list-tags-for-resource --resource-arn "$arn" --output json)"
+            component="$(echo "$tags"  | jq -r '(.tags[] | select(.Key=="Component")  | .Value) // ""')"
+            dockerfile="$(echo "$tags" | jq -r '(.tags[] | select(.Key=="Dockerfile") | .Value) // ""')"
+            if [ -z "$component" ] || [ -z "$dockerfile" ]; then
+              echo "::error::Repo '$repo' is missing Component/Dockerfile provenance tags (ADR-022)."
+              exit 1
+            fi
+            context="$(dirname "$dockerfile")"
+            include="$(echo "$include" | jq \
+              --arg comp "$component" --arg repo "$repo" --arg df "$dockerfile" --arg ctx "$context" \
+              '. += [{"component":$comp,"repository":$repo,"dockerfile":$df,"context":$ctx}]')"
+          done
+
+          count="$(echo "$include" | jq 'length')"
+          {
+            echo "count=${count}"
+            echo "matrix={\"include\":$(echo "$include" | jq -c '.')}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved ${count} component(s):"
+          echo "$include" | jq -r '.[] | "  \(.component) -> \(.repository)  (-f \(.dockerfile), ctx \(.context))"'
+
+  # ---------------------------------------------------------------------------
+  # One runner per component, in parallel. Build + push an immutable tag.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.component }}
+    needs: matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - name: Checkout Devy @ ${{ inputs.ref }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.BUILD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tag
+        id: tag
+        env:
+          RAW_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          # <component>:<ref-or-branch>-<shortsha>-<utc>  (immutable, unique)
+          ref_label="$(echo "$RAW_REF" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+          ref_label="${ref_label:-build}"
+          short_sha="$(git rev-parse --short HEAD)"
+          utc="$(date -u +%Y%m%dT%H%M%SZ)"
+          tag="${ref_label}-${short_sha}-${utc}"
+          image="${{ steps.ecr.outputs.registry }}/${{ matrix.repository }}:${tag}"
+          {
+            echo "tag=${tag}"
+            echo "image=${image}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Image: ${image}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ inputs.push }}
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ matrix.component }} — ${{ job.status }}"
+            echo ""
+            echo "- **Pushed:** \`${{ inputs.push }}\`"
+            echo "- **Image:** \`${{ steps.tag.outputs.image }}\`"
+            echo "- **Ref:** \`${{ inputs.ref }}\` · **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # TODO(slack): post build completion to the CI/CD notifications channel once the
+      # Slack bot webhook exists. Dormant until then — no SLACK_WEBHOOK_URL secret => skip.
+      - name: Notify Slack (dormant until SLACK_WEBHOOK_URL is set)
+        if: ${{ always() && env.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          set -euo pipefail
+          text=":package: Devy build *${{ matrix.component }}* — ${{ job.status }}
+          • image: ${{ steps.tag.outputs.image }}
+          • ref: ${{ inputs.ref }} (${{ github.sha }})
+          • run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          jq -n --arg text "$text" '{text:$text}' \
+            | curl -sf -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"

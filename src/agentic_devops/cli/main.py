@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import atexit
 from typing import Optional
 
 import typer
 
 app = typer.Typer(add_completion=False, help="Agentic DevOps — the LLM-PROXY service.")
+
+
+@atexit.register
+def _close_pools() -> None:
+    """Close any DB pool a one-shot command opened, while worker threads can still
+    be joined — otherwise psycopg's pool finalizer errors at interpreter shutdown
+    (PythonFinalizationError on 3.14). No-op if the DB module was never imported."""
+    import sys
+
+    mod = sys.modules.get("agentic_devops.db")
+    if mod is not None:
+        try:
+            mod.close_all()
+        except Exception:  # noqa: BLE001 — best-effort cleanup at exit
+            pass
 
 
 @app.callback()
@@ -369,14 +385,26 @@ secrets_app = typer.Typer(add_completion=False, help="Secrets backend (dev=Local
 app.add_typer(secrets_app, name="secrets")
 
 
+def _known_refs(settings, secrets):
+    """(refs, note) — the managed inventory + an optional 'registry unavailable' note.
+    Shared enumeration so `list` and `sync` agree on which refs exist. The DB is
+    optional: if the registry is unreachable, fall back to provider keys only.
+    Wraps the store reads (not just get_pool) so a pool timeout also degrades."""
+    from agentic_devops.db import get_pool
+    from agentic_devops.proxy.secrets_sync import known_secret_refs
+
+    try:
+        pool = get_pool(settings.database.url)
+        return known_secret_refs(settings, secrets, pool), None
+    except Exception as exc:  # noqa: BLE001 — DB optional for a bare secrets check
+        return known_secret_refs(settings, secrets, None), f"registry unavailable: {exc}"
+
+
 @secrets_app.command("list")
 def secrets_list() -> None:
     """List secret names known to Devy and whether each is loaded (never the value)."""
     from agentic_devops.config import load_settings
-    from agentic_devops.db import get_pool
-    from agentic_devops.proxy.github import GitHubAccountStore
-    from agentic_devops.proxy.hosts import HostStore
-    from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
+    from agentic_devops.proxy.secrets import build_secrets_provider
 
     import os as _os
 
@@ -385,16 +413,109 @@ def secrets_list() -> None:
     endpoint = settings.secrets.endpoint_url or _os.environ.get("AWS_ENDPOINT_URL") or "aws"
     typer.echo(f"mode={settings.secrets.mode}  endpoint={endpoint}  "
                f"writable={secrets.writable}  reachable={secrets.health()}\n")
-    refs: list[tuple[str, str]] = [(r, "provider key") for r in provider_key_refs(settings.secrets.namespace)]
-    try:
-        pool = get_pool(settings.database.url)
-        refs += [(a.secret_ref, f"github:{a.label}") for a in GitHubAccountStore(pool, secrets).list() if a.secret_ref]
-        refs += [(h.secret_ref, f"host:{h.fqdn}") for h in HostStore(pool, secrets).list() if h.secret_ref]
-    except Exception as exc:  # noqa: BLE001 — DB optional for a bare secrets check
-        typer.echo(f"(registry unavailable: {exc})\n")
+    refs, note = _known_refs(settings, secrets)
+    if note:
+        typer.echo(f"({note})\n")
     for ref, kind in refs:
         mark = "✓ loaded" if secrets.exists(ref) else "· empty"
         typer.echo(f"  {mark:10} {ref:40} {kind}")
+
+
+@secrets_app.command("sync")
+def secrets_sync(
+    region: Optional[str] = typer.Option(None, "--region", help="Target AWS region (default: secrets.region / AWS_DEFAULT_REGION)."),
+    profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile for the target (admin) credentials."),
+    only: Optional[list[str]] = typer.Option(None, "--only", help="Sync only refs matching this token (repeatable)."),
+    skip: Optional[list[str]] = typer.Option(None, "--skip", help="Skip refs matching this token (repeatable)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the plan; write nothing."),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Sync local (dev/LocalStack) secrets UP to real AWS Secrets Manager.
+
+    Out-of-band bootstrap/rotation: reads your dev catalog and upserts the SAME refs
+    into real AWS SM using your admin credentials. Idempotent + diff-aware — re-run
+    it to push only what changed. Values never touch disk or logs; a ref present in
+    AWS but absent in dev is left alone. Needs an admin principal allowed to
+    Create/Put on the target; the deployed instance role only READS at runtime.
+    """
+    import os as _os
+
+    from agentic_devops.config import load_settings
+    from agentic_devops.proxy.secrets import build_secrets_provider
+    from agentic_devops.proxy.secrets_sync import (
+        apply_sync, build_aws_target_provider, mask, plan_sync, target_identity,
+    )
+
+    settings = load_settings()
+    if settings.secrets.mode != "dev":
+        typer.echo("Refused: run `secrets sync` from your DEV environment (source = LocalStack).")
+        raise typer.Exit(code=1)
+
+    region = region or settings.secrets.region or _os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        typer.echo("No target region: pass --region or set AWS_DEFAULT_REGION.")
+        raise typer.Exit(code=1)
+
+    source = build_secrets_provider(settings)          # dev / LocalStack
+    refs, note = _known_refs(settings, source)
+    if note:
+        typer.echo(f"({note})\n")
+
+    def keep(ref: str) -> bool:
+        if only and not any(tok in ref for tok in only):
+            return False
+        if skip and any(tok in ref for tok in skip):
+            return False
+        return True
+
+    refs = [(r, k) for (r, k) in refs if keep(r)]
+    if not refs:
+        typer.echo("No matching refs to sync.")
+        return
+
+    try:
+        account, arn = target_identity(region, profile)
+        target = build_aws_target_provider(region, profile)
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"Could not reach the target AWS account ({type(exc).__name__}: {exc}).")
+        typer.echo("Check your AWS credentials/--profile and --region.")
+        raise typer.Exit(code=1) from exc
+
+    items = plan_sync(source, target, refs)
+    typer.echo(f"Target: AWS account {account}  region {region}  (as {arn})")
+    typer.echo(f"Source: dev/LocalStack  namespace {settings.secrets.namespace}\n")
+    glyph = {"add": "+ add     ", "update": "~ update  ", "unchanged": "= same    ", "absent": "· skip    "}
+    for it in items:
+        detail = mask(it.src_len)
+        if it.action == "update":
+            detail = f"{mask(it.dst_len)} → {mask(it.src_len)}"
+        elif it.action == "absent":
+            detail = "not set in dev"
+        typer.echo(f"  {glyph[it.action]} {it.ref:40} {detail}")
+
+    adds = sum(1 for it in items if it.action == "add")
+    updates = sum(1 for it in items if it.action == "update")
+    if adds + updates == 0:
+        typer.echo("\nAWS is already in sync — nothing to write.")
+        return
+    if dry_run:
+        typer.echo(f"\n(dry-run) would write {adds} new + {updates} changed secret(s).")
+        return
+
+    if not yes:
+        typer.echo(f"\nAbout to write {adds} new + {updates} changed secret(s) to AWS account {account} ({region}).")
+        confirm = typer.prompt("Type 'yes' to proceed")
+        if confirm != "yes":
+            typer.echo("aborted")
+            raise typer.Exit(code=1)
+
+    applied, failed = apply_sync(source, target, items)
+    typer.echo(f"\nWrote {len(applied)} secret(s) to AWS.")
+    if failed:
+        typer.echo(f"{len(failed)} FAILED:")
+        for ref, err in failed:
+            typer.echo(f"  ✗ {ref}: {err}")
+        raise typer.Exit(code=1)
 
 
 @secrets_app.command("set")

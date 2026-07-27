@@ -110,6 +110,12 @@ def secrets():
     return make_fake_secrets(writable=True)
 
 
+@pytest.fixture()
+def make_secrets():
+    """Factory for fresh in-memory SecretsProviders (e.g. a source + target pair)."""
+    return make_fake_secrets
+
+
 @pytest.fixture(autouse=True)
 def _patch_app_secrets(monkeypatch):
     """Make every create_app() in the suite use an in-memory secrets backend whose

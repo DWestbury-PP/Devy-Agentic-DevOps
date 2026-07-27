@@ -29,13 +29,13 @@ first 2am rollback.
 
 Status: ✅ done · 🔨 in progress · ⬜ todo
 
-### 1. ⬜ Deploy compose variant (ECR images, not local build)
+### 1. ✅ Deploy compose variant (ECR images, not local build)
 A `docker-compose.deploy.yml` where every service is `image: ${DEVY_*_IMAGE}` (pulled), **no `build:`**.
 The variables come from a `.env` the pipeline renders from the release manifest. Local dev keeps using
 the `build:` base compose untouched. *(Evolve the existing "unvalidated scaffold" `docker-compose.prod.yml`.)*
 - **Implicit → explicit:** "compose builds my images" → "compose references pinned, immutable ECR tags."
 
-### 2. 🔨 `db migrate` — app-owned, versioned, expand/contract
+### 2. ✅ `db migrate` — app-owned, versioned, expand/contract
 A first-class `agentic-devops db migrate` command backed by a `schema_migrations` tracking table.
 Applies only **not-yet-applied** migrations, in order; a fresh DB applies all from `0` (so **bootstrap +
 incremental unify**). Migrations are **expand/contract** (backward-compatible — the old app must still run
@@ -48,10 +48,21 @@ the NEW image against the LIVE Postgres**, before the app tier cycles.
   point — it has already drifted from `schema.sql` (a legacy `token_encrypted` column the current bootstrap
   can't drop), so the first real migration (`002`) reconciles that drift and makes fresh + live converge.
 
-### 3. ⬜ Config & secrets externalization
+### 3. 🔨 Config & secrets externalization
 Real **AWS Secrets Manager via the instance role** (keyless, IMDS) — not LocalStack. Set `DEVY_MODE=prod`
 semantics, `AWS_ENDPOINT_URL=""` (real AWS), and ensure the `devy/*` secrets exist in the account's
 Secrets Manager. Runtime provider/MCP keys come from the vault, never the repo or the pipeline.
+
+Two halves:
+- **(a) get the values into ASM — DONE.** `agentic-devops secrets sync` (out-of-band, admin creds) reads the
+  local dev catalog and **upserts the same refs** into real AWS SM. Idempotent + diff-aware (re-run to push
+  only the delta — doubles as the rotation path); values never touch disk or logs; non-destructive (a ref in
+  AWS but not in dev is left alone — e.g. `devy/alloy/*`, which is outside Devy's catalog). `--dry-run`
+  previews the plan; `--only/--skip` scope it. Ref parity (`devy/provider/*`, `devy/github/*`, `devy/host/*`)
+  is what makes the dev→prod resolve path identical.
+- **(b) let the host READ them — TODO (Terraform).** Grant the `devy-platform` instance role
+  `secretsmanager:GetSecretValue` on `devy/*` (plus KMS decrypt if a CMK) over in `aws-terraform` — a
+  permission set, mirroring the `devy-ecr-pull` pattern. Runtime is read-only; only the out-of-band tool writes.
 - **Implicit → explicit:** "my `.env` + LocalStack" → "externalized config + secrets fetched on-host by
   the host's own identity."
 

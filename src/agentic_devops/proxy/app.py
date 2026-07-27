@@ -28,7 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agentic_devops import __version__
 from agentic_devops.config import Settings, load_settings
-from agentic_devops.db import apply_schema, get_pool
+from agentic_devops.db import check_current, get_pool
 from agentic_devops.proxy.errors import ProviderError, classify
 from agentic_devops.proxy.harness import run_turn, run_turn_streaming
 from agentic_devops.proxy.prompts import assemble_messages, deployment_context
@@ -209,16 +209,26 @@ def create_app(
     """Build the app. ``provider``/``router`` are injectable for testing."""
     settings = settings or load_settings()
 
-    # Postgres bootstrap. Apply the schema best-effort (a managed DB may need
-    # `agentic-devops db init` run by an admin first), then open the shared pool —
-    # Postgres is required, so a failure to connect here is fatal by design.
+    # Postgres. Schema is owned by the migration runner, NOT applied on boot: a
+    # rolling app restart must never silently mutate the schema (migration is a
+    # separate, gated step — `agentic-devops db migrate`, run by the deploy
+    # pipeline or `./devy.sh up`). Here we only do a READ-ONLY version check and
+    # warn if the DB is behind. Postgres is required, so an outright connect
+    # failure surfaces when the pool opens (fatal by design).
     try:
-        apply_schema(settings.database.url)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Schema bootstrap skipped (%s); run `agentic-devops db init` if tables are missing.",
-            exc,
-        )
+        check = check_current(settings.database.url)
+        if not check.ledger:
+            logger.warning(
+                "DB migration ledger not initialized%s; run `agentic-devops db migrate`.",
+                " (existing schema would be baseline-stamped)" if check.baseline_detectable else "",
+            )
+        elif check.pending:
+            logger.warning(
+                "DB is behind: %d migration(s) pending (%s). Run `agentic-devops db migrate`.",
+                len(check.pending), ", ".join(check.pending),
+            )
+    except Exception as exc:  # noqa: BLE001 — the check is advisory; never block boot on it
+        logger.warning("DB migration check skipped (%s).", exc)
     pool = get_pool(settings.database.url)
 
     # Secrets backend (Phase S-1): one AWS SM API surface (LocalStack in dev, real

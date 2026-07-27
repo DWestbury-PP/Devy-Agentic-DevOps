@@ -8,6 +8,8 @@
 #
 # Usage:
 #   ./devy.sh up                 start the stack (dev + SSO edge). alias for: up -d
+#                                then bring the DB to head (`db migrate`)
+#   ./devy.sh migrate [args]     run schema migrations now (e.g. migrate --status)
 #   ./devy.sh rebuild <svc>      rebuild + restart one service (up -d --build <svc>)
 #   ./devy.sh logs [svc]         follow logs
 #   ./devy.sh ps                 list services
@@ -27,6 +29,7 @@
 #   --deploy        run pushed ECR images (the CI/CD deploy variant) instead of
 #                   building locally. Needs DEVY_{PROXY,HOST_MCP,CHAT_UI}_IMAGE in
 #                   .env (see .env.deploy.example) — the CD pipeline renders these.
+#   --no-migrate    skip the automatic `db migrate` after `up`
 #   $DEVY_MODE      dev|prod (env; a --prod/--dev flag wins)
 set -euo pipefail
 cd "$(dirname "$0")"   # always run from repo root so `.env` auto-loads
@@ -34,6 +37,7 @@ cd "$(dirname "$0")"   # always run from repo root so `.env` auto-loads
 MODE="${DEVY_MODE:-dev}"
 AUTH=1
 DEPLOY=0
+MIGRATE=1
 
 # Leading flags may precede the subcommand.
 while [[ $# -gt 0 ]]; do
@@ -42,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --dev)  MODE=dev;  shift ;;
     --no-auth) AUTH=0; shift ;;
     --deploy) DEPLOY=1; shift ;;
+    --no-migrate) MIGRATE=0; shift ;;
     *) break ;;
   esac
 done
@@ -78,10 +83,31 @@ preflight() {
 
 confirm() { read -rp "$1 Type 'yes' to proceed: " c; [[ "$c" == yes ]] || { echo "aborted" >&2; exit 1; }; }
 
+# Bring the DB to head via the app-owned migration runner (docs/db-migrations.md).
+# Runs INSIDE the proxy container (which has agentic-devops + waited for postgres
+# healthy). Non-fatal: a failure warns but never blocks the stack. `up` calls this
+# unless --no-migrate; also exposed as `./devy.sh migrate` (extra args pass through,
+# e.g. `./devy.sh migrate --status`).
+run_migrate() {
+  local tries=0
+  until dc exec -T proxy agentic-devops db migrate "$@"; do
+    tries=$((tries + 1))
+    if [[ $tries -ge 3 ]]; then
+      echo "⚠  db migrate did not succeed after $tries attempts — run './devy.sh migrate' once the stack is healthy" >&2
+      return 0
+    fi
+    echo "… waiting for the stack to be ready for migrations (attempt $tries) …" >&2
+    sleep 3
+  done
+}
+
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   up)
-    preflight; banner; dc up -d "$@" ;;
+    preflight; banner; dc up -d "$@"
+    [[ $MIGRATE == 1 ]] && run_migrate ;;
+  migrate)
+    banner; run_migrate "$@" ;;
   rebuild)
     [[ $# -gt 0 ]] || { echo "usage: ./devy.sh rebuild <service>" >&2; exit 1; }
     banner; dc up -d --build "$@" ;;

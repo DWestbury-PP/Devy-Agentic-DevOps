@@ -80,10 +80,10 @@ def ingest(
         typer.echo(f"Path not found: {target}")
         raise typer.Exit(code=1)
 
-    from agentic_devops.db import apply_schema
+    from agentic_devops.db.migrate import migrate
 
     extensions = tuple(DEFAULT_EXTENSIONS) + tuple(e if e.startswith(".") else f".{e}" for e in (ext or []))
-    apply_schema(settings.database.url)  # ensure tables exist (idempotent)
+    migrate(settings.database.url)  # ensure the DB is at head (idempotent)
     store = build_store(settings.database)
     embedder = build_embedder(settings.knowledge)
     enricher = build_enricher(settings, force=context)
@@ -132,7 +132,8 @@ def crawl_repo(
     import os
 
     from agentic_devops.config import load_settings
-    from agentic_devops.db import apply_schema, get_pool
+    from agentic_devops.db import get_pool
+    from agentic_devops.db.migrate import migrate
     from agentic_devops.knowledge.factory import (
         build_embedder, build_enricher, build_redactor, build_store,
     )
@@ -150,7 +151,7 @@ def crawl_repo(
         typer.echo("A read-only GitHub PAT is required (--token or GITHUB_TOKEN).")
         raise typer.Exit(code=1)
 
-    apply_schema(settings.database.url)
+    migrate(settings.database.url)
     kcfg = settings.knowledge.chunk
     typer.echo(f"Crawling {repo} markdown (embedding: {settings.knowledge.embedding.model}) …")
     pool = get_pool(settings.database.url)
@@ -201,7 +202,8 @@ def docgen(
     from pathlib import Path
 
     from agentic_devops.config import load_settings
-    from agentic_devops.db import apply_schema, get_pool
+    from agentic_devops.db import get_pool
+    from agentic_devops.db.migrate import migrate
     from agentic_devops.knowledge.factory import (
         build_embedder, build_enricher, build_redactor, build_store,
     )
@@ -222,7 +224,7 @@ def docgen(
         typer.echo(str(exc))
         raise typer.Exit(code=1)
 
-    apply_schema(settings.database.url)
+    migrate(settings.database.url)
     pool = get_pool(settings.database.url)
     out_dir = Path(settings.knowledge.docgen_output_dir)
     typer.echo(f"Generating docs for {repo} (tier: {tier.model}, → {out_dir}/) …")
@@ -255,7 +257,7 @@ def docgen(
         typer.echo("  generated: " + ", ".join(c or "(root)" for c in outcome.components_generated))
 
 
-db_app = typer.Typer(add_completion=False, help="Database bootstrap (Postgres + pgvector).")
+db_app = typer.Typer(add_completion=False, help="Database schema migrations (Postgres + pgvector).")
 app.add_typer(db_app, name="db")
 
 
@@ -266,24 +268,77 @@ def _safe_dsn(url: str) -> str:
     return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url)
 
 
-@db_app.command("init")
-def db_init() -> None:
-    """Apply the bootstrap schema (pgvector extension + tables) to the configured DB.
+@db_app.command("migrate")
+def db_migrate(
+    status_only: bool = typer.Option(
+        False, "--status", help="Show applied vs pending migrations; apply nothing."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print what would be applied; apply nothing."
+    ),
+) -> None:
+    """Apply pending schema migrations to the configured DB, in order.
 
-    Idempotent — safe to re-run. Use this to provision an existing or managed
-    database (e.g. RDS/Aurora); the bundled compose Postgres bootstraps itself.
+    Versioned + gated: only not-yet-applied migrations run, each in its own
+    transaction. A pre-migration DB (tables present, no ledger) is baseline-stamped
+    at 001 without re-running it, then caught up. Idempotent — a DB at head is a
+    no-op. Use this to provision or evolve any DB, including managed (RDS/Aurora).
+    See docs/db-migrations.md.
     """
     from agentic_devops.config import load_settings
-    from agentic_devops.db import apply_schema
+    from agentic_devops.db.migrate import migrate, status
+    from agentic_devops.db.migrate import MigrationError
 
     settings = load_settings()
-    typer.echo(f"Applying schema to {_safe_dsn(settings.database.url)} …")
+    dsn = _safe_dsn(settings.database.url)
+
+    if status_only:
+        applied, pending = status(settings.database.url)
+        typer.echo(f"Migrations for {dsn}")
+        if applied:
+            typer.echo("  applied:")
+            for version, name, applied_at, baseline in applied:
+                tag = " (baseline-stamped)" if baseline else ""
+                typer.echo(f"    ✓ {version}_{name}{tag} — {applied_at}")
+        else:
+            typer.echo("  applied: (none — ledger not initialized)")
+        if pending:
+            typer.echo("  pending:")
+            for m in pending:
+                typer.echo(f"    • {m.version}_{m.name}")
+        else:
+            typer.echo("  pending: (none — DB is at head)")
+        return
+
+    verb = "Planning (dry-run)" if dry_run else "Applying"
+    typer.echo(f"{verb} migrations for {dsn} …")
     try:
-        apply_schema(settings.database.url)
-    except Exception as exc:  # noqa: BLE001
-        typer.echo(f"Schema bootstrap failed: {exc}")
+        plan = migrate(settings.database.url, dry_run=dry_run)
+    except MigrationError as exc:
+        typer.echo(f"Migration error: {exc}")
         raise typer.Exit(code=1) from exc
-    typer.echo("Schema applied: pgvector extension + chunks/sessions tables.")
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"Migration failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not plan:
+        typer.echo("Already at head — nothing to do.")
+        return
+    for item in plan:
+        if item.action == "baseline-stamp":
+            typer.echo(f"  stamped baseline {item.version}_{item.name} (existing schema, not executed)")
+        else:
+            typer.echo(f"  {'would apply' if dry_run else 'applied'} {item.version}_{item.name}")
+    if not dry_run:
+        typer.echo("Done.")
+
+
+@db_app.command("init")
+def db_init() -> None:
+    """Alias for ``db migrate`` (kept for muscle memory / managed-DB provisioning)."""
+    # Pass explicit booleans: calling the Typer command bare would forward the
+    # OptionInfo defaults (which are truthy), landing in the wrong branch.
+    db_migrate(status_only=False, dry_run=False)
 
 
 admin_app = typer.Typer(add_completion=False, help="Admin control-plane helpers.")

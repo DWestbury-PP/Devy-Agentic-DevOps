@@ -35,7 +35,7 @@ The variables come from a `.env` the pipeline renders from the release manifest.
 the `build:` base compose untouched. *(Evolve the existing "unvalidated scaffold" `docker-compose.prod.yml`.)*
 - **Implicit → explicit:** "compose builds my images" → "compose references pinned, immutable ECR tags."
 
-### 2. ⬜ `db migrate` — app-owned, versioned, expand/contract
+### 2. 🔨 `db migrate` — app-owned, versioned, expand/contract
 A first-class `agentic-devops db migrate` command backed by a `schema_migrations` tracking table.
 Applies only **not-yet-applied** migrations, in order; a fresh DB applies all from `0` (so **bootstrap +
 incremental unify**). Migrations are **expand/contract** (backward-compatible — the old app must still run
@@ -44,6 +44,9 @@ transactional DDL → atomic apply, auto-rollback on failure). Run by the pipeli
 the NEW image against the LIVE Postgres**, before the app tier cycles.
 - **Implicit → explicit:** "`schema.sql` auto-applies on an empty volume" → "explicit, versioned,
   deliberately-run migrations that are safe to roll an app back across."
+- **Design + grounding:** [`docs/db-migrations.md`](db-migrations.md). Probing the live DB proved the
+  point — it has already drifted from `schema.sql` (a legacy `token_encrypted` column the current bootstrap
+  can't drop), so the first real migration (`002`) reconciles that drift and makes fresh + live converge.
 
 ### 3. ⬜ Config & secrets externalization
 Real **AWS Secrets Manager via the instance role** (keyless, IMDS) — not LocalStack. Set `DEVY_MODE=prod`

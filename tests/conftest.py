@@ -26,11 +26,12 @@ TEST_DSN = os.environ.get(
 
 @pytest.fixture(scope="session")
 def pg_url():
-    """Session-wide DSN with the bootstrap schema applied; skips if unreachable."""
-    from agentic_devops.db import apply_schema, close_all
+    """Session-wide DSN migrated to head; skips if unreachable."""
+    from agentic_devops.db import close_all
+    from agentic_devops.db.migrate import migrate
 
     try:
-        apply_schema(TEST_DSN)
+        migrate(TEST_DSN)
     except Exception as exc:  # noqa: BLE001
         pytest.skip(
             f"Postgres not reachable at {TEST_DSN} ({exc}). Start one:\n"

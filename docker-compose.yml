@@ -60,13 +60,15 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Postgres + pgvector — persistence for both subsystems: conversation history
-  # (sessions) and the knowledge base (chunks + embeddings). The bootstrap schema
-  # is applied automatically on first init (mounted into the init dir); it creates
-  # the `vector` extension and the tables. Data persists in a named volume.
+  # Postgres + pgvector — persistence for conversation history (sessions), the
+  # knowledge base (chunks + embeddings), and crystalized memories. On a fresh
+  # (empty-volume) first init, the baseline migration is applied automatically
+  # (mounted into the init dir) so a brand-new local DB just works; schema
+  # EVOLUTION is owned by `agentic-devops db migrate` (run by `./devy.sh up`, and
+  # as a gated pipeline step in prod). Data persists in a named volume.
   #
   # BIND AN EXISTING / MANAGED DB INSTEAD: set DATABASE_URL to your endpoint, run
-  # `agentic-devops db init` once against it, and start only the other services
+  # `agentic-devops db migrate` once against it, and start only the other services
   # (e.g. `docker compose up -d proxy host-mcp chat-ui`). This bundled service is
   # the zero-setup default; a managed DB is the clean production upgrade.
   postgres:
@@ -78,7 +80,7 @@ services:
       POSTGRES_DB: agentic
     volumes:
       - "agentic-pgdata:/var/lib/postgresql/data"
-      - "./src/agentic_devops/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro"
+      - "./src/agentic_devops/db/migrations/001_baseline.sql:/docker-entrypoint-initdb.d/01-baseline.sql:ro"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agentic -d agentic"]
       interval: 10s

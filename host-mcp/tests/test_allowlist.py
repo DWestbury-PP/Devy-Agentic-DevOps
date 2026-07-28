@@ -567,6 +567,13 @@ def test_log_query_absolute_bounds_supersede_window(monkeypatch):
     # a bad timestamp is rejected by the pattern
     _, err = al.build_argv("log_query", {"predicate": "p", "start": "yesterday"})
     assert err
+    # HH:MM without seconds is rejected up front — `log show` exits 64 on it, so the
+    # pattern must not let a seconds-less time through (regression: Devy fumbled this).
+    _, err = al.build_argv("log_query", {"predicate": "p", "start": "2026-07-27 19:40"})
+    assert err
+    # a bare date (no time) is still fine
+    argv, err = al.build_argv("log_query", {"predicate": "p", "start": "2026-07-27"})
+    assert err is None and argv[argv.index("--start") + 1] == "2026-07-27"
 
 
 def test_new_mac_primitives_build_and_validate(monkeypatch):

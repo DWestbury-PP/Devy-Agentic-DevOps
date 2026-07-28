@@ -315,6 +315,9 @@ a.ghost { text-decoration: none; display: inline-flex; align-items: center; line
   border: 1px solid var(--line); border-radius: 6px; font-size: 12px;
   max-height: 220px; overflow: auto; color: var(--fg);
 }
+/* find_tools discovery list: a comma-separated list, not code — let it wrap. */
+.tool pre.found { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool .found-note { color: var(--fg-faint); font-size: 11px; }
 .meta { color: var(--fg-faint); font-size: 11px; margin-top: 8px; }
 .err { color: var(--red); }
 .notice { color: var(--fg-faint); font-size: 11px; margin-top: 6px; font-style: italic; }

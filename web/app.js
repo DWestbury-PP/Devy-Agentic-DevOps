@@ -404,8 +404,29 @@ async function send(message, attachments = []) {
             : Object.keys(a).length ? compactArgs(a) : "";
           addTool(ctx, evt.data.name, detail);
         } else if (evt.type === "tools_found") {
+          // Collapse the discovered-tools list into the same `> result` disclosure
+          // every other tool uses (default closed; expand to see the full list).
           const node = ctx.toolNodes["find_tools"];
-          if (node) node.appendChild(el("span", "found", "  → " + (evt.data.names || []).join(", ")));
+          if (node) {
+            node.classList.add("ok");
+            const names = evt.data.names || [];
+            if (!names.length) {
+              // Survey (list_only): nothing loaded — mark it, nothing to expand.
+              node.appendChild(el("span", "found-note", " · survey"));
+            } else {
+              const det = el("details");
+              const sum = el("summary");
+              const chev = icon("chevron");
+              chev.classList.add("disc");
+              sum.append(chev, document.createTextNode(
+                names.length + (names.length === 1 ? " tool" : " tools")));
+              const list = el("pre", "found");
+              list.textContent = names.join(", ");
+              det.append(sum, list);
+              node.appendChild(det);
+            }
+            if (atBottom()) scroll();
+          }
         } else if (evt.type === "tool_result") {
           const node = ctx.toolNodes[evt.data.name];
           if (node) {

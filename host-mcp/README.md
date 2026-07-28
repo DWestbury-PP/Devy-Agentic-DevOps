@@ -12,27 +12,38 @@ by the host's active profile. That posture is what makes it adoptable.
 
 ## What it can check
 
-At the default `diagnostic` profile, the packaged allow-list exposes **host** and
-**Docker** diagnostics (all read-only, no shell):
+The allow-list is **authored per-OS** — each host advertises only the checks
+native to its operating system (see [One server, per-OS surfaces](#one-server-per-os-surfaces)).
+At the default `diagnostic` profile it exposes **host** and **Docker**
+diagnostics — no shell, no mutations:
 
-- **Host:** `disk`, `memory`, `cpu_load`, `os_info`, `network` (listening
-  sockets), `connections` (sockets **with the owning process**), `processes`,
-  `top_snapshot`, and log sweeps `journal` / `journal_grep` (the systemd journal
-  on Linux, the unified `log show` on macOS) plus `journal_unit`
-  (systemd-specific).
+- **Resource:** `disk` (usage + inodes on macOS), `memory` (pressure / free),
+  `cpu_load`, `processes` (ranked by CPU), `top_snapshot` (load + memory totals,
+  per-process state), `disk_io` (I/O throughput + iowait — macOS).
+- **Network:** `network` (listening sockets), `connections` (sockets **with the
+  owning process**), and reachability — `ping_host`, `dns_lookup` (the host's
+  *real* resolver/cache), `dns_config`, `http_check` (endpoint status + DNS / TLS /
+  total latency) — macOS.
+- **Logs:** the systemd journal family on Linux (`journal`, `journal_unit`,
+  `journal_grep`, `journal_priority`, `journal_kernel`, `journal_boot`); on macOS
+  the unified-log store via **`log_query`** (predicate + severity + relative window
+  or absolute start/end). `tail_file` reads a service's own redirected error log —
+  but only one that resolves inside an operator-declared allow-list of log
+  directories (default `/var/log`, `/opt/homebrew/var/log`, `/usr/local/var/log`,
+  `/Library/Logs`). It exists for the case the journal/unified log can't cover: a
+  launchd/Homebrew service on macOS whose stderr goes to a file (its
+  `StandardErrorPath`, reported by `service_status`), where the reason a service
+  crash-loops actually lives. The path is `realpath`-resolved and rejected unless
+  it lands within an allowed root, so `..` traversal and symlink escapes can't reach
+  anything else.
+- **Boot / power / crash:** `reboot_history` (restart history), `boot_time` (exact
+  boot = the *recovery* instant), `panic_reports`, `thermal_status`,
+  `power_settings` — macOS.
 - **Services / daemons:** `services` (the manager's inventory + state),
   `service_status` (one named service — is it up, and why did it last exit?),
   cross-OS via systemd on Linux and launchd on macOS; plus `brew_services`
-  (Homebrew-managed services, macOS-only).
-- **Scoped log-file read:** `tail_file` reads the trailing lines of a log file —
-  but only one that resolves inside an operator-declared allow-list of log
-  directories (default `/var/log`, `/opt/homebrew/var/log`,
-  `/usr/local/var/log`, `/Library/Logs`). It exists for the case the journal/unified
-  log can't cover: a launchd/Homebrew service on macOS whose own stderr is
-  redirected to a file (its `StandardErrorPath`, reported by `service_status`) —
-  where the reason a service crash-loops actually lives. The path is
-  `realpath`-resolved and rejected unless it lands within an allowed root, so `..`
-  traversal and symlink escapes can't reach anything else.
+  (Homebrew-managed services, macOS).
+- **Hardware:** `hardware_info` (model / chip / RAM / serial — macOS).
 - **Docker** (needs access to the Docker socket): `docker_ps`, `docker_ps_all`,
   `docker_logs`, `docker_inspect`, `docker_stats`, `docker_top`, `docker_images`,
   `docker_system_df`.
@@ -42,59 +53,77 @@ Deliberately **absent**: anything that mutates or grants a shell —
 reads are confined to `tail_file`'s allow-listed log roots (above); the boundary
 is the allow-list itself, not the socket's mount mode.
 
-## One server, many operating systems
+## One server, per-OS surfaces
 
-The host MCP is **a single server that auto-detects its host OS** — deploy the
-same package on Linux or macOS and it adapts, with **no OS setting to configure**.
-Each check is either a portable command or a per-OS `argv` map, resolved at
-runtime from the host's reported OS (`platform.system()` — `Linux`, `Darwin`, …).
-For example:
+The host MCP is **a single package that auto-detects its host OS**
+(`platform.system()`) and advertises **only the checks native to that OS** —
+deploy the same package on Linux or macOS with **no OS setting to configure**.
+Rather than force one lowest-common-denominator command set across every OS, each
+check is authored to its platform's strengths. A check with no variant for the
+detected OS is simply **not advertised** there (and, if invoked by name, reports
+*"not supported on `<OS>`"* cleanly rather than running the wrong command). The
+`HOST_MCP_*` env vars configure the *deployment* (profile, auth, transport) —
+never the OS.
+
+Genuinely portable checks share one command; the rest diverge per-OS:
 
 | Check | Linux | macOS |
 |---|---|---|
-| `memory` | `free -h` | `vm_stat` |
+| `disk` / `cpu_load` | `df -h` / `uptime` | `df -h` (+inodes) / `uptime` |
+| `memory` | `free -h` | `memory_pressure -Q` |
 | `os_info` | `uname -a` | `sw_vers` |
 | `network` | `ss -tuln` | `netstat -an -p tcp` |
 | `connections` | `ss -tunap` | `lsof -nP -iTCP` |
 | `processes` / `top_snapshot` | `ps` / `top -bn1` | `ps` / `top -l 1` |
-| `journal` | `journalctl` | `log show` (unified log) |
-| `journal_grep` | `journalctl --grep` | `grep … /var/log/system.log` |
 | `reboot_history` | `last -n N reboot` | `last -n N reboot` |
-| `services` | `systemctl list-units --type=service` | `launchctl list` |
-| `service_status` | `systemctl status <unit>` | `launchctl list <label>` |
+| `services` / `service_status` | `systemctl …` | `launchctl …` |
+| `restart_service` (gated) | `systemctl restart` | `brew services restart` |
 
-A check with no variant for the detected OS reports *"not supported on `<OS>`"*
-cleanly rather than running the wrong command — this covers both the
-systemd-specific checks on macOS (`journal_unit`, `systemctl_status`,
-`journal_priority`, `journal_kernel`, `journal_boot`) **and** the macOS-specific
-checks on Linux (`log_query`, `panic_reports`, `brew_services`, below). The `HOST_MCP_*` env vars
-configure the *deployment* (profile, auth, transport) — never the OS.
+**Linux-native** (systemd / journald) — indexed, server-side journal filters, the
+surgical way to pull an incident slice on a production host without dumping and
+scanning: `journal`, `journal_unit`, `journal_grep`, `journal_priority`
+(severity floor), `journal_kernel` (dmesg-style), `journal_boot` (a specific
+boot's log — default the previous one), and the gated `reload_config`.
 
-**Linux journald filters (indexed, server-side).** On a production host, pull the
-incident slice *at the source* instead of dumping everything and scanning — these
-are cheap and surgical (Linux/systemd only):
+**macOS-native** (unified log, `pmset`, launchd, BSD tools): `log_query`,
+`panic_reports`, `thermal_status`, `power_settings`, `disk_io`, `boot_time`,
+`ping_host`, `dns_lookup`, `dns_config`, `http_check`, `hardware_info`,
+`brew_services`.
 
-| Check | Command | Use |
-|---|---|---|
-| `journal_priority` | `journalctl -p <sev> -n N` | Errors-and-worse only (or any severity floor) — indexed by journald. |
-| `journal_kernel` | `journalctl -k -n N` | Kernel messages only (OOM kills, hardware, watchdog) — like dmesg. |
-| `journal_boot` | `journalctl -b <off> -p <sev> -n N` | A specific boot's log (default the *previous* boot) — what happened before a reboot/crash. |
+> Authored independently on purpose: forcing one cross-OS command set had quietly
+> amputated macOS's best diagnostics — the unified log's severity/boundary power,
+> `pmset` power/thermal telemetry, native reachability. Each OS now gets its native
+> depth. *(The macOS surface is complete; the Linux surface gets the same
+> strengths-first pass next.)*
 
-**macOS deep diagnostics.** `journal_grep` on macOS only sees `/var/log/system.log`
-(short retention). For historical / richer queries — the authoritative source for
-shutdown cause, power, sleep/wake, and kernel events — two macOS-only checks tap
-the unified log binary store and crash reports:
+### macOS unified log — `log_query`
 
-| Check | Command | Use |
-|---|---|---|
-| `log_query` | `log show --last <window> --predicate <NSPredicate> --style compact` | Query the unified log over a time window (e.g. `eventMessage CONTAINS[c] "shutdown"`). Longer retention than `system.log`; 90s timeout since wide windows are slow. |
-| `panic_reports` | `ls -lt /Library/Logs/DiagnosticReports` | List kernel-panic / crash reports newest-first — a `*.panic`/`*.ips` near a reboot signals an unclean shutdown. |
+macOS's unified log is richer than journald: one predicate covers process,
+subsystem, message text, **and** severity, over a relative window **or** an
+absolute interval. It's the authoritative source for shutdown cause, power/sleep/
+wake, kernel, and severity-filtered events, with far longer retention than
+`/var/log/system.log` (which is effectively empty on modern macOS):
+
+| Arg | Meaning |
+|---|---|
+| `predicate` | An NSPredicate — filter by `process`, `subsystem` (e.g. `com.apple.powerd`), `eventMessage`, or **severity** via `messageType` (16 = error, 17 = fault). One argument, never a shell. |
+| `window` | Relative look-back, default `1h` (e.g. `30m`, `2h`, `3d`). |
+| `start` / `end` | Absolute interval, `YYYY-MM-DD HH:MM:SS` — **supersedes** `window`. Targets a specific past slice, e.g. the minutes before a boot. |
+
+Because it can scan a large store it carries a 90s timeout — prefer `start`/`end`
+(or a narrow window) to keep queries cheap. Example onset-vs-recovery chain for an
+outage: `boot_time` gives the *recovery* instant; `log_query --end <boot>` finds
+the last activity *before* it (the failure **onset** — a distinct timestamp);
+`panic_reports` + a bounded `Previous shutdown cause` / `messageType` query confirm
+whether it was a crash, a thermal event, or a clean power cut.
 
 ## Safety model
 
 - **Declarative allow-list** (YAML): each check is a fixed `argv` (or per-OS
-  `argv`). Arguments can only fill a whole `{placeholder}` token, after passing
-  type/pattern/enum/range constraints. No shell is ever invoked.
+  `argv`). Arguments fill a whole `{placeholder}` token, or — for an optional
+  flag-arg — append a constrained `--flag value` pair (e.g. `log_query`'s
+  `--start`/`--end`); every value must pass its type/pattern/enum/range constraint
+  first. No shell is ever invoked.
 - **Profiles** — `read-only` < `diagnostic` < `elevated`. The server runs at one
   active profile and exposes only the checks at or below it.
 - **Audit log** — set `HOST_MCP_AUDIT=<path>` and every invocation (check, args,

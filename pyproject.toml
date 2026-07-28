@@ -50,11 +50,6 @@ agentic-devops = "agentic_devops.cli.main:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentic_devops"]
 
-# The migration SQL is read at runtime via importlib.resources — make sure the
-# whole migrations/ dir lands in the wheel (so `db migrate` works in the image).
-[tool.hatch.build.targets.wheel.force-include]
-"src/agentic_devops/db/migrations" = "agentic_devops/db/migrations"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

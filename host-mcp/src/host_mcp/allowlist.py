@@ -38,6 +38,17 @@ class ArgSpec:
     # rejected unless it lands within one of these roots — the guard that turns a
     # file read into a *scoped* one, never an arbitrary `cat`.
     roots: Optional[list[str]] = None
+    # An OPTIONAL flag-argument: when a value is supplied, emit `[flag, value]`
+    # appended to the argv (e.g. flag "--start" → ["--start", <value>]); when the
+    # argument is absent it contributes nothing. Lets one primitive carry optional
+    # switches without a fixed `{placeholder}` slot.
+    flag: Optional[str] = None
+    # When THIS (flag) argument is supplied, drop these placeholder arguments from
+    # the base argv — including the flag literal that immediately precedes each
+    # (a suppressible placeholder is authored as a `FLAG {placeholder}` pair). Used
+    # for mutually-exclusive switches, e.g. `--start` superseding a default
+    # `--last {window}`.
+    suppresses: Optional[list[str]] = None
     description: str = ""
 
     def json_schema(self) -> dict[str, Any]:
@@ -199,7 +210,14 @@ class Allowlist:
         return True
 
     def available_checks(self) -> list[Check]:
-        return [c for c in self._checks.values() if self._allowed(c)]
+        # Also drop checks unsupported on THIS OS (no argv for platform.system()),
+        # so a given host advertises only its own native, coherent surface — the
+        # basis for authoring each OS to its strengths without cross-host confusion.
+        return [
+            c
+            for c in self._checks.values()
+            if self._allowed(c) and c.base_argv() is not None
+        ]
 
     def build_argv(self, name: str, args: dict[str, Any]) -> tuple[Optional[list[str]], Optional[str]]:
         check = self._checks.get(name)
@@ -209,23 +227,47 @@ class Allowlist:
         if base is None:
             return None, f"check {name!r} is not supported on {platform.system()}"
 
-        validated: dict[str, Any] = {}
+        # A supplied flag-arg may suppress mutually-exclusive placeholders (e.g.
+        # --start supersedes the default --last {window}); collect those first.
+        suppressed: set[str] = set()
         for arg_name, spec in check.args.items():
-            value, err = spec.validate(arg_name, args.get(arg_name))
-            if err:
-                return None, err
-            validated[arg_name] = value
+            if spec.flag and spec.suppresses and args.get(arg_name) is not None:
+                suppressed.update(spec.suppresses)
+
+        validated: dict[str, Any] = {}
+        trailing: list[str] = []  # appended [flag, value] pairs for supplied flag-args
+        for arg_name, spec in check.args.items():
+            if arg_name in suppressed:
+                continue
+            if spec.flag:
+                raw = args.get(arg_name)
+                if raw is None:
+                    continue  # optional flag-arg, absent → emit nothing
+                value, err = spec.validate(arg_name, raw)
+                if err:
+                    return None, err
+                trailing.extend([spec.flag, str(value)])
+            else:
+                value, err = spec.validate(arg_name, args.get(arg_name))
+                if err:
+                    return None, err
+                validated[arg_name] = value
 
         argv: list[str] = []
         for token in base:
             match = _PLACEHOLDER.match(token)
             if match:
                 key = match.group(1)
+                if key in suppressed:
+                    if argv:
+                        argv.pop()  # drop the flag literal that precedes a suppressed placeholder
+                    continue
                 if key not in validated:
                     return None, f"check {name!r} references unknown argument {key!r}"
                 argv.append(str(validated[key]))
             else:
                 argv.append(token)
+        argv.extend(trailing)
         return argv, None
 
     def run(self, name: str, args: dict[str, Any], timeout: int = _DEFAULT_TIMEOUT) -> str:

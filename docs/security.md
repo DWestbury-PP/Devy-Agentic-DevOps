@@ -12,12 +12,20 @@ hosts.** All host and container inspection goes through the
 [host MCP](../host-mcp/README.md), which is safe by construction:
 
 - **Declarative allow-list.** Each check is a fixed `argv` (or per-OS `argv`).
-  Arguments can only fill a whole `{placeholder}` token, and only after passing
-  type / pattern / enum / range constraints. **No shell is ever invoked**, so
-  there is no command injection surface.
+  Arguments fill a whole `{placeholder}` token, or — for an optional flag-arg —
+  append a constrained `--flag value` pair; every value must first pass its
+  type / pattern / enum / range constraint. **No shell is ever invoked**, so there
+  is no command injection surface.
 - **Profile-gated.** The server runs at one active profile —
   `read-only` < `diagnostic` < `elevated` — and exposes only the checks at or
-  below it. Run target hosts at the lowest profile that does the job.
+  below it, and only those native to the host's OS. Run target hosts at the lowest
+  profile that does the job.
+- **Outbound reachability checks.** A few diagnostic-tier checks make an *outbound*
+  request to a caller-supplied target — `ping_host` / `dns_lookup` (a constrained
+  hostname) and `http_check` (a `^https?://` URL, GET-only, body discarded). They
+  read nothing from the host and mutate nothing, but they do let the agent probe an
+  endpoint from the host's network position; the target is pattern-constrained and,
+  like every check, gated by the active profile and recorded in the audit log.
 - **Read-only by default.** The packaged allow-list contains **no shell verbs** —
   no `docker exec/run/rm`, no arbitrary `cat`/`tail`, no `dmesg`. The boundary is
   the allow-list itself, not the Docker socket's mount mode. A small set of

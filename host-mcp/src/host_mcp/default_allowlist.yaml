@@ -232,14 +232,14 @@ checks:
         type: string
         flag: "--start"
         suppresses: ["window"]
-        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}(:\\d{2})?)?$"
-        description: "Absolute start of the interval, 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS' (local time). Supplying this supersedes `window`."
+        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}:\\d{2})?$"
+        description: "Absolute start of the interval — either a bare date 'YYYY-MM-DD' or the FULL 'YYYY-MM-DD HH:MM:SS' (local time). Seconds are REQUIRED when a time is given — `log show` rejects 'HH:MM'. Supplying this supersedes `window`."
       end:
         type: string
         flag: "--end"
         suppresses: ["window"]
-        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}(:\\d{2})?)?$"
-        description: "Absolute end of the interval (optional; defaults to now when only `start` is given). Same format as `start`."
+        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}:\\d{2})?$"
+        description: "Absolute end of the interval (optional; defaults to now when only `start` is given). Same format as `start` — a bare date or the full 'YYYY-MM-DD HH:MM:SS' (seconds required)."
 
   panic_reports:
     profile: read-only

@@ -17,13 +17,19 @@ def _allowlist(profile="diagnostic", allow_mutations=False):
 def test_profile_gating():
     diag = {c.name for c in _allowlist("diagnostic").available_checks()}
     assert {"disk", "docker_logs"} <= diag
-    assert "systemctl_status" not in diag  # elevated → gated out at diagnostic
-
-    assert "systemctl_status" in {c.name for c in _allowlist("elevated").available_checks()}
 
     ro = {c.name for c in _allowlist("read-only").available_checks()}
     assert "disk" in ro
     assert "docker_ps" not in ro  # diagnostic → gated out at read-only
+
+
+def test_elevated_profile_gating():
+    # Profile-gating of an `elevated` check, tested against a synthetic allowlist so
+    # it doesn't depend on the shipped surface carrying an elevated example (the
+    # redundant systemctl_status vestige was cut in the Mac-first pass).
+    data = {"checks": {"x": {"profile": "elevated", "argv": ["true"]}}}
+    assert "x" not in {c.name for c in Allowlist.from_dict(data, active_profile="diagnostic").available_checks()}
+    assert "x" in {c.name for c in Allowlist.from_dict(data, active_profile="elevated").available_checks()}
 
 
 def test_disk_runs():
@@ -67,8 +73,8 @@ def test_json_schema_marks_required_and_types():
 
 def test_expanded_checks_exposed_at_diagnostic():
     diag = {c.name for c in _allowlist("diagnostic").available_checks()}
-    # host + docker diagnostics added in this phase
-    assert {"os_info", "network", "top_snapshot", "journal", "journal_grep"} <= diag
+    # host + docker diagnostics that are cross-OS (present on any host)
+    assert {"os_info", "network", "top_snapshot"} <= diag
     assert {"docker_ps_all", "docker_inspect", "docker_stats", "docker_top",
             "docker_images", "docker_system_df"} <= diag
 
@@ -85,26 +91,32 @@ def test_docker_inspect_and_top_require_valid_container():
         assert argv[-1] == "web"  # substituted as a single, final token
 
 
-def test_journal_is_cross_os(monkeypatch):
-    # The server auto-detects the OS (platform.system()) and picks the right argv:
-    # journald on Linux, the unified log (`log show`) on macOS — same check, one server.
+def test_journal_is_linux_only(monkeypatch):
+    # Mac-first pass: `journal` (recent journald entries) is now authored Linux-only;
+    # macOS reaches the far richer unified log through `log_query` instead. Cross-OS
+    # symmetry was dropped so each OS is authored to its strengths.
     al = _allowlist()
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
     argv, err = al.build_argv("journal", {})
     assert err is None and argv[0] == "journalctl"
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
-    argv, err = al.build_argv("journal", {})
-    assert err is None and argv[:2] == ["log", "show"]
+    _, err = al.build_argv("journal", {})
+    assert err and "not supported" in err
 
 
-def test_journal_grep_cross_os_substitutes_pattern(monkeypatch):
+def test_journal_grep_is_linux_only(monkeypatch):
+    # macOS variant removed — /var/log/system.log is effectively empty on modern
+    # macOS (measured: 0 lines). macOS greps the unified log via a log_query predicate.
     al = _allowlist()
-    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
     argv, err = al.build_argv("journal_grep", {"pattern": "panic", "lines": 50})
     assert err is None
-    assert argv[0] == "grep" and "/var/log/system.log" in argv
-    assert "50" in argv                              # -m {lines} (max matches)
-    assert argv[argv.index("-e") + 1] == "panic"     # pattern via -e, its own token
+    assert argv[0] == "journalctl" and "--grep" in argv
+    assert argv[argv.index("--grep") + 1] == "panic"     # pattern its own token
+    assert "50" in argv
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    _, err = al.build_argv("journal_grep", {"pattern": "panic"})
+    assert err and "not supported" in err
 
 
 def test_journal_unit_stays_linux_only(monkeypatch):
@@ -142,12 +154,10 @@ def test_log_query_is_macos_only_and_passes_predicate_as_one_token(monkeypatch):
         {"predicate": 'eventMessage CONTAINS[c] "shutdown"', "window": "2d"},
     )
     assert err is None
-    assert argv[:3] == ["log", "show", "--last"]
-    assert "2d" in argv
+    assert argv[:4] == ["log", "show", "--last", "2d"]
     # the whole predicate is exactly one argv element — never split into flags
-    assert 'eventMessage CONTAINS[c] "shutdown"' in argv
     assert argv[argv.index("--predicate") + 1] == 'eventMessage CONTAINS[c] "shutdown"'
-    assert argv[-2:] == ["--style", "compact"]
+    assert "--style" in argv and argv[argv.index("--style") + 1] == "compact"
     # Linux: not a systemd concept — report cleanly, don't misfire.
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
     _, err = al.build_argv("log_query", {"predicate": 'process == "kernel"'})
@@ -402,7 +412,13 @@ def test_mutating_checks_hidden_by_default():
 
 def test_mutating_checks_exposed_only_when_enabled():
     names = {c.name for c in _allowlist("diagnostic", allow_mutations=True).available_checks()}
-    assert _MUTATING <= names
+    # reload_config is Linux/systemd-only, so it's advertised only on Linux hosts;
+    # the OS-portable mutating verbs are always present when the switch is on.
+    assert {"restart_service", "restart_container", "prune_images"} <= names
+    if al_mod.platform.system() == "Linux":
+        assert "reload_config" in names
+    else:
+        assert "reload_config" not in names
 
 
 def test_mutations_still_require_profile_not_just_the_flag():
@@ -488,3 +504,90 @@ def test_read_only_http_without_token_unchanged(monkeypatch):
     monkeypatch.setenv("HOST_MCP_TRANSPORT", "http")
     cfg = cfg_mod.load()  # no SystemExit
     assert cfg.allowlist.allow_mutations is False
+
+
+# -- Mac-first surface: optional flag-args, per-OS advertising, new primitives --
+def test_optional_flag_args_and_suppression():
+    # Generic mechanism (OS-independent, via a synthetic check): an optional flag-arg
+    # emits `--flag value` only when supplied, and can suppress a mutually-exclusive
+    # placeholder — dropping the flag literal that precedes it too.
+    data = {"checks": {"q": {
+        "argv": ["log", "show", "--last", "{window}", "--predicate", "{predicate}"],
+        "args": {
+            "predicate": {"required": True, "pattern": "^.{1,50}$"},
+            "window": {"default": "1h", "pattern": "^\\d+[smhd]$"},
+            "start": {"flag": "--start", "suppresses": ["window"], "pattern": "^.{1,30}$"},
+            "end": {"flag": "--end", "suppresses": ["window"], "pattern": "^.{1,30}$"},
+        }}}}
+    al = Allowlist.from_dict(data, active_profile="diagnostic")
+    # default: relative window, no --start
+    argv, err = al.build_argv("q", {"predicate": "process == kernel"})
+    assert err is None
+    assert argv == ["log", "show", "--last", "1h", "--predicate", "process == kernel"]
+    # start supersedes window: --last {window} dropped, --start appended
+    argv, err = al.build_argv("q", {"predicate": "p", "start": "2026-07-27 19:00:00"})
+    assert err is None
+    assert "--last" not in argv and "1h" not in argv
+    assert argv[-2:] == ["--start", "2026-07-27 19:00:00"]
+    # start + end: both appended, still no --last
+    argv, err = al.build_argv("q", {"predicate": "p", "start": "a", "end": "b"})
+    assert err is None
+    assert "--last" not in argv and argv[-4:] == ["--start", "a", "--end", "b"]
+    # an absent flag-arg emits nothing and never errors
+    argv, err = al.build_argv("q", {"predicate": "p"})
+    assert err is None and "--start" not in argv
+
+
+def test_available_checks_filters_by_current_os(monkeypatch):
+    # A check with only a Darwin (or only a Linux) argv is advertised only on that OS
+    # — the basis for authoring each host to its native strengths, no LCD subset.
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    names = {c.name for c in _allowlist().available_checks()}
+    assert {"log_query", "boot_time", "thermal_status", "brew_services"} <= names
+    assert "journal" not in names and "journal_priority" not in names  # Linux-only
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    names = {c.name for c in _allowlist().available_checks()}
+    assert {"journal", "journal_priority", "journal_kernel"} <= names
+    assert "log_query" not in names and "boot_time" not in names  # Darwin-only
+
+
+def test_log_query_absolute_bounds_supersede_window(monkeypatch):
+    # log_query gains start/end: supplying start drops the default --last window and
+    # scopes to an absolute interval — how you target the minutes before a boot to
+    # find an outage ONSET without conflating it with the recovery (boot) time.
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    al = _allowlist()
+    argv, err = al.build_argv("log_query", {"predicate": 'process == "kernel"',
+                                            "start": "2026-07-27 19:35:00",
+                                            "end": "2026-07-27 19:41:00"})
+    assert err is None
+    assert "--last" not in argv
+    assert argv[argv.index("--start") + 1] == "2026-07-27 19:35:00"
+    assert argv[argv.index("--end") + 1] == "2026-07-27 19:41:00"
+    # a bad timestamp is rejected by the pattern
+    _, err = al.build_argv("log_query", {"predicate": "p", "start": "yesterday"})
+    assert err
+
+
+def test_new_mac_primitives_build_and_validate(monkeypatch):
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    al = _allowlist()
+    assert al.build_argv("boot_time", {})[0] == ["sysctl", "-n", "kern.boottime"]
+    assert al.build_argv("thermal_status", {})[0] == ["pmset", "-g", "therm"]
+    assert al.build_argv("disk_io", {})[0] == ["iostat", "-c", "2"]
+    assert al.build_argv("dns_config", {})[0] == ["scutil", "--dns"]
+    # ping_host: defaults substituted, injection-style host rejected
+    argv, err = al.build_argv("ping_host", {"host": "1.1.1.1"})
+    assert err is None and argv == ["ping", "-c", "3", "-t", "5", "1.1.1.1"]
+    _, err = al.build_argv("ping_host", {"host": "a; rm -rf /"})
+    assert err
+    # http_check: only http(s) URLs; the URL is the final, single token
+    argv, err = al.build_argv("http_check", {"url": "https://api.example.com/healthz"})
+    assert err is None and argv[-1] == "https://api.example.com/healthz"
+    _, err = al.build_argv("http_check", {"url": "file:///etc/passwd"})
+    assert err
+    # all macOS-authored — cleanly "not supported" on Linux (never misfire)
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    for check in ("boot_time", "thermal_status", "disk_io", "ping_host", "http_check", "dns_config"):
+        _, err = al.build_argv(check, {})
+        assert err and "not supported" in err, check

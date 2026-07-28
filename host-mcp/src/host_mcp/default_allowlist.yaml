@@ -1,10 +1,17 @@
 # Default safe-allowlist for the Agentic DevOps host MCP.
 #
 # Each check is a fixed argv (or per-platform argv). Arguments can only fill a
-# whole {placeholder} token, after passing their constraints — there is NO shell
-# and NO arbitrary execution. `profile` is the MINIMUM profile required to expose
-# the check; the server runs at one active profile (read-only < diagnostic <
-# elevated) and exposes only the checks at or below it.
+# whole {placeholder} token (or, for a flag-arg, an appended `--flag value`
+# pair) after passing their constraints — there is NO shell and NO arbitrary
+# execution. `profile` is the MINIMUM profile required to expose the check; the
+# server runs at one active profile (read-only < diagnostic < elevated) and
+# exposes only the checks at or below it AND supported on the current OS.
+#
+# Per-OS authoring: a check with only a `Linux:` (or only `Darwin:`) argv is
+# advertised ONLY on that OS. Each host therefore presents a coherent, native
+# surface authored to that OS's strengths — no lowest-common-denominator subset.
+# (macOS is authored here; the Linux surface gets the same treatment in its own
+# pass. Genuinely portable primitives — df, uptime, last, docker — stay shared.)
 #
 # This is the SecOps boundary: the agent can read host + Docker health, sweep
 # logs, and run common diagnostics — but it can never get a shell, and the
@@ -17,15 +24,15 @@ checks:
   # ---- Host: read-only --------------------------------------------------
   disk:
     profile: read-only
-    description: "Disk usage per filesystem (df -h)."
+    description: "Disk usage per filesystem (df -h). On macOS the output also includes inode use (iused/ifree) — a full disk with free inodes, or vice-versa, is visible here."
     argv: ["df", "-h"]
 
   memory:
     profile: read-only
-    description: "Memory usage."
+    description: "Memory pressure — the decision-grade 'is this host under memory pressure?' read. macOS: `memory_pressure -Q` (free percentage + pressure state, far more legible than raw vm_stat page counts). Linux: `free -h` (used/free/available breakdown)."
     platform:
       Linux: ["free", "-h"]
-      Darwin: ["vm_stat"]
+      Darwin: ["memory_pressure", "-Q"]
 
   cpu_load:
     profile: read-only
@@ -41,14 +48,14 @@ checks:
 
   network:
     profile: read-only
-    description: "Listening TCP/UDP sockets — WHICH PORTS are open, no process attribution and no root needed. Answers 'what is this host listening on?' (e.g. is the exporter's port bound). For WHICH PROCESS owns a socket, or to see ESTABLISHED connections to a remote endpoint, use `connections` instead. Cross-OS: `ss -tuln` on Linux, `netstat -an` on macOS."
+    description: "Listening + established TCP sockets — WHICH PORTS are open / connected, no process attribution and no root needed. Answers 'what is this host listening on?' (e.g. is the exporter's port bound). For WHICH PROCESS owns a socket, use `connections` instead. Cross-OS: `ss -tuln` on Linux (TCP+UDP), `netstat -an -p tcp` on macOS (TCP)."
     platform:
       Linux: ["ss", "-tuln"]
       Darwin: ["netstat", "-an", "-p", "tcp"]
 
   reboot_history:
     profile: read-only
-    description: "Recent reboot / shutdown history (last reboot) — when the host last restarted and whether shutdowns were clean. Portable: `last -n {lines} reboot` on both Linux and macOS."
+    description: "Recent reboot history — WHEN the host restarted (`last -n {lines} reboot`), Linux and macOS. NOTE: this lists restart times only; it does NOT itself say whether a shutdown was clean. For clean-vs-unclean on macOS, pair with `boot_time` (exact boot = recovery) + `log_query` bounded around the boot (shutdown cause / uncleanReboot) + `panic_reports`."
     argv: ["last", "-n", "{lines}", "reboot"]
     args:
       lines:
@@ -57,6 +64,12 @@ checks:
         min: 1
         max: 100
         description: "Number of recent reboot/shutdown records to return."
+
+  boot_time:
+    profile: read-only
+    description: "Exact system boot time (`sysctl -n kern.boottime`) — the precise moment the host came up, i.e. the RECOVERY time after an outage or restart. macOS only. Pairs with `log_query --end <boot>` to find the last log activity BEFORE the boot (the failure ONSET — a distinct timestamp from recovery; do not conflate them)."
+    platform:
+      Darwin: ["sysctl", "-n", "kern.boottime"]
 
   # ---- Host: diagnostic -------------------------------------------------
   processes:
@@ -73,6 +86,12 @@ checks:
       Linux: ["top", "-bn1"]
       Darwin: ["top", "-l", "1", "-n", "20"]
 
+  disk_io:
+    profile: diagnostic
+    description: "Disk I/O throughput and the CPU time-split (`iostat -c 2`, two 1-second samples): per-disk tps / KB-per-transfer / MB-per-second plus the us/sy/id CPU breakdown. The answer to 'is the box slow because of DISK I/O (or iowait)?' that `disk` (space only) and `top_snapshot` can't give. macOS only (Linux iostat flags differ; added in the Linux pass)."
+    platform:
+      Darwin: ["iostat", "-c", "2"]
+
   connections:
     profile: diagnostic
     description: "Active network connections WITH the owning process (PID/name) — unlike `network` (listening sockets only, no process attribution), this maps each TCP socket to the process behind it. The way to answer 'which process is talking to that remote endpoint?' — e.g. confirming an agent is actually streaming to a remote host. Cross-OS: `ss -tunap` on Linux, `lsof` on macOS. Full process attribution for other users' sockets may require elevation; your own are always shown."
@@ -80,19 +99,22 @@ checks:
       Linux: ["ss", "-tunap"]
       Darwin: ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN,ESTABLISHED"]
 
+  # ---- Linux journald native filters (indexed, server-side) — the surgical,
+  #      cheap way to pull an incident slice on a production host. Linux-only;
+  #      macOS uses log_query (below), whose predicate covers the same ground
+  #      (severity via messageType, kernel/boot via process/predicate).
   journal:
     profile: diagnostic
-    description: "Recent system log entries — systemd journal on Linux, the unified log (log show) on macOS."
+    description: "Recent systemd journal entries (Linux). macOS has no equivalent here — use `log_query` (the unified-log store) with a scoped predicate."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}"]
-      Darwin: ["log", "show", "--last", "5m", "--style", "compact"]
     args:
       lines:
         type: int
         default: 100
         min: 1
         max: 1000
-        description: "Number of recent lines (Linux; on macOS the last few minutes are returned)."
+        description: "Number of recent lines."
 
   journal_unit:
     profile: diagnostic
@@ -114,10 +136,9 @@ checks:
 
   journal_grep:
     profile: diagnostic
-    description: "Search recent system logs for a pattern — journald on Linux, /var/log/system.log on macOS. Pattern is passed as a single argument, never a shell. NOTE: on macOS /var/log/system.log has short retention; for historical or richer queries use log_query (the unified-log store)."
+    description: "Search recent systemd journal entries for a pattern (Linux; `journalctl --grep`). macOS uses `log_query` with an `eventMessage CONTAINS[c]` predicate instead (its /var/log/system.log is effectively empty on modern macOS)."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}", "--grep", "{pattern}"]
-      Darwin: ["grep", "-i", "-m", "{lines}", "-e", "{pattern}", "/var/log/system.log"]
     args:
       pattern:
         type: string
@@ -131,12 +152,9 @@ checks:
         max: 2000
         description: "Max matching lines to return."
 
-  # ---- Linux journald native filters (indexed, server-side) — the surgical,
-  #      cheap way to pull an incident slice on a production host. Linux-only;
-  #      macOS uses log_query (below) with a scoped predicate.
   journal_priority:
     profile: diagnostic
-    description: "Recent journal entries at or above a severity — e.g. errors only. Filtered server-side by journald (indexed), so it's far cheaper than pulling everything and scanning. Linux/systemd only."
+    description: "Recent journal entries at or above a severity — e.g. errors only. Filtered server-side by journald (indexed), so it's far cheaper than pulling everything and scanning. Linux/systemd only (macOS: `log_query` with `messageType == 16` for errors / `17` for faults)."
     platform:
       Linux: ["journalctl", "--no-pager", "-p", "{priority}", "-n", "{lines}"]
     args:
@@ -154,7 +172,7 @@ checks:
 
   journal_kernel:
     profile: diagnostic
-    description: "Kernel messages only (OOM kills, hardware faults, watchdog, filesystem) from the journal — like dmesg. The first place to look for a crash or resource kill. Linux/systemd only."
+    description: "Kernel messages only (OOM kills, hardware faults, watchdog, filesystem) from the journal — like dmesg. The first place to look for a crash or resource kill. Linux/systemd only (macOS: `log_query` with `process == \"kernel\"`)."
     platform:
       Linux: ["journalctl", "--no-pager", "-k", "-n", "{lines}"]
     args:
@@ -167,7 +185,7 @@ checks:
 
   journal_boot:
     profile: diagnostic
-    description: "Journal entries from a specific boot — default the PREVIOUS boot (-1), filtered to warnings-and-worse — for investigating what happened just before a reboot or crash. Linux/systemd only."
+    description: "Journal entries from a specific boot — default the PREVIOUS boot (-1), filtered to warnings-and-worse — for investigating what happened just before a reboot or crash. Linux/systemd only (macOS: `boot_time` + `log_query --end <boot>`)."
     platform:
       Linux: ["journalctl", "--no-pager", "-b", "{boot}", "-p", "{priority}", "-n", "{lines}"]
     args:
@@ -189,32 +207,58 @@ checks:
         description: "Max entries to return."
 
   # ---- macOS unified log (log show) — the binary store with far longer
-  #      retention than /var/log/system.log. Darwin-only by design; Linux hosts
-  #      use the journal / journal_* checks above.
+  #      retention than /var/log/system.log, and richer than journald: one
+  #      predicate covers process, subsystem, message text AND severity, over a
+  #      relative window OR an absolute start/end interval. Darwin-only by design.
   log_query:
     profile: diagnostic
     # `log show` can scan a lot for wide windows, so give it a generous timeout.
     timeout: 90
-    description: "Query the macOS unified log store (`log show`) with an NSPredicate over a time window — the authoritative source for shutdown/reboot cause, power, sleep/wake, and kernel events, with much longer retention than /var/log/system.log. macOS only. The predicate is passed as a single argument (no shell). Example predicate for a shutdown investigation: eventMessage CONTAINS[c] \"shutdown\" OR eventMessage CONTAINS[c] \"Previous shutdown cause\" OR eventMessage CONTAINS[c] \"panic\""
+    description: "Query the macOS unified log store (`log show`) with an NSPredicate — the authoritative source for shutdown/reboot cause, power (subsystem `com.apple.powerd`), sleep/wake, kernel and severity-filtered events, with far longer retention than /var/log/system.log. macOS only. Scope EITHER by a relative `window` (default 1h) OR by an absolute `start` (and optional `end`) — supplying `start`/`end` supersedes the window and is how you inspect a SPECIFIC past interval, e.g. the minutes just before a boot to find an outage onset. The predicate filters by process, subsystem, eventMessage, and SEVERITY via `messageType` (16 = error, 17 = fault). Passed as one argument — never a shell. Examples: `process == \"kernel\"` · `messageType == 16` · `subsystem == \"com.apple.powerd\"` · `eventMessage CONTAINS[c] \"Previous shutdown cause\"`."
     platform:
-      Darwin: ["log", "show", "--last", "{window}", "--predicate", "{predicate}", "--style", "compact"]
+      Darwin: ["log", "show", "--last", "{window}", "--style", "compact", "--predicate", "{predicate}"]
     args:
       predicate:
         type: string
         required: true
         pattern: "^[^\\n\\r]{1,200}$"
-        description: "An NSPredicate filter, e.g. 'eventMessage CONTAINS[c] \"shutdown\"' or 'process == \"kernel\"'. Single line, max 200 chars. Passed as one argument to log show — never a shell."
+        description: "An NSPredicate filter, e.g. 'process == \"kernel\"' or 'messageType == 16'. Single line, max 200 chars. Passed as one argument to log show — never a shell."
       window:
         type: string
         default: "1h"
         pattern: "^\\d+[smhd]$"
-        description: "How far back to scan, e.g. 30m, 2h, 3d. Wider windows are slower and may time out (the log store is large)."
+        description: "Relative look-back, e.g. 30m, 2h, 3d (used when no start/end given). Wider windows are slower and may time out (the log store is large) — prefer start/end to target a known interval."
+      start:
+        type: string
+        flag: "--start"
+        suppresses: ["window"]
+        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}(:\\d{2})?)?$"
+        description: "Absolute start of the interval, 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS' (local time). Supplying this supersedes `window`."
+      end:
+        type: string
+        flag: "--end"
+        suppresses: ["window"]
+        pattern: "^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}(:\\d{2})?)?$"
+        description: "Absolute end of the interval (optional; defaults to now when only `start` is given). Same format as `start`."
 
   panic_reports:
     profile: read-only
-    description: "List recent macOS diagnostic reports (kernel panics, crashes) newest-first from /Library/Logs/DiagnosticReports. A *.panic (or *.ips) file dated near a reboot is strong evidence of an unclean shutdown. macOS only."
+    description: "List recent macOS diagnostic reports (kernel panics, crashes) newest-first from /Library/Logs/DiagnosticReports. A *.panic (or *.ips) file dated near a reboot is strong evidence of an unclean shutdown; its ABSENCE near an unclean reboot points at a power cut rather than a crash. macOS only. (Lists names/timestamps only — the report bodies are root-owned and not read by this sidecar.)"
     platform:
       Darwin: ["ls", "-lt", "/Library/Logs/DiagnosticReports"]
+
+  # ---- Power / thermal (macOS) — telemetry with no clean Linux equivalent. --
+  thermal_status:
+    profile: read-only
+    description: "Thermal and CPU-power warning levels (`pmset -g therm`) — whether the Mac is, or has recently been, thermally throttled or under a forced CPU-power limit. The signal for a thermal-throttle or thermal-shutdown investigation (distinct from a power cut). macOS only."
+    platform:
+      Darwin: ["pmset", "-g", "therm"]
+
+  power_settings:
+    profile: read-only
+    description: "Current power-management configuration (`pmset -g`) — sleep/standby/hibernate/wake settings and the active power context. macOS only. For power/sleep/wake HISTORY (why it slept, woke, or lost power), use `log_query` with `subsystem == \"com.apple.powerd\"` bounded around the event."
+    platform:
+      Darwin: ["pmset", "-g"]
 
   # ---- Service / daemon management — cross-OS: the systemd service manager on
   #      Linux (RHEL + Ubuntu), launchd on macOS. Same concept ("is this service
@@ -270,6 +314,76 @@ checks:
         min: 1
         max: 2000
         description: "Number of trailing lines to read (default 50; the fatal error in a crash log is usually last)."
+
+  # ---- Network reachability (macOS) — sockets tell you what's bound/connected;
+  #      these tell you whether the host can actually REACH and RESOLVE things.
+  ping_host:
+    profile: diagnostic
+    description: "ICMP reachability + round-trip latency to a host (`ping -c {count} -t {timeout} {host}`) — 'can this host reach X, and how fast?'. macOS only (ping flags differ on Linux; added in the Linux pass). host is a single argument, never a shell."
+    platform:
+      Darwin: ["ping", "-c", "{count}", "-t", "{timeout}", "{host}"]
+    args:
+      host:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9._-]{1,253}$"
+        description: "Hostname or IPv4 address to ping (no scheme, no path)."
+      count:
+        type: int
+        default: 3
+        min: 1
+        max: 10
+        description: "Number of echo requests."
+      timeout:
+        type: int
+        default: 5
+        min: 1
+        max: 30
+        description: "Overall timeout in seconds before ping gives up."
+
+  dns_lookup:
+    profile: diagnostic
+    description: "Resolve a hostname via the host's ACTUAL resolver and cache (`dscacheutil -q host -a name {host}`) — reflects what THIS host sees for DNS (split-horizon, /etc/hosts, negative cache), not a public resolver. 'Is DNS resolving correctly here?'. macOS only."
+    platform:
+      Darwin: ["dscacheutil", "-q", "host", "-a", "name", "{host}"]
+    args:
+      host:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9._-]{1,253}$"
+        description: "Hostname to resolve."
+
+  http_check:
+    profile: diagnostic
+    timeout: 30
+    description: "HTTP(S) endpoint health with timing (`curl` → status code plus DNS / TLS-handshake / total latency; body discarded to /dev/null) — 'is this endpoint up, is TLS ok, and where is the time going?'. GET only. macOS only (curl is portable; added to Linux in the pass). The URL is a single argument, never a shell."
+    platform:
+      Darwin: ["curl", "-sS", "-o", "/dev/null", "-w", "http=%{http_code} dns=%{time_namelookup}s tls=%{time_appconnect}s total=%{time_total}s", "--max-time", "{timeout}", "{url}"]
+    args:
+      url:
+        type: string
+        required: true
+        pattern: "^https?://[^\\s]{1,300}$"
+        description: "Absolute http(s) URL to GET, e.g. https://api.example.com/healthz."
+      timeout:
+        type: int
+        default: 8
+        min: 1
+        max: 30
+        description: "Max seconds for the whole request."
+
+  dns_config:
+    profile: read-only
+    description: "The host's DNS resolver configuration (`scutil --dns`) — configured nameservers, search domains, and per-resolver scoping. 'What DNS is this host actually configured to use?' (complements `dns_lookup`, which tests resolution). macOS only."
+    platform:
+      Darwin: ["scutil", "--dns"]
+
+  # ---- Hardware context (macOS) --------------------------------------------
+  hardware_info:
+    profile: read-only
+    description: "Hardware identification (`system_profiler SPHardwareDataType`) — model, chip, core/memory configuration, and serial. Context for 'what box is this?' when correlating incidents across hosts. macOS only."
+    platform:
+      Darwin: ["system_profiler", "SPHardwareDataType"]
 
   # ---- Docker: diagnostic (read-only; requires docker.sock access) ------
   docker_ps:
@@ -395,18 +509,3 @@ checks:
     timeout: 60
     description: "Reclaim disk by removing ALL unused Docker images (`docker image prune -a -f`) — images not referenced by any container. Tier-A safe: unused images are rebuildable or re-pullable from a registry (e.g. ECR), so this frees space without destroying data. Does NOT touch volumes (that would be data loss and is excluded by design). Requires HOST_MCP_ALLOW_MUTATIONS."
     argv: ["docker", "image", "prune", "-a", "-f"]
-
-  # ---- Elevated examples — NOT exposed at the default 'diagnostic' profile.
-  #      (For everyday read-only service status prefer the cross-OS `service_status`
-  #      above; this remains as the profile-gating example.)
-  systemctl_status:
-    profile: elevated
-    description: "Status of a systemd service (Linux/systemd only). Elevated example; prefer the cross-OS `service_status` at the diagnostic profile."
-    platform:
-      Linux: ["systemctl", "status", "--no-pager", "{unit}"]
-    args:
-      unit:
-        type: string
-        required: true
-        pattern: "^[A-Za-z0-9@._-]+$"
-        description: "systemd unit name, e.g. nginx.service."

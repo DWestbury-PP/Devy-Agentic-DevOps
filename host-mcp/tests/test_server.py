@@ -17,14 +17,20 @@ def _allowlist(profile="diagnostic", allow_mutations=False):
 
 def test_read_only_checks_are_marked_read_only():
     tools = {t.name: t for t in _tool_list(_allowlist())}
-    for name in ("disk", "memory", "journal", "docker_ps", "service_status"):
+    for name in ("disk", "memory", "cpu_load", "os_info", "docker_ps", "service_status"):
         assert tools[name].annotations.readOnlyHint is True, name
         assert tools[name].annotations.destructiveHint is False, name
 
 
 def test_mutating_verbs_are_marked_not_read_only_when_enabled():
+    import platform
+
     tools = {t.name: t for t in _tool_list(_allowlist(allow_mutations=True))}
-    for name in ("restart_service", "restart_container", "reload_config", "prune_images"):
+    # reload_config is Linux/systemd-only, so it's advertised only on Linux hosts.
+    verbs = ["restart_service", "restart_container", "prune_images"]
+    if platform.system() == "Linux":
+        verbs.append("reload_config")
+    for name in verbs:
         assert tools[name].annotations.readOnlyHint is False, name
         # reversible remediation — NOT flagged destructive (data-destroying verbs
         # are excluded from the allow-list entirely, never merely hinted).

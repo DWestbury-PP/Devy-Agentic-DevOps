@@ -60,9 +60,13 @@ Two halves:
   AWS but not in dev is left alone — e.g. `devy/alloy/*`, which is outside Devy's catalog). `--dry-run`
   previews the plan; `--only/--skip` scope it. Ref parity (`devy/provider/*`, `devy/github/*`, `devy/host/*`)
   is what makes the dev→prod resolve path identical.
-- **(b) let the host READ them — TODO (Terraform).** Grant the `devy-platform` instance role
-  `secretsmanager:GetSecretValue` on `devy/*` (plus KMS decrypt if a CMK) over in `aws-terraform` — a
-  permission set, mirroring the `devy-ecr-pull` pattern. Runtime is read-only; only the out-of-band tool writes.
+- **(b) let the host READ them — DONE (Terraform), least-privilege by role.** Rather than one broad
+  `devy/*` grant, the `aws-terraform` permission-set menu now splits secrets by role: `alloy-secrets`
+  narrowed to `devy/alloy/*` (every host runs Alloy) and a new **`devy-platform-secrets`**
+  (`devy/{provider,github,host,mcp}/*`) attached to the **`devy-platform` host only**. Edges (host-mcp)
+  read only the Alloy key — they never see provider/GitHub secrets. No CMK in play (the managed
+  `aws/secretsmanager` key needs no explicit `kms:Decrypt`). Runtime is read-only; only the out-of-band
+  sync tool writes. Mirrors the `devy-ecr-pull` permission-set pattern.
 - **Implicit → explicit:** "my `.env` + LocalStack" → "externalized config + secrets fetched on-host by
   the host's own identity."
 
@@ -86,12 +90,24 @@ pipeline gate on it.
 - **Implicit → explicit:** "the container does whatever on boot" → "a modular, ordered, observable
   startup the pipeline can reason about."
 
-### 7. ⬜ host-mcp to the edges
+### 7. ⬜ host-mcp to the edges  ⚠️ SECURITY GATE
 Deploy `host-mcp` to the `role_edge` hosts (containerized with `docker.sock`, or native), and open the
 **platform → edge `:8780` SG rule** (the breadcrumb we've carried since the Terraform design). This is
 what makes the proxy↔edge diagnostic mesh (and tier-3 smoke) real.
+
+**Two prerequisites, both currently unmet — do NOT expose host-mcp on the edges without them:**
+- **A RHEL/AL2023/Ubuntu variant of host-mcp.** Today host-mcp is **Mac-only**; there is no Linux build.
+  The edge deploy is blocked on building (and containerizing) that variant.
+- **Bearer-token auth, retrieved from ASM.** An MCP server bound to `docker.sock` with no authentication
+  is a **wide-open RCE surface** — network controls (private subnet + the platform→edge SG) are necessary
+  but **not sufficient** (a compromised proxy or any lateral movement ⇒ full host control on every edge).
+  The Linux variant MUST require a bearer token that the proxy presents and the edge validates, sourced
+  from a new `devy/mcp/host` secret in ASM. That secret then earns the edges a **tightly-scoped** IAM read
+  grant in `aws-terraform` (its own edge permission set — NOT a widening of `devy-platform-secrets`; the
+  hook is already noted in `bootstrap/dev/instance-permission-sets.tf`). App-layer auth + network + secret
+  scope land together as the Phase-2 edge-hardening bundle.
 - **Implicit → explicit:** "I run everything on one box" → "components land on their designated hosts by
-  role, wired by explicit network rules."
+  role, wired by explicit network rules **and mutually authenticated**."
 
 ## Already done
 

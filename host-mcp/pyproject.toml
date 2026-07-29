@@ -13,7 +13,10 @@ authors = [{ name = "Darrell Westbury" }]
 
 # Deliberately lightweight — this is deployed onto target hosts. No litellm/fastapi.
 dependencies = [
-    "mcp>=1.2",
+    # Cap below 2.0: the low-level `Server.list_tools()` decorator API this uses
+    # was removed in mcp 2.x. The whole 1.x line (tested + deployed on 1.28.1)
+    # works; an unbounded `>=1.2` let a fresh build pull 2.0 and crash on import.
+    "mcp>=1.2,<2",
     "pyyaml>=6.0",
 ]
 

@@ -16,7 +16,7 @@ keywords = ["devops", "sre", "agent", "llm", "mcp", "copilot"]
 # (see tui/) that talks to the proxy over HTTP/SSE and shares no code with it.
 dependencies = [
     "litellm>=1.40",          # provider-agnostic model layer (OpenAI/Anthropic/Google/Ollama/...)
-    "mcp>=1.2",               # MCP client (mount external tool servers) + server SDK
+    "mcp>=1.2,<2",            # MCP client (mount external tool servers) + server SDK; <2: 2.x drops the low-level Server.list_tools() decorator
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "sse-starlette>=2.0",     # SSE streaming for /v1/chat

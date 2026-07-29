@@ -8,20 +8,33 @@ name: Build & push images (ECR)
 # (Project/Component/SourceRepo/Dockerfile), so a new component ECR is picked up by
 # "all" with no change here. Deliberate/dispatch-only — no auto-build on push (the
 # release model is coordinated, not GitOps). See aws-ansible/docs/deploy-design.md.
+#
+# The branch/tag is chosen with GitHub's native "Use workflow from" ref picker — the
+# build pins to that commit (github.sha). On a successful push the `record` job writes
+# a build manifest to SSM Parameter Store (keyed by commit SHA, with a human label and
+# branch/component "latest" pointers) that the CD process lists, picks, and resumes from.
 
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: "Branch, tag, or SHA to build from"
-        type: string
-        default: main
       components:
-        description: "Comma-separated components (e.g. proxy,chat-ui) or 'all'"
-        type: string
+        description: "Components to build"
+        # Curated presets. "all" stays registry-driven (every devy-* ECR), so a new
+        # component is picked up by "all" automatically; only the convenience preset
+        # below needs a line added — or use the advanced override for any combination.
+        type: choice
         default: all
+        options:
+          - all
+          - proxy
+          - host-mcp
+          - chat-ui
+      components_advanced:
+        description: "Advanced: explicit comma-separated list (e.g. proxy,chat-ui). Overrides the dropdown when non-empty."
+        type: string
+        default: ""
       push:
-        description: "Push to ECR (uncheck for a build-only dry run)"
+        description: "Push to ECR + record the build (uncheck for a build-only dry run)"
         type: boolean
         default: true
 
@@ -36,8 +49,9 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Resolve the build matrix from the registry: which repos, and for each its
-  # Dockerfile + context (= dirname of the Dockerfile). "all" => every devy-* repo.
+  # Resolve the build matrix from the registry AND compute one build identity
+  # (short_sha + a single UTC stamp + a human label) shared by every image tag and
+  # the manifest, so a release reads as one coherent thing.
   # ---------------------------------------------------------------------------
   matrix:
     name: Resolve build matrix
@@ -45,7 +59,33 @@ jobs:
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
       count: ${{ steps.resolve.outputs.count }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      stamp: ${{ steps.meta.outputs.stamp }}
+      built_at: ${{ steps.meta.outputs.built_at }}
+      branch_safe: ${{ steps.meta.outputs.branch_safe }}
+      label: ${{ steps.meta.outputs.label }}
     steps:
+      - name: Compute build identity (one stamp for the whole release)
+        id: meta
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:7}"
+          # Branch/tag names can contain slashes (feature/foo) — sanitize for image
+          # tags and SSM path segments alike.
+          branch_safe="$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+          branch_safe="${branch_safe:-detached}"
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"          # compact, for image tags
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # ISO-8601, for the manifest
+          label="${branch_safe}-${short_sha}-$(date -u +%Y-%m-%d-%H%M)Z"   # human-facing
+          {
+            echo "short_sha=${short_sha}"
+            echo "branch_safe=${branch_safe}"
+            echo "stamp=${stamp}"
+            echo "built_at=${built_at}"
+            echo "label=${label}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Build identity: ${label}  (commit ${GITHUB_SHA})"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -56,18 +96,24 @@ jobs:
         id: resolve
         env:
           COMPONENTS: ${{ inputs.components }}
+          COMPONENTS_ADVANCED: ${{ inputs.components_advanced }}
         run: |
           set -euo pipefail
 
+          # The advanced free-text override wins when non-empty; else the dropdown preset.
+          sel="$(echo "${COMPONENTS_ADVANCED}" | xargs)"   # trim
+          [ -z "$sel" ] && sel="${COMPONENTS}"
+          echo "Selection: ${sel}"
+
           # Which repos? 'all' => every ${PREFIX}-* repo; else the named components.
-          if [ "${COMPONENTS}" = "all" ]; then
+          if [ "${sel}" = "all" ]; then
             mapfile -t repos < <(aws ecr describe-repositories \
               --query "repositories[?starts_with(repositoryName, '${PROJECT_PREFIX}-')].repositoryName" \
               --output text | tr '\t' '\n' | sort)
           else
             repos=()
-            IFS=',' read -ra sel <<< "${COMPONENTS}"
-            for c in "${sel[@]}"; do
+            IFS=',' read -ra parts <<< "${sel}"
+            for c in "${parts[@]}"; do
               c="$(echo "$c" | xargs)"   # trim
               [ -z "$c" ] && continue
               repos+=("${PROJECT_PREFIX}-${c}")
@@ -75,7 +121,7 @@ jobs:
           fi
 
           if [ "${#repos[@]}" -eq 0 ]; then
-            echo "::error::No repositories resolved from components='${COMPONENTS}'."
+            echo "::error::No repositories resolved from selection='${sel}'."
             exit 1
           fi
 
@@ -111,7 +157,8 @@ jobs:
           echo "$include" | jq -r '.[] | "  \(.component) -> \(.repository)  (-f \(.dockerfile), ctx \(.context))"'
 
   # ---------------------------------------------------------------------------
-  # One runner per component, in parallel. Build + push an immutable tag.
+  # One runner per component, in parallel. Build + push an immutable tag, then drop
+  # a small manifest fragment (image + digest) as an artifact for the record job.
   # ---------------------------------------------------------------------------
   build:
     name: ${{ matrix.component }}
@@ -123,10 +170,10 @@ jobs:
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
-      - name: Checkout Devy @ ${{ inputs.ref }}
+      - name: Checkout Devy @ ${{ github.sha }}
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.sha }} # pin every leg to the dispatched commit
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -140,27 +187,19 @@ jobs:
 
       - name: Compute image tag
         id: tag
-        env:
-          RAW_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          # <component>:<ref-or-branch>-<shortsha>-<utc>  (immutable, unique)
-          ref_label="$(echo "$RAW_REF" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
-          ref_label="${ref_label:-build}"
-          short_sha="$(git rev-parse --short HEAD)"
-          utc="$(date -u +%Y%m%dT%H%M%SZ)"
-          tag="${ref_label}-${short_sha}-${utc}"
+          # <component>:<branch>-<shortsha>-<utc>  (immutable, unique, shared release stamp)
+          tag="${{ needs.matrix.outputs.branch_safe }}-${{ needs.matrix.outputs.short_sha }}-${{ needs.matrix.outputs.stamp }}"
           image="${{ steps.ecr.outputs.registry }}/${{ matrix.repository }}:${tag}"
-          {
-            echo "tag=${tag}"
-            echo "image=${image}"
-          } >> "$GITHUB_OUTPUT"
+          { echo "tag=${tag}"; echo "image=${image}"; } >> "$GITHUB_OUTPUT"
           echo "Image: ${image}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build & push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -176,6 +215,30 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
 
+      # A successful push contributes one fragment to the release manifest. Skipped on
+      # dry runs (push=false: no image exists) and on build failure (nothing to record).
+      - name: Write manifest fragment
+        if: ${{ success() && inputs.push }}
+        run: |
+          set -euo pipefail
+          mkdir -p _manifest
+          jq -n \
+            --arg component  "${{ matrix.component }}" \
+            --arg repository "${{ matrix.repository }}" \
+            --arg image      "${{ steps.tag.outputs.image }}" \
+            --arg tag        "${{ steps.tag.outputs.tag }}" \
+            --arg digest     "${{ steps.build.outputs.digest }}" \
+            '{component:$component, repository:$repository, image:$image, tag:$tag, digest:$digest}' \
+            > "_manifest/${{ matrix.component }}.json"
+
+      - name: Upload manifest fragment
+        if: ${{ success() && inputs.push }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ matrix.component }}
+          path: _manifest/${{ matrix.component }}.json
+          retention-days: 7
+
       - name: Job summary
         if: ${{ always() }}
         run: |
@@ -184,7 +247,7 @@ jobs:
             echo ""
             echo "- **Pushed:** \`${{ inputs.push }}\`"
             echo "- **Image:** \`${{ steps.tag.outputs.image }}\`"
-            echo "- **Ref:** \`${{ inputs.ref }}\` · **Commit:** \`${{ github.sha }}\`"
+            echo "- **Ref:** \`${{ github.ref_name }}\` · **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # TODO(slack): post build completion to the CI/CD notifications channel once the
@@ -195,7 +258,109 @@ jobs:
           set -euo pipefail
           text=":package: Devy build *${{ matrix.component }}* — ${{ job.status }}
           • image: ${{ steps.tag.outputs.image }}
-          • ref: ${{ inputs.ref }} (${{ github.sha }})
+          • ref: ${{ github.ref_name }} (${{ github.sha }})
           • run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           jq -n --arg text "$text" '{text:$text}' \
             | curl -sf -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+  # ---------------------------------------------------------------------------
+  # Record the release to SSM Parameter Store: the manifest CD lists + resumes from.
+  # Runs after the builds regardless of partial failures (records whatever pushed), but
+  # only for real pushes. Writes three shapes:
+  #   /devy/builds/by-commit/<sha>              -> full manifest (identity = commit SHA)
+  #   /devy/builds/by-branch/<branch>/latest    -> <sha>          (newest-on-branch pointer)
+  #   /devy/builds/components/<component>/latest -> image+digest   (CD coherent-release fill)
+  # ---------------------------------------------------------------------------
+  record:
+    name: Record build manifest (SSM)
+    needs: [matrix, build]
+    if: ${{ !cancelled() && inputs.push && needs.matrix.result == 'success' && needs.matrix.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.BUILD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download manifest fragments
+        uses: actions/download-artifact@v4
+        with:
+          path: _fragments
+          pattern: manifest-*
+          merge-multiple: true
+
+      - name: Assemble + write SSM manifest
+        env:
+          SHA: ${{ github.sha }}
+          SHORT_SHA: ${{ needs.matrix.outputs.short_sha }}
+          BRANCH: ${{ needs.matrix.outputs.branch_safe }}
+          REF_NAME: ${{ github.ref_name }}
+          BUILT_AT: ${{ needs.matrix.outputs.built_at }}
+          LABEL: ${{ needs.matrix.outputs.label }}
+          REQUESTED: ${{ needs.matrix.outputs.count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          frags=(_fragments/*.json)
+          if [ "${#frags[@]}" -eq 0 ]; then
+            echo "::warning::No component fragments — nothing pushed successfully, skipping manifest write."
+            exit 0
+          fi
+
+          base="/devy/builds"
+          commit_param="${base}/by-commit/${SHA}"
+
+          # components{} : one entry per successfully-pushed component this run.
+          components="$(jq -s 'map({(.component): {image:.image, tag:.tag, digest:.digest, repository:.repository}}) | add' "${frags[@]}")"
+
+          # Merge with any existing record at this SHA so a partial rebuild AUGMENTS the
+          # release rather than clobbering the components built by an earlier run.
+          existing="$(aws ssm get-parameter --name "$commit_param" --query 'Parameter.Value' --output text 2>/dev/null || echo '')"
+          prev_components='{}'
+          if [ -n "$existing" ] && [ "$existing" != "None" ]; then
+            prev_components="$(echo "$existing" | jq '.components // {}')"
+          fi
+          merged="$(jq -n --argjson a "$prev_components" --argjson b "$components" '$a * $b')"
+          merged_count="$(echo "$merged" | jq 'length')"
+          status="complete"; [ "$merged_count" -lt "$REQUESTED" ] && status="partial"
+
+          manifest="$(jq -n \
+            --arg sha "$SHA" --arg short_sha "$SHORT_SHA" --arg branch "$BRANCH" \
+            --arg ref "$REF_NAME" --arg built_at "$BUILT_AT" --arg label "$LABEL" \
+            --arg run_url "$RUN_URL" --arg actor "$ACTOR" --arg status "$status" \
+            --argjson components "$merged" \
+            '{schema:1, sha:$sha, short_sha:$short_sha, branch:$branch, ref:$ref,
+              built_at:$built_at, label:$label, run_url:$run_url, actor:$actor,
+              status:$status, components:$components}')"
+          echo "$manifest" | jq .
+
+          # 1) the release, keyed by immutable commit identity
+          aws ssm put-parameter --name "$commit_param" --type String --overwrite --value "$manifest" >/dev/null
+          echo "wrote $commit_param"
+
+          # 2) mutable "newest on this branch" pointer
+          aws ssm put-parameter --name "${base}/by-branch/${BRANCH}/latest" --type String --overwrite --value "$SHA" >/dev/null
+          echo "wrote ${base}/by-branch/${BRANCH}/latest -> $SHA"
+
+          # 3) per-component "latest image" pointers (CD fills unbuilt components from these)
+          for c in $(echo "$components" | jq -r 'keys[]'); do
+            entry="$(echo "$components" | jq -c --arg c "$c" --arg sha "$SHA" --arg branch "$BRANCH" --arg built_at "$BUILT_AT" \
+              '.[$c] + {sha:$sha, branch:$branch, built_at:$built_at}')"
+            aws ssm put-parameter --name "${base}/components/${c}/latest" --type String --overwrite --value "$entry" >/dev/null
+            echo "wrote ${base}/components/${c}/latest"
+          done
+
+          {
+            echo "### 📦 Build recorded — \`$LABEL\`"
+            echo ""
+            echo "- **Commit:** \`$SHA\`"
+            echo "- **Branch:** \`$BRANCH\` · **Status:** \`$status\` ($merged_count/$REQUESTED components)"
+            echo "- **Manifest:** \`$commit_param\`"
+            echo ""
+            echo "| Component | Image | Digest |"
+            echo "|---|---|---|"
+            echo "$merged" | jq -r 'to_entries[] | "| \(.key) | `\(.value.image)` | `\(.value.digest // "—")` |"'
+          } >> "$GITHUB_STEP_SUMMARY"

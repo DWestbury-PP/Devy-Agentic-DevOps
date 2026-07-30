@@ -92,7 +92,7 @@ def test_only_touched_components_returned():
 
 
 def test_compose_and_ci_flag_deployment():
-    assert map_changes(["docker-compose.prod.yml"], COMPONENTS).deployment_changed is True
+    assert map_changes(["docker-compose-aws.yml"], COMPONENTS).deployment_changed is True
     assert map_changes([".github/workflows/deploy.yml"], COMPONENTS).deployment_changed is True
 
 

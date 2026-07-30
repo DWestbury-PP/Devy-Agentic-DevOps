@@ -1,0 +1,102 @@
+# AWS deploy variant — self-contained (NOT an overlay). The CD pipeline (aws-ansible
+# `devy` role) ships THIS single file + a rendered .env to the host and runs it.
+#
+#   docker compose -f docker-compose-aws.yml up -d proxy host-mcp chat-ui postgres
+#
+# Differences from docker-compose-local.yml, all baked in (no overlay-substitution
+# surprises — the whole reason this is a separate file):
+#   • pinned ECR images (DEVY_{PROXY,HOST_MCP,CHAT_UI}_IMAGE), never `build:`
+#   • DEVY_MODE=prod + NO AWS_ENDPOINT_URL and NO static keys → boto3 hits REAL AWS
+#     Secrets Manager / S3 via the host's instance IAM role
+#   • NO LocalStack service (dev-only), NO demo-faulty, NO repo bind-mounts (a deploy
+#     host has no source checkout — config comes from the shipped /config dir)
+#   • Postgres has NO schema init mount: a fresh DB is brought to head by the gated
+#     `agentic-devops db migrate` step (app-owned migrations), not a compose bind mount
+# The SSO/TLS front door (oauth2-proxy) is deliberately absent here — that's readiness
+# #5/#7 (post-MVP); it joins this file when the edge/ingress work lands.
+
+services:
+  proxy:
+    image: ${DEVY_PROXY_IMAGE:?set DEVY_PROXY_IMAGE — the CD pipeline renders it from the release manifest}
+    container_name: agentic-devops-proxy
+    # Loopback-only until the TLS front door (readiness #5); reach it via SSM port-forward.
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://agentic:agentic@postgres:5432/agentic}
+      # Real AWS: prod mode, no endpoint override, no static creds → instance IAM role.
+      DEVY_MODE: prod
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      # Config dir shipped by the deploy role (config.yaml; no secrets on disk in prod).
+      - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"
+      # Generated component docs (durable across restarts); created under the project dir.
+      - "${AGENTIC_DEVOPS_DOCS_DIR:-./docs-corpus}:/app/docs-corpus"
+    depends_on:
+      host-mcp:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8765/healthz').getcode()==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Bundled Postgres + pgvector (EBS-backed named volume). NO init bind mount — schema
+  # bootstrap + evolution is app-owned (`agentic-devops db migrate`, run as the gated
+  # pre-step in the deploy play). Bind a managed DB instead by setting DATABASE_URL and
+  # dropping this service from the up list.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentic-devops-postgres
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+      POSTGRES_DB: agentic
+    volumes:
+      - "agentic-pgdata:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # The host MCP (pinned image). Docker socket mounted read-only for the allow-listed
+  # docker_* diagnostic checks. Served on the compose network only (no host port).
+  host-mcp:
+    image: ${DEVY_HOST_MCP_IMAGE:?set DEVY_HOST_MCP_IMAGE — the CD pipeline renders it from the release manifest}
+    container_name: agentic-devops-host-mcp
+    environment:
+      HOST_MCP_TRANSPORT: http
+      HOST_MCP_PROFILE: diagnostic
+      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
+      HOST_MCP_AUDIT: ${HOST_MCP_AUDIT:-/tmp/host-mcp-audit.jsonl}
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',8780)))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Static terminal-themed UI on nginx; reverse-proxies /v1 + /healthz to the proxy.
+  chat-ui:
+    image: ${DEVY_CHAT_UI_IMAGE:?set DEVY_CHAT_UI_IMAGE — the CD pipeline renders it from the release manifest}
+    container_name: agentic-devops-chat-ui
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  agentic-pgdata:

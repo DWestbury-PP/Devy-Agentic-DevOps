@@ -30,9 +30,13 @@ first 2am rollback.
 Status: ✅ done · 🔨 in progress · ⬜ todo
 
 ### 1. ✅ Deploy compose variant (ECR images, not local build)
-A `docker-compose.deploy.yml` where every service is `image: ${DEVY_*_IMAGE}` (pulled), **no `build:`**.
-The variables come from a `.env` the pipeline renders from the release manifest. Local dev keeps using
-the `build:` base compose untouched. *(Evolve the existing "unvalidated scaffold" `docker-compose.prod.yml`.)*
+A self-contained **`docker-compose-aws.yml`**: every buildable service is `image: ${DEVY_*_IMAGE}`
+(pulled, **no `build:`**), `DEVY_MODE=prod` with no `AWS_ENDPOINT_URL`/static keys (real ASM via the
+instance role), and **no LocalStack / demo / repo bind-mounts**. Image URIs come from a `.env` the
+pipeline renders from the release manifest. Local dev is a separate file, **`docker-compose-local.yml`**
+(the `build:` stack), left untouched. *(Superseded the overlay approach — a base+deploy+prod layering
+whose empty-`AWS_ENDPOINT_URL` substitution silently fell back to LocalStack; two self-contained files
+removed that whole class of surprise.)*
 - **Implicit → explicit:** "compose builds my images" → "compose references pinned, immutable ECR tags."
 
 ### 2. ✅ `db migrate` — app-owned, versioned, expand/contract

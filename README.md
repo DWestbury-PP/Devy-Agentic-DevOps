@@ -127,10 +127,10 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
 
 <p align="center">
   <img src="assets/devy-ask-tui.png" width="820"
-       alt="The native ask TUI in a terminal: piping docker-compose.yml into Devy and getting back a rendered Markdown table of the stack's services." />
+       alt="The native ask TUI in a terminal: piping docker-compose-local.yml into Devy and getting back a rendered Markdown table of the stack's services." />
   <br />
   <em>The native <a href="tui/README.md"><code>ask</code></a> TUI — pipe anything in
-  (<code>cat docker-compose.yml | ask "what services are set up?"</code>) and get a rendered answer.</em>
+  (<code>cat docker-compose-local.yml | ask "what services are set up?"</code>) and get a rendered answer.</em>
 </p>
 
 ## What Devy can do

@@ -20,50 +20,30 @@
 #   ./devy.sh mode               print the active mode + compose files
 #   ./devy.sh config|images|build|down|prune|<any docker compose subcommand> …
 #
-# Modes & flags:
-#   dev (default)   base + SSO overlay; LocalStack for secrets/S3
-#   --prod          adds docker-compose.prod.yml (real AWS via IAM, no LocalStack,
-#                   secure cookies). SCAFFOLD — validated with the Terraform deploy.
-#   --dev           force dev (overrides $DEVY_MODE)
-#   --no-auth       base only, no SSO edge (password-mode bootstrap / break-glass)
-#   --deploy        run pushed ECR images (the CI/CD deploy variant) instead of
-#                   building locally. Needs DEVY_{PROXY,HOST_MCP,CHAT_UI}_IMAGE in
-#                   .env (see .env.deploy.example) — the CD pipeline renders these.
+# Flags (LOCAL dev only — the AWS deploy is the CD pipeline's job, driven by the
+# self-contained docker-compose-aws.yml via the aws-ansible `devy` role, NOT this wrapper):
+#   default         docker-compose-local.yml + SSO overlay; LocalStack for secrets/S3
+#   --no-auth       local base only, no SSO edge (password-mode bootstrap / break-glass)
 #   --no-migrate    skip the automatic `db migrate` after `up`
-#   $DEVY_MODE      dev|prod (env; a --prod/--dev flag wins)
 set -euo pipefail
 cd "$(dirname "$0")"   # always run from repo root so `.env` auto-loads
 
-MODE="${DEVY_MODE:-dev}"
 AUTH=1
-DEPLOY=0
 MIGRATE=1
 
 # Leading flags may precede the subcommand.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prod) MODE=prod; shift ;;
-    --dev)  MODE=dev;  shift ;;
     --no-auth) AUTH=0; shift ;;
-    --deploy) DEPLOY=1; shift ;;
     --no-migrate) MIGRATE=0; shift ;;
     *) break ;;
   esac
 done
 
-FILES=(-f docker-compose.yml)
+FILES=(-f docker-compose-local.yml)
 [[ $AUTH == 1 ]] && FILES+=(-f docker-compose.auth.yml)
-if [[ $MODE == prod ]]; then
-  [[ -f docker-compose.prod.yml ]] || { echo "✗ prod mode but docker-compose.prod.yml is missing" >&2; exit 1; }
-  FILES+=(-f docker-compose.prod.yml)
-fi
-if [[ $DEPLOY == 1 ]]; then
-  [[ -f docker-compose.deploy.yml ]] || { echo "✗ --deploy but docker-compose.deploy.yml is missing" >&2; exit 1; }
-  FILES+=(-f docker-compose.deploy.yml)
-fi
-export DEVY_MODE="$MODE"
 
-banner() { echo "▸ devy [mode=$MODE auth=$([[ $AUTH == 1 ]] && echo sso || echo none) img=$([[ $DEPLOY == 1 ]] && echo ecr || echo local)] :: docker compose ${FILES[*]}" >&2; }
+banner() { echo "▸ devy [auth=$([[ $AUTH == 1 ]] && echo sso || echo none)] :: docker compose ${FILES[*]}" >&2; }
 dc()     { docker compose "${FILES[@]}" "$@"; }
 
 # Preflight: the .env keys the selected mode needs (catches the silent-break class).
@@ -72,11 +52,6 @@ preflight() {
   if [[ $AUTH == 1 ]]; then
     for k in OAUTH2_PROXY_CLIENT_ID OAUTH2_PROXY_CLIENT_SECRET OAUTH2_PROXY_COOKIE_SECRET; do
       grep -q "^$k=" .env || echo "⚠  SSO mode but $k missing from .env — JWT audience/login will fail" >&2
-    done
-  fi
-  if [[ $DEPLOY == 1 ]]; then
-    for k in DEVY_PROXY_IMAGE DEVY_HOST_MCP_IMAGE DEVY_CHAT_UI_IMAGE; do
-      grep -q "^$k=" .env || echo "⚠  --deploy but $k missing from .env — compose will error (see .env.deploy.example)" >&2
     done
   fi
 }

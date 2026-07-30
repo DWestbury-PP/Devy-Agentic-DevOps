@@ -1,0 +1,56 @@
+---
+# devy — deploy the Devy platform stack to a role_platform host over SSM (deploy-design.md §18).
+# This role is an EXECUTOR: given a coherent set of component image URIs (devy_images), it ships
+# the compose + rendered .env + config, gates on migrations from the NEW image, recreates the
+# app tier (Postgres stays up), and smokes. Resolution/selection lives in the deploy workflow
+# (#19); resolve.yml is a fallback so the role is drivable by hand via -e devy_commit=<sha>.
+
+# ── Where things land on the host (no git/source on the box — §18.3) ──
+devy_target_dir: /opt/devy # project dir: compose files + rendered .env
+devy_config_dir: /opt/devy/config # mounted at /config (AGENTIC_DEVOPS_CONFIG_DIR)
+devy_project_name: devy
+
+# ── Compose file for a PLATFORM deploy ──
+# The single, self-contained AWS compose file (pinned images + real ASM + no LocalStack,
+# all baked in — no overlay-substitution surprises). We still bring up EXPLICIT services
+# (below). The SSO/TLS front door is readiness #5/#7 (post-MVP), not in this file yet.
+devy_compose_files:
+  - docker-compose-aws.yml
+
+# Path on the CONTROLLER to the Devy source (compose file + config). Since CD now lives IN the
+# Devy repo, this defaults to the repo root (the play sits in deploy/, so dirname(playbook_dir)).
+# The workflow's checkout satisfies it automatically; a by-hand run from deploy/ needs nothing.
+devy_compose_src: "{{ playbook_dir | dirname }}"
+
+# config.yaml shipped to the host config dir. The real per-env config is a deploy input — the
+# config axis is parked as its own effort (§13); the example is a working starting point.
+devy_config_file: "{{ devy_compose_src }}/config.example.yaml"
+
+# ── Release inputs ──
+# devy_images: {proxy: <uri>, host-mcp: <uri>, chat-ui: <uri>} — a coherent set (one manifest).
+# Provided by the workflow, or resolved from SSM by devy_commit (resolve.yml).
+devy_images: {}
+devy_commit: ""
+devy_region: us-east-1
+devy_ssm_prefix: /devy/builds # read: by-commit/<sha> release manifests
+devy_ssm_deployed_prefix: /devy/deployed # write: deployed/<env>/<host> pointer (rollback target)
+devy_env_name: dev
+
+# Extra key=values merged into the rendered project .env (image URIs + config dir are injected
+# automatically). DEVY_MODE=prod and real-ASM (no AWS_ENDPOINT_URL) are baked into the AWS
+# compose file, so nothing is required here by default. Add HOST_MCP_TOKEN / GRAFANA_URL / a
+# managed DATABASE_URL etc. as deployment inputs when needed.
+devy_env: {}
+
+# ── Service tiers ──
+# App tier is recreated on deploy; the data tier (Postgres) is left running (§18.5/§18.7).
+# grafana-mcp + oauth2-proxy are intentionally omitted from Phase-1 (front door / extra MCP
+# come with #5/#7); add them here when their config/secrets are wired.
+devy_app_services: [proxy, host-mcp, chat-ui]
+devy_data_services: [postgres]
+
+# ── Toggles + smoke targets ──
+devy_run_migrate: true
+devy_run_smoke: true
+devy_pg_user: agentic
+devy_healthz_url: "http://127.0.0.1:8765/healthz"

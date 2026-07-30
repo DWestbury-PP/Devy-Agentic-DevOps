@@ -1,0 +1,48 @@
+---
+# Deploy gate — the domain-agnostic 3-tier smoke (deploy-design.md §9), Phase-1 subset.
+# Tier-1 (liveness) usually ⇒ rollback; Tier-2 (reach/credentials) usually ⇒ fix-forward.
+# Tier-3 (the proxy↔edge host-mcp round-trip) is deferred with the edge mesh (§7). Runs on
+# the target host over SSM; a failure here trips the block/rescue → halt-and-hold.
+
+# ── Tier-1: liveness ──
+- name: "Tier-1 · proxy /healthz is 200"
+  ansible.builtin.uri:
+    url: "{{ devy_healthz_url }}"
+    status_code: 200
+  register: devy_healthz
+  retries: 12
+  delay: 5
+  until: (devy_healthz.status | default(0)) == 200
+
+- name: "Tier-1 · Postgres accepts connections"
+  ansible.builtin.command:
+    cmd: "{{ devy_compose_cmd }} exec -T postgres pg_isready -U {{ devy_pg_user }} -d {{ devy_pg_user }}"
+  args:
+    chdir: "{{ devy_target_dir }}"
+  become: true
+  changed_when: false
+
+# ── Tier-2: reach / credentials (no secret values ever printed) ──
+- name: "Tier-2 · secrets backend reachable from the proxy (REAL ASM via instance role)"
+  ansible.builtin.command:
+    cmd: "{{ devy_compose_cmd }} exec -T proxy agentic-devops secrets list"
+  args:
+    chdir: "{{ devy_target_dir }}"
+  become: true
+  register: devy_secrets_probe
+  changed_when: false
+  # Assert the RUNTIME signal, not the enumeration probe. The CLI's `reachable` flag calls
+  # ListSecrets, which a least-privilege instance role correctly denies (we grant only
+  # GetSecretValue/DescribeSecret on devy/*, never account-wide ListSecrets) — so we must NOT
+  # gate on it. What matters: prod mode, real AWS endpoint (not LocalStack), and that the
+  # per-ref reads actually resolved ("loaded"). That proves the instance role reads its secrets.
+  failed_when: >-
+    'mode=prod' not in devy_secrets_probe.stdout
+    or 'localstack' in devy_secrets_probe.stdout
+    or 'loaded' not in devy_secrets_probe.stdout
+
+- name: "Smoke summary"
+  ansible.builtin.debug:
+    msg: >-
+      Smoke PASSED on {{ inventory_hostname }}: proxy healthy, Postgres ready,
+      secrets backend reachable.

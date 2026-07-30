@@ -1,0 +1,10 @@
+---
+# Ansible Galaxy collections. Install with:
+#   ansible-galaxy collection install -r requirements.yml -p collections
+collections:
+  - name: amazon.aws # aws_ec2 dynamic inventory + AWS modules
+    version: ">=8.0.0"
+  - name: community.aws # aws_ssm connection plugin (config over SSM, no SSH)
+    version: ">=8.0.0"
+  - name: community.general # timezone + misc modules used by roles
+    version: ">=9.0.0"

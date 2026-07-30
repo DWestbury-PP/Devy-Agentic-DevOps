@@ -1,0 +1,39 @@
+---
+# Fallback release resolution: turn a commit sha into a coherent devy_images map by reading
+# the CI-written manifest from SSM (/devy/builds/by-commit/<sha>). The deploy WORKFLOW (#19)
+# normally does this and passes devy_images directly; this path exists so the role is drivable
+# by hand (-e devy_commit=<sha>) for testing before #19 lands. The SSM read runs on the
+# CONTROLLER (which holds AWS creds), not the target host.
+
+- name: Resolve the release manifest from SSM (by commit sha)
+  ansible.builtin.command:
+    cmd: >-
+      aws ssm get-parameter
+      --region {{ devy_region }}
+      --name "{{ devy_ssm_prefix }}/by-commit/{{ devy_commit }}"
+      --query Parameter.Value --output text
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  register: devy_manifest_raw
+
+- name: Parse the manifest
+  ansible.builtin.set_fact:
+    devy_manifest: "{{ devy_manifest_raw.stdout | from_json }}"
+  run_once: true
+
+- name: Build the devy_images map from the manifest components
+  ansible.builtin.set_fact:
+    devy_images: "{{ devy_images | combine({item.key: item.value.image}) }}"
+  loop: "{{ devy_manifest.components | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  run_once: true
+
+- name: Show the resolved release
+  ansible.builtin.debug:
+    msg: >-
+      Resolved {{ devy_commit[:7] }} ({{ devy_manifest.label | default('?') }}) →
+      {{ devy_images.keys() | list }}
+  run_once: true

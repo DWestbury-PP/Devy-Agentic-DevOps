@@ -1,8 +1,8 @@
 # Devy — remote-readiness (productionization checklist)
 
 Devy has grown up **built locally** (`./devy.sh build && ./devy.sh up`). To be deployed by the CI/CD
-pipeline — build → ECR (done ✅) and **deploy = Ansible-over-SSM** (design:
-[`aws-terraform`/`aws-ansible` → `deploy-design.md`](../../aws-ansible/docs/deploy-design.md)) — Devy's
+pipeline — build → ECR (done ✅) and **deploy = Ansible-over-SSM, owned by this repo** (design:
+[`deploy-design.md`](deploy-design.md); CD code in [`deploy/`](../deploy)) — Devy's
 *deployment* has to be refactored from "works on my machine" to "remotely managed."
 
 ## The principle (and the coaching template)

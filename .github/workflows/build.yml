@@ -7,7 +7,7 @@ name: Build & push images (ECR)
 # list and each build's Dockerfile/context come from the ECR provenance tags
 # (Project/Component/SourceRepo/Dockerfile), so a new component ECR is picked up by
 # "all" with no change here. Deliberate/dispatch-only — no auto-build on push (the
-# release model is coordinated, not GitOps). See aws-ansible/docs/deploy-design.md.
+# release model is coordinated, not GitOps). See docs/deploy-design.md.
 #
 # The branch/tag is chosen with GitHub's native "Use workflow from" ref picker — the
 # build pins to that commit (github.sha). On a successful push the `record` job writes

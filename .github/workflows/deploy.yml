@@ -1,0 +1,198 @@
+name: Deploy (Devy → AWS over SSM)
+
+# The CD front door. Resolves a release from the SSM build ledger CI wrote, then runs the
+# deploy/ Ansible play over SSM (docs/deploy-design.md §18). Devy owns its whole delivery
+# lifecycle — this lives next to the build workflow, in the app repo (D-016).
+#
+# Selection is an INTENT dropdown (GitHub dispatch can't populate a live list from SSM):
+#   • newest-on-branch  — deploy the newest build recorded for <branch>  (by-branch/<b>/latest)
+#   • specific-commit   — deploy an exact <commit> (paste a sha; also the deliberate ROLLBACK path)
+#   • assembled-latest  — deploy the newest image of EACH component (components/<c>/latest), which
+#                         may span commits — the ad-hoc dev-loop assembly (§6). Frozen into a
+#                         recorded deployed pointer, so it's as reproducible as a pinned build.
+# mode=plan runs the play --check --diff (the "would ship/recreate" dry run) and posts a summary;
+# mode=apply deploys for real. repository_dispatch (type: devy-deploy) exposes the same parameter
+# set to external surfaces (web / Slack / the Devy agent) — one door in, no divergent logic.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "How to pick the release"
+        type: choice
+        default: newest-on-branch
+        options:
+          - newest-on-branch
+          - specific-commit
+          - assembled-latest
+      branch:
+        description: "Branch whose newest build to deploy (source=newest-on-branch)"
+        type: string
+        default: main
+      commit:
+        description: "Commit SHA to deploy (source=specific-commit; also the rollback target)"
+        type: string
+        default: ""
+      targets:
+        description: "Which hosts (role_edge/all are Phase-2)"
+        type: choice
+        default: role_platform
+        options:
+          - role_platform
+      mode:
+        description: "plan = --check dry run (posts a summary); apply = deploy for real"
+        type: choice
+        default: plan
+        options:
+          - plan
+          - apply
+  repository_dispatch:
+    types: [devy-deploy] # client_payload mirrors the dispatch inputs (source/branch/commit/targets/mode)
+
+permissions:
+  id-token: write # OIDC -> assume the deploy role
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  DEPLOY_ROLE_ARN: arn:aws:iam::083084509839:role/westbury-gha-devy-deploy-dev
+  SSM_PREFIX: /devy/builds
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the intent → a concrete release: either a single devy_commit (the play's
+  # resolve.yml then expands it), or an assembled devy_images map (newest of each component).
+  # ---------------------------------------------------------------------------
+  resolve:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.norm.outputs.source }}
+      targets: ${{ steps.norm.outputs.targets }}
+      mode: ${{ steps.norm.outputs.mode }}
+      extra_vars: ${{ steps.resolve.outputs.extra_vars }}
+      label: ${{ steps.resolve.outputs.label }}
+    steps:
+      - name: Normalize inputs (dispatch OR repository_dispatch)
+        id: norm
+        env:
+          # workflow_dispatch inputs, else repository_dispatch client_payload
+          SOURCE: ${{ inputs.source || github.event.client_payload.source || 'newest-on-branch' }}
+          BRANCH: ${{ inputs.branch || github.event.client_payload.branch || 'main' }}
+          COMMIT: ${{ inputs.commit || github.event.client_payload.commit || '' }}
+          TARGETS: ${{ inputs.targets || github.event.client_payload.targets || 'role_platform' }}
+          MODE: ${{ inputs.mode || github.event.client_payload.mode || 'plan' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "source=${SOURCE}"
+            echo "branch=${BRANCH}"
+            echo "commit=${COMMIT}"
+            echo "targets=${TARGETS}"
+            echo "mode=${MODE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Deploy intent: source=${SOURCE} branch=${BRANCH} commit=${COMMIT:-—} targets=${TARGETS} mode=${MODE}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve the release from the SSM ledger
+        id: resolve
+        env:
+          SOURCE: ${{ steps.norm.outputs.source }}
+          BRANCH: ${{ steps.norm.outputs.branch }}
+          COMMIT: ${{ steps.norm.outputs.commit }}
+        run: |
+          set -euo pipefail
+          get() { aws ssm get-parameter --name "$1" --query Parameter.Value --output text 2>/dev/null || true; }
+
+          case "$SOURCE" in
+            specific-commit)
+              [ -n "$COMMIT" ] || { echo "::error::source=specific-commit needs a commit SHA."; exit 1; }
+              sha="$COMMIT" ;;
+            newest-on-branch)
+              safe="$(echo "$BRANCH" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+              sha="$(get "${SSM_PREFIX}/by-branch/${safe}/latest")"
+              [ -n "$sha" ] && [ "$sha" != "None" ] || { echo "::error::No build recorded for branch '${BRANCH}' (${SSM_PREFIX}/by-branch/${safe}/latest missing)."; exit 1; } ;;
+          esac
+
+          if [ "$SOURCE" = "assembled-latest" ]; then
+            # Newest image of EACH component → an assembled devy_images map (may span commits).
+            comps="$(aws ssm get-parameters-by-path --path "${SSM_PREFIX}/components" --recursive \
+                     --query 'Parameters[].Value' --output json)"
+            images="$(echo "$comps" | jq -c '[.[] | fromjson] | map({(.["repository"] | sub("^devy-";"")): .image}) | add')"
+            [ "$(echo "$images" | jq 'length')" -gt 0 ] || { echo "::error::No component builds recorded under ${SSM_PREFIX}/components."; exit 1; }
+            extra="$(jq -cn --argjson images "$images" '{devy_images: $images}')"
+            label="assembled-latest ($(echo "$images" | jq -r 'keys | join(",")))"
+          else
+            # by-commit: hand the play the sha; its resolve.yml reads the full manifest.
+            manifest="$(get "${SSM_PREFIX}/by-commit/${sha}")"
+            [ -n "$manifest" ] && [ "$manifest" != "None" ] || { echo "::error::No build manifest for commit ${sha} (${SSM_PREFIX}/by-commit/${sha}) — did CI build+push it?"; exit 1; }
+            extra="$(jq -cn --arg c "$sha" '{devy_commit: $c}')"
+            label="$(echo "$manifest" | jq -r '.label // .sha')"
+          fi
+
+          echo "extra_vars=${extra}" >> "$GITHUB_OUTPUT"
+          echo "label=${label}" >> "$GITHUB_OUTPUT"
+          echo "Resolved → ${label}"
+          echo "  extra-vars: ${extra}"
+
+  # ---------------------------------------------------------------------------
+  # Run the deploy/ play over SSM. mode=plan → --check --diff (dry run); apply → real.
+  # On the Linux runner the dynamic aws_ec2 inventory works directly (no macOS caveats).
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: ${{ needs.resolve.outputs.mode == 'plan' && 'Plan' || 'Apply' }} · ${{ needs.resolve.outputs.label }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install session-manager-plugin
+        run: |
+          curl -sS "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o /tmp/smp.deb
+          sudo dpkg -i /tmp/smp.deb
+
+      - name: Install Ansible + collections
+        run: |
+          python -m pip install --upgrade ansible boto3 botocore
+          ansible-galaxy collection install -r requirements.yml -p collections
+
+      - name: "${{ needs.resolve.outputs.mode == 'plan' && 'Plan (--check --diff)' || 'Apply' }}"
+        id: run
+        env:
+          EXTRA_VARS: ${{ needs.resolve.outputs.extra_vars }}
+          TARGETS: ${{ needs.resolve.outputs.targets }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+        run: |
+          set -o pipefail
+          args=(deploy.yml --limit "$TARGETS" -e "$EXTRA_VARS")
+          [ "$MODE" = "plan" ] && args+=(--check --diff)
+          echo "ansible-playbook ${args[*]}"
+          ansible-playbook "${args[@]}" 2>&1 | tee /tmp/deploy.txt
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ needs.resolve.outputs.mode == 'plan' && '🔎 Deploy plan' || '🚀 Deploy' }} — \`${{ needs.resolve.outputs.label }}\`"
+            echo ""
+            echo "- **Source:** \`${{ needs.resolve.outputs.source }}\` · **Targets:** \`${{ needs.resolve.outputs.targets }}\` · **Mode:** \`${{ needs.resolve.outputs.mode }}\` · **Result:** \`${{ steps.run.outcome }}\`"
+            echo ""
+            echo "<details><summary>Ansible output</summary>"
+            echo ""; echo '```'
+            tail -c 55000 /tmp/deploy.txt 2>/dev/null || true
+            echo '```'; echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

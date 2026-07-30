@@ -126,7 +126,7 @@ jobs:
             images="$(echo "$comps" | jq -c '[.[] | fromjson] | map({(.["repository"] | sub("^devy-";"")): .image}) | add')"
             [ "$(echo "$images" | jq 'length')" -gt 0 ] || { echo "::error::No component builds recorded under ${SSM_PREFIX}/components."; exit 1; }
             extra="$(jq -cn --argjson images "$images" '{devy_images: $images}')"
-            label="assembled-latest ($(echo "$images" | jq -r 'keys | join(",")))"
+            label="assembled-latest ($(echo "$images" | jq -r 'keys | join(",")'))"
           else
             # by-commit: hand the play the sha; its resolve.yml reads the full manifest.
             manifest="$(get "${SSM_PREFIX}/by-commit/${sha}")"

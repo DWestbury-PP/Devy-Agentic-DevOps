@@ -1,0 +1,33 @@
+# Dynamic inventory — discover the Devy hosts LIVE by tag (no static host list to drift).
+# Hosts are provisioned by the aws-terraform repo and carry the tags this filters/groups on.
+# Docs: design.md §3.
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - us-east-1
+
+# Only our ecosystem, only running hosts (stopped hosts can't be configured).
+filters:
+  tag:Project: devy
+  instance-state-name: running
+
+# Use the friendly Name tag as the Ansible inventory hostname (devy-platform, edge-al2023, …).
+hostnames:
+  - tag:Name
+
+# Groups derived from tags: role_platform / role_edge, env_dev.
+keyed_groups:
+  - key: ec2_tags.Role
+    prefix: role
+  - key: ec2_tags.Environment
+    prefix: env
+
+# Every host is reached over SSM (no SSH). The transfer bucket is the aws_ssm plugin's
+# file-staging area (design.md §6) — provisioned in aws-terraform (ADR-020).
+compose:
+  ansible_connection: "'community.aws.aws_ssm'"
+  ansible_aws_ssm_region: "'us-east-1'"
+  ansible_aws_ssm_bucket_name: "'westbury-ansible-ssm-transfer-dev'"
+  # aws_ssm connects by INSTANCE ID, not by hostname — wire it from the ec2 hostvar,
+  # so inventory_hostname stays a readable display name.
+  ansible_aws_ssm_instance_id: instance_id

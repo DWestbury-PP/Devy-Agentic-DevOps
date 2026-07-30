@@ -1,0 +1,31 @@
+---
+# Devy CD — deploy the platform stack to the platform host over SSM (docs/deploy-design.md §18).
+# Lives IN the Devy repo (deploy/): Devy owns its whole delivery lifecycle — CI (build) + CD
+# (this). The ops repo (aws-ansible) is fleet-baseline only; app releases never live there.
+#
+# A RELEASE ACTION (ship images + migrate + recreate the app tier + smoke) — deliberately its own
+# play, not a config-convergence run. Orchestrated by the deploy GitHub Actions workflow, which
+# resolves the release from the SSM ledger and passes devy_* vars on a Linux runner (clean path).
+# devy_compose_src defaults to the repo root (this play is in deploy/), so the checkout satisfies
+# it automatically and a by-hand run needs only a commit:
+#
+#   # from deploy/ on a LINUX controller (dynamic inventory just works):
+#   ansible-playbook deploy.yml -e '{"devy_commit":"<sha>"}'
+#
+# On macOS two gotchas bite (neither affects the CI runner):
+#   1. fork()/boto pre-load crashes the worker ("worker found in a dead state"). Export
+#      OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES no_proxy='*' and drive a STATIC one-host inventory
+#      (ANSIBLE_INVENTORY_ENABLED=ini,host_list) rather than the boto-preloading aws_ec2 plugin.
+#   2. Pass extra-vars as JSON (-e '{...}'), never -e key=value — Ansible splits key=value on
+#      whitespace, so any value with a space silently truncates.
+# Static inventory: one line `devy-platform ansible_aws_ssm_instance_id=<i-…>` under
+# [role_platform], plus [role_platform:vars] ansible_connection=community.aws.aws_ssm +
+# ansible_aws_ssm_region + ansible_aws_ssm_bucket_name=westbury-ansible-ssm-transfer-dev.
+#
+# Edge deploy (role_edge — host-mcp only) is Phase-2, gated on the Linux host-mcp + bearer-token
+# auth work (readiness #7); a role_edge play joins here when that lands.
+- name: Deploy Devy platform stack
+  hosts: role_platform
+  gather_facts: true
+  roles:
+    - devy

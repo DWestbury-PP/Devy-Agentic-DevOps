@@ -190,7 +190,7 @@ backward-compatible, it needs a coordinated (downtime) release, not a rolling on
 - **Gated pre-step:** the deploy pipeline runs `db migrate` from the **new** image against
   the **live** Postgres *before* cycling the app tier (the DB stays up; only the app
   restarts). A migration failure aborts the deploy before any app churn.
-  See `aws-ansible/docs/deploy-design.md` §18.
+  See `docs/deploy-design.md` §18.
 - **The three datasets are untouched** by `001`/`002`: conversation history
   (`sessions`, `conversation_memories`), the pgvector knowledge base (`documents`,
   `chunks`), and crystalized memories (`memories`) carry no `token_encrypted` column and

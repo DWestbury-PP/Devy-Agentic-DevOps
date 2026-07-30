@@ -8,7 +8,7 @@ final answer).
 
 ## Run it
 
-It ships as a service in the repo's `docker-compose.yml`:
+It ships as a service in the repo's `docker-compose-local.yml`:
 
 ```bash
 docker compose up -d --build      # starts the full stack (postgres + proxy + host-mcp + chat-ui)

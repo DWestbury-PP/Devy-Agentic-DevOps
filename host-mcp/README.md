@@ -165,7 +165,7 @@ authn; the allow-list is the authz).
 
 ### Containerized (the local demo)
 
-The repo's [`docker-compose.yml`](../docker-compose.yml) runs `host-mcp` as a
+The repo's [`docker-compose-local.yml`](../docker-compose-local.yml) runs `host-mcp` as a
 service: the [`Dockerfile`](Dockerfile) installs only the **Docker CLI**
 (`docker-ce-cli`, no engine) plus diag tools, and the host's
 `/var/run/docker.sock` is mounted in. So the `docker_*` checks see the **host's

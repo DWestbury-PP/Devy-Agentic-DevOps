@@ -1,0 +1,180 @@
+---
+# devy — deploy the Devy platform stack (deploy-design.md §18.6). Executor: ship compose +
+# rendered .env + config → migration-gate from the NEW image → recreate the app tier (Postgres
+# stays up) → smoke → advance the deployed pointer. On any failure: halt-and-hold (D-006/D-014)
+# — the stack is left in place for inspection, the pointer is NOT advanced, no auto-revert.
+
+# ── Inputs: resolve if needed, then assert a coherent release + a source checkout ──
+- name: Resolve release from SSM when devy_images not provided
+  ansible.builtin.include_tasks: resolve.yml
+  when:
+    - devy_images | length == 0
+    - devy_commit | length > 0
+
+- name: Assert a coherent image set + a compose source are available
+  ansible.builtin.assert:
+    that:
+      - devy_compose_src | length > 0
+      - devy_images.proxy is defined
+      - devy_images['host-mcp'] is defined
+      - devy_images['chat-ui'] is defined
+    fail_msg: >-
+      Need devy_compose_src (a Devy checkout) and a coherent devy_images set. Pass
+      -e devy_compose_src=/path/to/Devy plus either -e devy_images='{...}' or
+      -e devy_commit=<sha> (resolved from SSM {{ devy_ssm_prefix }}/by-commit/<sha>).
+
+# ── Derived facts: the compose command + the registry (from the images, no hardcoded acct) ──
+- name: Build the compose command + derive the ECR registry
+  ansible.builtin.set_fact:
+    devy_compose_cmd: >-
+      docker compose
+      {{ devy_compose_files | map('regex_replace', '^(.+)$', '-f \1') | join(' ') }}
+      -p {{ devy_project_name }}
+    devy_registry: "{{ devy_images.proxy | regex_replace('/.*$', '') }}"
+
+- name: Show the release that will deploy (plan visibility)
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'CHECK MODE — would deploy' if ansible_check_mode else 'Deploying' }}
+      to {{ inventory_hostname }}:
+      {% for c, uri in devy_images.items() %}{{ c }}={{ uri | regex_replace('^.*/', '') }} {% endfor %}
+
+- name: Deploy the Devy platform stack (halt-and-hold on failure)
+  block:
+    # ── Ship the payload (compose + .env + config); no git/source on the host ──
+    - name: Ensure target + config dirs exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      become: true
+      loop:
+        - "{{ devy_target_dir }}"
+        - "{{ devy_config_dir }}"
+      when: not ansible_check_mode
+
+    - name: Ship compose files
+      ansible.builtin.copy:
+        src: "{{ devy_compose_src }}/{{ item }}"
+        dest: "{{ devy_target_dir }}/{{ item }}"
+        mode: "0644"
+      become: true
+      loop: "{{ devy_compose_files }}"
+      when: not ansible_check_mode
+
+    - name: Render the project .env (image URIs + deploy env)
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ devy_target_dir }}/.env"
+        mode: "0640"
+      become: true
+      when: not ansible_check_mode
+
+    - name: Ship config.yaml to the config dir
+      ansible.builtin.copy:
+        src: "{{ devy_config_file }}"
+        dest: "{{ devy_config_dir }}/config.yaml"
+        mode: "0644"
+      become: true
+      when: not ansible_check_mode
+
+    - name: "(check) Would ship the payload and deploy the images above"
+      ansible.builtin.debug:
+        msg: >-
+          Would ship {{ devy_compose_files }} + .env + config.yaml to {{ devy_target_dir }},
+          migration-gate from the new proxy image, then recreate {{ devy_app_services }}.
+      when: ansible_check_mode
+
+    # ── Keyless ECR login (instance role: devy-ecr-pull) for the compose image pulls ──
+    - name: Log in to ECR with the host's own identity
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          aws ecr get-login-password --region {{ devy_region }}
+          | docker login --username AWS --password-stdin {{ devy_registry }}
+      args:
+        executable: /bin/bash
+      become: true
+      changed_when: true
+      when: not ansible_check_mode
+
+    # ── Data tier up first + healthy (idempotent: a no-op on redeploy) ──
+    - name: Bring up the data tier (Postgres stays up across app redeploys)
+      ansible.builtin.command:
+        cmd: "{{ devy_compose_cmd }} up -d {{ devy_data_services | join(' ') }}"
+      args:
+        chdir: "{{ devy_target_dir }}"
+      become: true
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Wait for Postgres to accept connections
+      ansible.builtin.command:
+        cmd: "{{ devy_compose_cmd }} exec -T postgres pg_isready -U {{ devy_pg_user }} -d {{ devy_pg_user }}"
+      args:
+        chdir: "{{ devy_target_dir }}"
+      become: true
+      register: devy_pg_ready
+      retries: 15
+      delay: 4
+      until: devy_pg_ready.rc == 0
+      changed_when: false
+      when: not ansible_check_mode
+
+    # ── MIGRATION GATE — run `db migrate` from the NEW image vs the LIVE DB (§18.5) ──
+    - name: Migration gate — db migrate from the new proxy image
+      ansible.builtin.command:
+        cmd: "{{ devy_compose_cmd }} run --rm --no-deps proxy agentic-devops db migrate"
+      args:
+        chdir: "{{ devy_target_dir }}"
+      become: true
+      register: devy_migrate
+      changed_when: "'Already at head' not in devy_migrate.stdout"
+      when:
+        - not ansible_check_mode
+        - devy_run_migrate | bool
+
+    # ── Recreate ONLY the app tier (pinned images); Postgres is untouched. --no-deps so a
+    #    depends_on doesn't drag in dev-only backing services (e.g. LocalStack) — Postgres is
+    #    already up from the step above, and prod reads real ASM. ──
+    - name: Recreate the app tier with the pinned images
+      ansible.builtin.command:
+        cmd: "{{ devy_compose_cmd }} up -d --no-deps {{ devy_app_services | join(' ') }}"
+      args:
+        chdir: "{{ devy_target_dir }}"
+      become: true
+      changed_when: true
+      when: not ansible_check_mode
+
+    # ── Smoke gate (tier-1/2) ──
+    - name: Smoke the deployment
+      ansible.builtin.include_tasks: smoke.yml
+      when:
+        - not ansible_check_mode
+        - devy_run_smoke | bool
+
+    # ── Success: advance the deployed pointer (the rollback target). On the controller. ──
+    - name: Record the deployed release pointer
+      ansible.builtin.command:
+        cmd: >-
+          aws ssm put-parameter --region {{ devy_region }}
+          --name "{{ devy_ssm_deployed_prefix }}/{{ devy_env_name }}/{{ inventory_hostname }}"
+          --type String --overwrite
+          --value {{ {'images': devy_images, 'commit': devy_commit, 'at': ansible_facts.date_time.iso8601} | to_json | quote }}
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      when: not ansible_check_mode
+
+  rescue:
+    - name: HALT-AND-HOLD — surface the failure, leave the stack in place (no auto-revert)
+      ansible.builtin.debug:
+        msg: >-
+          Deploy FAILED on {{ inventory_hostname }}. HALT-AND-HOLD (D-006): the stack is left
+          as-is for inspection and the deployed pointer was NOT advanced. Fix-forward and re-run
+          (idempotent), or run a deliberate rollback (redeploy the previous manifest). The failing
+          task is shown above.
+
+    - name: Re-raise so the run + reporting reflect failure
+      ansible.builtin.fail:
+        msg: "Devy deploy failed on {{ inventory_hostname }} — halt-and-hold."

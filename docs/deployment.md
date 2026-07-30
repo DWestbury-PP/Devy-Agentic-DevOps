@@ -6,7 +6,8 @@ production hardening.
 
 ## The compose stack
 
-[`docker-compose.yml`](../docker-compose.yml) defines four services:
+[`docker-compose-local.yml`](../docker-compose-local.yml) defines four services (the
+self-contained AWS deploy variant is [`docker-compose-aws.yml`](../docker-compose-aws.yml)):
 
 | Service | Role | Exposed |
 |---|---|---|
@@ -45,15 +46,17 @@ included:
 ./devy.sh <any compose subcommand> …   # ps, exec, images, config, restart, …
 ```
 
-Modes: **dev** (default — base + SSO overlay + LocalStack) or **`--prod`** (adds
-`docker-compose.prod.yml`: real AWS via IAM role, no LocalStack, secure cookies —
-a *scaffold*, validated by the Terraform deployment). `--no-auth` runs the base
-stack only (password-mode bootstrap / break-glass). Pure bash, no dependencies.
+`./devy.sh` is **local dev only** — `docker-compose-local.yml` + the SSO overlay, with
+LocalStack for secrets/S3. `--no-auth` runs the local stack without the SSO edge
+(password-mode bootstrap / break-glass); `--no-migrate` skips the post-`up` `db migrate`.
+Pure bash, no dependencies. The **AWS deploy is a separate concern** — the CD pipeline
+(aws-ansible `devy` role) ships the self-contained `docker-compose-aws.yml`; it is not
+driven by this wrapper.
 
 Config and secrets are read from a mounted directory (default
 `~/.config/agentic-devops`, override with `$AGENTIC_DEVOPS_CONFIG_DIR`) — the same
 `config.yaml` + `.env` a native install uses. Compose reads a `.env` next to
-`docker-compose.yml` for `HOST_MCP_TOKEN`, `POSTGRES_PASSWORD`, and `DATABASE_URL`.
+`docker-compose-local.yml` for `HOST_MCP_TOKEN`, `POSTGRES_PASSWORD`, and `DATABASE_URL`.
 
 > **Enabling the admin control plane** (host registry + document import) needs
 > two bootstrap secrets in the *mounted* `~/.config/agentic-devops/.env`:
@@ -168,7 +171,7 @@ Google's JWKS (`auth.mode: jwt`).
    ${OAUTH2_PROXY_CLIENT_ID}` + `rbac.email_roles` (see `config.example.yaml`).
 4. **Bring it up with the overlay:**
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d --build
+   docker compose -f docker-compose-local.yml -f docker-compose.auth.yml up -d --build
    ```
    The edge takes `:8080`; the chat-ui and proxy host ports are closed so the edge is the
    only way in. Open `http://localhost:8080` → Google login. The web shows your signed-in

@@ -44,6 +44,12 @@ devy_env_name: dev
 # managed DATABASE_URL etc. as deployment inputs when needed.
 devy_env: {}
 
+# Account-specific S3 blob bucket for image attachments — config.yaml expands
+# ${DEVY_BLOBS_BUCKET}. Sourced from the DEVY_BLOBS_BUCKET env var: the deploy workflow
+# sets it from the BLOBS_BUCKET Actions variable; export it for a by-hand run. Empty →
+# the bucket resolves to "" and attachments are effectively off.
+devy_blobs_bucket: "{{ lookup('env', 'DEVY_BLOBS_BUCKET') | default('', true) }}"
+
 # ── Service tiers ──
 # App tier is recreated on deploy; the data tier (Postgres) is left running (§18.5/§18.7).
 # grafana-mcp + oauth2-proxy are intentionally omitted from Phase-1 (front door / extra MCP

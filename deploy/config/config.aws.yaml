@@ -21,6 +21,19 @@ secrets:
   cache_ttl: 60
   audit_enabled: true
 
+# Image attachments → content-addressed S3 blob store (real S3 in prod, via the
+# instance IAM role — grant s3:{Get,Put,Head}Object on the bucket). The bucket name
+# is account-specific, so it comes from ${DEVY_BLOBS_BUCKET} (rendered into the host
+# .env from the BLOBS_BUCKET Actions variable) — never hardcoded in this public file.
+# If BLOBS_BUCKET is unset for your deployment, drop `enabled` to false.
+attachments:
+  enabled: true
+  bucket: ${DEVY_BLOBS_BUCKET}
+  max_bytes: 5000000       # 5 MB per image
+  max_per_turn: 6
+  digest_enabled: true     # one-time vision description per unique image
+  digest_tier: balanced    # sonnet-4-6 is vision-capable
+
 # Tiers — the 4.x Anthropic family this deployment's key carries (the dev key has
 # NO 3.5 access), each with cross-provider fallbacks (OpenAI → Gemini; keys in SM).
 # Users pick a tier; the concrete model stays hidden. NO Ollama tier here — there is

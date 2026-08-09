@@ -184,6 +184,9 @@ jobs:
           MODE: ${{ needs.resolve.outputs.mode }}
           # Consumed by deploy/inventory/aws_ec2.yml (aws_ssm file-staging bucket).
           DEVY_SSM_TRANSFER_BUCKET: ${{ vars.SSM_TRANSFER_BUCKET }}
+          # Rendered into the host .env by the devy role → config.yaml's ${DEVY_BLOBS_BUCKET}
+          # (image-attachment S3 bucket). Account-specific, so it lives in an Actions var.
+          DEVY_BLOBS_BUCKET: ${{ vars.BLOBS_BUCKET }}
         run: |
           set -o pipefail
           args=(deploy.yml --limit "$TARGETS" -e "$EXTRA_VARS")

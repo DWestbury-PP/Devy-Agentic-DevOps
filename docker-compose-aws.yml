@@ -28,6 +28,9 @@ services:
       # Real AWS: prod mode, no endpoint override, no static creds → instance IAM role.
       DEVY_MODE: prod
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      # S3 blob bucket for image attachments — name is account-specific, rendered into
+      # .env by the deploy role from the BLOBS_BUCKET Actions var; config.yaml expands it.
+      DEVY_BLOBS_BUCKET: ${DEVY_BLOBS_BUCKET:-}
     volumes:
       # Config dir shipped by the deploy role (config.yaml; no secrets on disk in prod).
       - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"

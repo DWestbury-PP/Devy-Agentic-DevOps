@@ -52,13 +52,29 @@ inventory already groups `role_platform` / `role_edge`, so `--limit` targeting i
 BUILD  (Devy repo)   push/tag → GH Actions → docker build ×3 → per-component ECRs (immutable tags)
                                             → generate + publish a release manifest
 DEPLOY (this repo)   dispatch(manifest, env, targets, action, mode)
-                       → OIDC assume westbury-gha-ansible-<env>   (exists for dev)
+                       → OIDC assume <project>-gha-ansible-<env>  (per-env deploy role)
                        → aws_ec2 inventory --limit <targets>       (groups already exist)
                        → devy role over SSM: quiesce → pull@tag → up → smoke → halt-or-done
 ```
 
 We are **not building a deployment mechanism** — Ansible-over-SSM already is one. A deploy is an
 Ansible play parameterized by an image manifest + a host limit + an environment.
+
+### Required GitHub Actions variables
+
+The CI/CD workflows carry **no account-specific identifiers in source** — they read them from
+repo-level Actions variables (Settings → Secrets and variables → Actions → Variables). Set these
+once for your account; a fork sets its own:
+
+| Variable | Used by | Example |
+|---|---|---|
+| `BUILD_ROLE_ARN` | `build.yml` | `arn:aws:iam::<account>:role/<project>-gha-build-<env>` |
+| `DEPLOY_ROLE_ARN` | `deploy.yml` | `arn:aws:iam::<account>:role/<project>-gha-deploy-<env>` |
+| `SSM_TRANSFER_BUCKET` | `deploy.yml` → `inventory/aws_ec2.yml` | the `aws_ssm` file-staging bucket |
+| `AWS_REGION` | both (optional) | defaults to `us-east-1` if unset |
+
+None are secrets (ARNs/account IDs/bucket names aren't credentials) — repo **variables**, not secrets.
+For a by-hand deploy, `export DEVY_SSM_TRANSFER_BUCKET=<bucket>` before running the play.
 
 ## 4. Registry & image tagging
 
@@ -119,7 +135,7 @@ owns its whole delivery lifecycle. The organizing principle is **ownership × co
 is the *ops* fleet-baseline repo (OS/packages, DevOps/SecOps-owned) and must not hold app-release
 logic; app teams already own the code + CI, so CD belongs with them. Devy carries its own small
 Ansible-over-SSM plumbing (`deploy/{ansible.cfg,inventory,requirements.yml,roles/devy}`) and a scoped
-`westbury-gha-devy-deploy-dev` OIDC role (sibling to the build role). The genuinely shared primitives
+`<project>-gha-devy-deploy-<env>` OIDC role (sibling to the build role). The genuinely shared primitives
 are AWS *resources* (SSM transfer bucket, OIDC provider), provisioned in `aws-terraform` and merely
 referenced. If the ~40 lines of plumbing ever get copied across many apps, extract a **template**
 (cookiecutter), not a runtime-shared library — copy-and-own beats a lowest-common-denominator framework.

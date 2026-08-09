@@ -40,14 +40,38 @@ hosts.** All host and container inspection goes through the
 This is what makes pointing Devy at a *production* host reviewable: a SecOps team
 can read the allow-list and know the complete set of things the agent can do.
 
+### Deployment posture — native, unprivileged, hardened
+
+For real host inspection the host MCP runs **natively** on the target host (a
+containerized one only sees its own namespace). On Linux that's a **hardened,
+unprivileged systemd unit** — see [The host MCP](host-mcp.md) and the
+[unit template](../host-mcp/deploy/agentic-devops-host-mcp.service.example):
+
+- Runs as a dedicated **`devy-hostmcp`** user in the `systemd-journal` + `docker`
+  groups — the *entire* privilege surface. **Not root, not a privileged container.**
+- Sandboxed by the unit: `ProtectSystem=strict`, `NoNewPrivileges`, empty
+  `CapabilityBoundingSet` (zero capabilities), `SystemCallFilter=@system-service`,
+  `MemoryDenyWriteExecute`. Even a compromised process can neither escalate nor write
+  the host filesystem.
+- **Immutability is the default** — the mutation switch (`--allow-mutations` /
+  `HOST_MCP_ALLOW_MUTATIONS`) is read **only at startup**, so "enhanced mode" is a
+  deliberate, restart-bounded operator act that self-reverts. The `systemctl` verbs
+  additionally need a scoped OS privilege grant (polkit/sudoers) to run at all.
+
+Counter-intuitively, this is *tighter* than a container: a container would have to be
+run privileged (`--pid=host`, host mounts) to see the host, whereas the native
+process starts unprivileged and the sandbox *adds* isolation.
+
 ## Network posture
 
 - In the compose stack the **proxy and web chat bind to host loopback**
-  (`127.0.0.1`); they are not exposed on the network. The host MCP is reachable
-  only on the compose network. Put SSO / a reverse proxy / a VPN in front for
-  shared access.
-- Remote host MCPs should be fronted with **TLS**; the bearer token is the authn,
-  the allow-list is the authz.
+  (`127.0.0.1`); they are not exposed on the network. Put SSO / a reverse proxy / a
+  VPN in front for shared access.
+- The host MCP's HTTP transport requires a **bearer token**; front remote ones with
+  **TLS** and/or a network boundary. On AWS, edge host MCPs bind `:8781` and their
+  **security group allows inbound only from the platform's SG** — so the reachable
+  set is exactly "the Devy platform", bearer-authed on top. Defense in depth:
+  allow-list (no shell) → unprivileged user → systemd sandbox → bearer → SG.
 
 ## Data handling & privacy
 

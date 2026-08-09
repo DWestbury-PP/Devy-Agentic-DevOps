@@ -16,8 +16,8 @@
     that:
       - devy_compose_src | length > 0
       - devy_images.proxy is defined
-      - devy_images['host-mcp'] is defined
       - devy_images['chat-ui'] is defined
+      # NOTE: no host-mcp image — it's native (systemd) now, deployed by host-mcp-deploy.yml.
     fail_msg: >-
       Need devy_compose_src (a Devy checkout) and a coherent devy_images set. Pass
       -e devy_compose_src=/path/to/Devy plus either -e devy_images='{...}' or

@@ -1,11 +1,18 @@
 # AWS deploy variant — self-contained (NOT an overlay). The CD pipeline (aws-ansible
 # `devy` role) ships THIS single file + a rendered .env to the host and runs it.
 #
-#   docker compose -f docker-compose-aws.yml up -d proxy host-mcp chat-ui postgres
+#   docker compose -f docker-compose-aws.yml up -d proxy chat-ui postgres
+#
+# The host MCP is NOT a container here — it runs NATIVELY as a hardened systemd unit
+# on each host (deployed by .github/workflows/host-mcp-deploy.yml), so its host_*
+# checks see the REAL host, not a container namespace. The proxy reaches the
+# co-located sidecar via host.docker.internal:8781 and any edge sidecars via
+# ${EDGE_*_MCP_URL}. The containerized host-mcp survives only for the LOCAL demo
+# (docker-compose-local.yml).
 #
 # Differences from docker-compose-local.yml, all baked in (no overlay-substitution
 # surprises — the whole reason this is a separate file):
-#   • pinned ECR images (DEVY_{PROXY,HOST_MCP,CHAT_UI}_IMAGE), never `build:`
+#   • pinned ECR images (DEVY_{PROXY,CHAT_UI}_IMAGE), never `build:`
 #   • DEVY_MODE=prod + NO AWS_ENDPOINT_URL and NO static keys → boto3 hits REAL AWS
 #     Secrets Manager / S3 via the host's instance IAM role
 #   • NO LocalStack service (dev-only), NO demo-faulty, NO repo bind-mounts (a deploy
@@ -22,8 +29,11 @@ services:
     # Loopback-only until the TLS front door (readiness #5); reach it via SSM port-forward.
     ports:
       - "127.0.0.1:8765:8765"
+    # Reach the NATIVE host-MCP sidecar (systemd unit on this EC2 host, :8781) via the
+    # Docker host gateway. config.yaml's `host` mount points at host.docker.internal:8781.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL:-postgresql://agentic:agentic@postgres:5432/agentic}
       # Real AWS: prod mode, no endpoint override, no static creds → instance IAM role.
       DEVY_MODE: prod
@@ -34,14 +44,17 @@ services:
       # Grafana tenant URL — config.yaml's deployment_context expands ${GRAFANA_URL} for
       # absolute dashboard links. Account-specific → rendered from the GRAFANA_URL var.
       GRAFANA_URL: ${GRAFANA_URL:-}
+      # Native EDGE host-MCP sidecar URLs (account-specific → rendered from the
+      # EDGE_*_MCP_URL Actions vars). config.yaml expands them; an unset var → an
+      # unreachable mount (best-effort, never blocks startup).
+      EDGE_AL2023_MCP_URL: ${EDGE_AL2023_MCP_URL:-}
+      EDGE_UBUNTU_MCP_URL: ${EDGE_UBUNTU_MCP_URL:-}
     volumes:
       # Config dir shipped by the deploy role (config.yaml; no secrets on disk in prod).
       - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"
       # Generated component docs (durable across restarts); created under the project dir.
       - "${AGENTIC_DEVOPS_DOCS_DIR:-./docs-corpus}:/app/docs-corpus"
     depends_on:
-      host-mcp:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
@@ -73,25 +86,9 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # The host MCP (pinned image). Docker socket mounted read-only for the allow-listed
-  # docker_* diagnostic checks. Served on the compose network only (no host port).
-  host-mcp:
-    image: ${DEVY_HOST_MCP_IMAGE:?set DEVY_HOST_MCP_IMAGE — the CD pipeline renders it from the release manifest}
-    container_name: agentic-devops-host-mcp
-    environment:
-      HOST_MCP_TRANSPORT: http
-      HOST_MCP_PROFILE: diagnostic
-      HOST_MCP_TOKEN: ${HOST_MCP_TOKEN:-}
-      HOST_MCP_AUDIT: ${HOST_MCP_AUDIT:-/tmp/host-mcp-audit.jsonl}
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',8780)))"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    restart: unless-stopped
+  # NOTE: no host-mcp service here — on AWS the host MCP runs NATIVELY as a hardened
+  # systemd unit (deployed by host-mcp-deploy.yml), reached at host.docker.internal:8781.
+  # The containerized host-mcp lives only in docker-compose-local.yml (the local demo).
 
   # Static terminal-themed UI on nginx; reverse-proxies /v1 + /healthz to the proxy.
   chat-ui:

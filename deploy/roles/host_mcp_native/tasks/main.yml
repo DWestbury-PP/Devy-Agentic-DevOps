@@ -68,7 +68,7 @@
   notify: Restart host-mcp
 
 # ── Ship the SHA-pinned source, then pip-install into a venv (no GitHub egress). ──
-- name: Ensure app + audit dirs
+- name: Ensure app + config dirs
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -79,6 +79,7 @@
   loop:
     - "{{ hmcp_app_dir }}"
     - "{{ hmcp_src_dir }}"
+    - "{{ hmcp_env_dir }}"     # /etc/agentic-devops — the template task needs it to exist
   when: not ansible_check_mode
 
 - name: Ship the host-mcp source to the host

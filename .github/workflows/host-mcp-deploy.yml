@@ -68,6 +68,9 @@ jobs:
     steps:
       - name: Normalize inputs (dispatch OR repository_dispatch)
         id: norm
+        # Runs BEFORE checkout, so override the job's working-directory (deploy/
+        # doesn't exist yet) to the always-present workspace root.
+        working-directory: ${{ github.workspace }}
         env:
           HOSTS: ${{ inputs.hosts || github.event.client_payload.hosts || 'role_platform' }}
           REF: ${{ inputs.ref || github.event.client_payload.ref || 'main' }}

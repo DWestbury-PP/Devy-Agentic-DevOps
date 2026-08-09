@@ -73,6 +73,11 @@ class MCPServerConfig(BaseModel):
     # time (the vault is the source of truth). Keeps the token out of config/.env
     # entirely — set the value on the admin Secrets tab or `secrets set <ref>`.
     secret_ref: Optional[str] = None  # e.g. devy/mcp/host
+    # Header the token rides in. Default (None) → `Authorization: Bearer <token>`.
+    # Some servers want the credential in a custom header instead — e.g. Grafana MCP
+    # reads `X-Grafana-Api-Key`, NOT Authorization — so set auth_header to that name and
+    # the token/secret_ref value is sent verbatim in it (no "Bearer " prefix).
+    auth_header: Optional[str] = None
     # Optional UX overrides:
     category: Optional[str] = None  # defaults to `name`
     safety_tier: str = "external"

@@ -79,3 +79,31 @@ def test_write_tools_are_withheld_from_the_assistant():
     assert "host_disk" in names and "host_query" in names
     assert "host_restart_service" not in names          # the write is withheld
     assert mgr.excluded_write_tools == ["host:restart_service"]
+
+
+def test_auth_headers_default_bearer():
+    """No auth_header → the token rides as Authorization: Bearer (the default)."""
+    from agentic_devops.proxy.mcp_client import _auth_headers
+
+    cfg = MCPServerConfig(name="host", transport="http", url="http://x/mcp", token="secret123")
+    assert _auth_headers(cfg) == {"Authorization": "Bearer secret123"}
+
+
+def test_auth_headers_custom_header_no_bearer_prefix():
+    """A custom auth_header (e.g. Grafana MCP's X-Grafana-Api-Key) carries the token
+    verbatim — NOT as an Authorization/Bearer header — which is what mcp-grafana needs
+    to reach Grafana. This is the config-path equivalent of the registry's auth_header."""
+    from agentic_devops.proxy.mcp_client import _auth_headers
+
+    cfg = MCPServerConfig(
+        name="grafana", transport="http", url="http://grafana-mcp:8000/mcp",
+        token="glsa_abc", auth_header="X-Grafana-Api-Key",
+    )
+    assert _auth_headers(cfg) == {"X-Grafana-Api-Key": "glsa_abc"}
+
+
+def test_auth_headers_none_without_token():
+    from agentic_devops.proxy.mcp_client import _auth_headers
+
+    cfg = MCPServerConfig(name="open", transport="http", url="http://x/mcp")
+    assert _auth_headers(cfg) is None

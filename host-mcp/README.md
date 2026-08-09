@@ -193,6 +193,34 @@ pipx install agentic-devops-host-mcp        # or pip install into a venv
 HOST_MCP_TRANSPORT=http HOST_MCP_TOKEN=… agentic-devops-host-mcp
 ```
 
+#### Linux host (systemd) — the hardened sidecar
+
+On a Linux host (Amazon Linux 2023 / RHEL / Fedora / Ubuntu) the durable form is a
+**hardened, unprivileged systemd service** — the mirror of the macOS launchd agent.
+[`deploy/install-native-linux.sh`](deploy/install-native-linux.sh) is idempotent and
+is what the CD workflow runs:
+
+```bash
+sudo HOST_MCP_TOKEN=… HOST_MCP_REF=<git-sha> \
+  bash host-mcp/deploy/install-native-linux.sh
+```
+
+It creates an unprivileged `devy-hostmcp` user (in the `systemd-journal` and
+`docker` groups — the entire privilege surface, **not root**), builds a venv from a
+**git-SHA-pinned** source, writes `/etc/agentic-devops/host-mcp.env` (token `0640`),
+and enables the unit [`agentic-devops-host-mcp.service`](deploy/agentic-devops-host-mcp.service.example).
+The unit is sandboxed (`ProtectSystem=strict`, `NoNewPrivileges`, empty
+`CapabilityBoundingSet`, `SystemCallFilter=@system-service`), so even a compromised
+process can neither escalate nor write the host filesystem. Front the port with a
+security group / firewall scoped to the proxy's subnet; the bearer token is the authn.
+
+**Immutability is the default** — mutations are OFF. To enable *enhanced mode*
+(the gated reversible verbs), uncomment `HOST_MCP_ALLOW_MUTATIONS=true` in the env
+file (or `systemctl edit` a drop-in adding `--allow-mutations` to `ExecStart`) and
+restart. It is read only at startup and self-reverts on the next normal restart;
+the systemctl verbs additionally need a scoped OS privilege grant (polkit/sudoers)
+to actually run. There is no runtime toggle.
+
 #### macOS dev host + containerized proxy
 
 macOS can't run Linux containers natively, so a *containerized* host-mcp only ever

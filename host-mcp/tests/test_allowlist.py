@@ -508,6 +508,46 @@ def test_read_only_http_without_token_unchanged(monkeypatch):
     assert cfg.allowlist.allow_mutations is False
 
 
+# -- CLI switch: the restart-gated "enhanced mode" override -------------------
+import host_mcp.cli as cli_mod  # noqa: E402
+
+
+def test_load_allow_mutations_param_overrides_env(monkeypatch):
+    # The CLI override (a literal command-line switch) enables mutations even when
+    # the env var is unset; when the param is None the env is honored as before.
+    _clear_host_mcp_env(monkeypatch)
+    assert cfg_mod.load(allow_mutations=True).allowlist.allow_mutations is True
+    assert cfg_mod.load().allowlist.allow_mutations is False       # None → env (unset)
+    monkeypatch.setenv("HOST_MCP_ALLOW_MUTATIONS", "true")
+    assert cfg_mod.load().allowlist.allow_mutations is True        # None → env (set)
+
+
+def test_load_profile_param_overrides_env(monkeypatch):
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_PROFILE", "diagnostic")
+    assert cfg_mod.load(profile="read-only").allowlist.active_profile == "read-only"
+
+
+def test_load_allow_mutations_param_still_fail_closed(monkeypatch):
+    # The CLI switch does NOT bypass the fail-closed rule: http + mutations + no
+    # token still refuses to start (a network-reachable mutating endpoint needs auth).
+    _clear_host_mcp_env(monkeypatch)
+    monkeypatch.setenv("HOST_MCP_TRANSPORT", "http")
+    with pytest.raises(SystemExit):
+        cfg_mod.load(allow_mutations=True)
+
+
+def test_cli_parses_enhanced_mode_switches():
+    # Default: no flag → None (fall back to env); mutations stay off.
+    args = cli_mod._parse_args([])
+    assert args.allow_mutations is False and args.profile is None
+    # The literal switch is present and parses; profile is choice-constrained.
+    args = cli_mod._parse_args(["--allow-mutations", "--profile", "elevated"])
+    assert args.allow_mutations is True and args.profile == "elevated"
+    with pytest.raises(SystemExit):        # invalid profile rejected by argparse
+        cli_mod._parse_args(["--profile", "root"])
+
+
 # -- Mac-first surface: optional flag-args, per-OS advertising, new primitives --
 def test_optional_flag_args_and_suppression():
     # Generic mechanism (OS-independent, via a synthetic check): an optional flag-arg

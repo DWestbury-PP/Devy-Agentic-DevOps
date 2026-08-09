@@ -1,0 +1,84 @@
+# Hardened, UNPRIVILEGED native host MCP sidecar for Linux (systemd).
+#
+# The mirror of the macOS launchd LaunchAgent (com.agentic-devops.host-mcp.plist):
+# where the Mac agent runs in the user's login session, this runs as a dedicated
+# system service confined by systemd sandboxing. Running NATIVELY on the host is
+# what lets the host_* checks see the REAL machine (journal, systemd, reboot) —
+# a containerized sidecar only ever sees its own namespace.
+#
+# SecOps posture:
+#   * Runs as the unprivileged `devy-hostmcp` user — NOT root, NOT a privileged
+#     container. It reads the journal via the `systemd-journal` group and reaches
+#     the Docker socket via the `docker` group; nothing more.
+#   * The allow-list is the authz boundary: no shell, argv-only, and IMMUTABILITY
+#     IS THE DEFAULT — mutating verbs are off. "Enhanced mode" (mutations and/or a
+#     higher read profile) is a deliberate, restart-bounded operator act: add
+#     `--allow-mutations` to ExecStart (via `systemctl edit`) or set
+#     HOST_MCP_ALLOW_MUTATIONS=true in the EnvironmentFile, then restart. It is
+#     read only at startup and self-reverts on the next normal restart. Even then,
+#     the OS must separately grant the service user the privilege for the verb
+#     (a scoped polkit/sudoers rule for systemctl) — the switch alone is not enough.
+#
+# Install with host-mcp/deploy/install-native-linux.sh (or the CD role), which
+# creates the user + venv + EnvironmentFile and enables this unit.
+
+[Unit]
+Description=Agentic DevOps host MCP (native, unprivileged)
+Documentation=https://github.com/DWestbury-PP/Devy-Agentic-DevOps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devy-hostmcp
+Group=devy-hostmcp
+# Journal read + Docker socket for the docker_* checks. These two groups are the
+# ENTIRE privilege surface — no capabilities, no root.
+SupplementaryGroups=systemd-journal docker
+
+# HOST_MCP_TOKEN (0640, root:devy-hostmcp), HOST_MCP_TRANSPORT/HOST/PORT/PROFILE,
+# and HOST_MCP_AUDIT live here — never in this unit file, never in the argv.
+EnvironmentFile=/etc/agentic-devops/host-mcp.env
+
+# Direct exec — no shell wrapper (smaller attack surface, cleaner audit, and it
+# composes with the sandbox below). Profile/token/etc. come from the env file.
+# To enable enhanced mode, `systemctl edit` a drop-in that appends --allow-mutations.
+ExecStart=/opt/agentic-devops-host-mcp/venv/bin/python -m host_mcp.cli
+Restart=on-failure
+RestartSec=3
+
+# Writable audit directory that survives ProtectSystem=strict (systemd creates
+# /var/log/agentic-devops-host-mcp owned by the service user). Point
+# HOST_MCP_AUDIT at it in the EnvironmentFile.
+LogsDirectory=agentic-devops-host-mcp
+LogsDirectoryMode=0750
+
+# --- Sandbox: the process is unprivileged to begin with; these directives add
+#     defense in depth so even a compromised process can neither escalate nor
+#     write to the host filesystem. (Verified against the live surface at deploy;
+#     relax a single directive only with a documented reason.)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Zero capabilities. (ping_host uses unprivileged ICMP sockets via the
+# net.ipv4.ping_group_range sysctl the installer sets — no CAP_NET_RAW needed.)
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_UNIX = Docker socket; AF_INET/6 = serve http + outbound curl/ping/dns.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

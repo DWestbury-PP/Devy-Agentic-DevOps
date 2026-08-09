@@ -54,14 +54,28 @@ def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def load() -> ServerConfig:
+def load(
+    allow_mutations: Optional[bool] = None,
+    profile: Optional[str] = None,
+) -> ServerConfig:
+    """Load server config from the allow-list file + ``HOST_MCP_*`` env.
+
+    ``allow_mutations`` / ``profile``, when not None, are explicit overrides from
+    the CLI (a literal command-line switch) that take precedence over the
+    environment — the restart-gated way an operator turns on "enhanced mode".
+    When None, the environment (``HOST_MCP_ALLOW_MUTATIONS`` / ``HOST_MCP_PROFILE``)
+    is used exactly as before. Either way the value is read ONLY at startup, never
+    at runtime, so the posture cannot change without a restart and self-reverts on
+    the next normal restart.
+    """
     data = yaml.safe_load(_allowlist_path().read_text(encoding="utf-8")) or {}
 
     audit = os.environ.get("HOST_MCP_AUDIT")
-    allow_mutations = _env_bool("HOST_MCP_ALLOW_MUTATIONS")
+    if allow_mutations is None:
+        allow_mutations = _env_bool("HOST_MCP_ALLOW_MUTATIONS")
     allowlist = Allowlist.from_dict(
         data,
-        active_profile=os.environ.get("HOST_MCP_PROFILE"),
+        active_profile=profile or os.environ.get("HOST_MCP_PROFILE"),
         audit_path=Path(audit).expanduser() if audit else None,
         allow_mutations=allow_mutations,
     )

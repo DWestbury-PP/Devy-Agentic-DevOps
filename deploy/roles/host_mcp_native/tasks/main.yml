@@ -1,0 +1,243 @@
+---
+# host_mcp_native — stand up the hardened, unprivileged native host-MCP systemd
+# service. Idempotent + check-mode aware. The Ansible mirror of
+# host-mcp/deploy/install-native-linux.sh (that script is the manual/reference path).
+
+- name: Stat the host-mcp source on the controller
+  ansible.builtin.stat:
+    path: "{{ hmcp_source_path }}/pyproject.toml"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: hmcp_src_stat
+
+- name: Assert a host-mcp source checkout is present on the controller
+  ansible.builtin.assert:
+    that: hmcp_src_stat.stat.exists
+    fail_msg: >-
+      Need a host-mcp/ checkout at {{ hmcp_source_path }} (the SHA-pinned source the
+      role ships + pip-installs). The deploy workflow's checkout satisfies this.
+  run_once: true
+
+# ── OS deps: python venv + sysstat (iostat for disk_io). Distro-aware. ──
+- name: Install OS deps (dnf family — AL2023/RHEL/Fedora)
+  ansible.builtin.dnf:
+    name: [python3, python3-pip, sysstat]
+    state: present
+  become: true
+  when:
+    - not ansible_check_mode
+    - ansible_pkg_mgr in ['dnf', 'dnf5', 'yum']
+
+- name: Install OS deps (apt family — Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: [python3, python3-venv, python3-pip, sysstat]
+    state: present
+    update_cache: true
+  become: true
+  when:
+    - not ansible_check_mode
+    - ansible_pkg_mgr == 'apt'
+
+# ── Unprivileged service user + the ONLY two group grants (journal + docker). ──
+- name: Create the unprivileged service user
+  ansible.builtin.user:
+    name: "{{ hmcp_user }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  become: true
+
+- name: Discover which optional groups exist on this host
+  ansible.builtin.getent:
+    database: group
+  become: true
+
+- name: Grant journal + docker group membership (only groups that exist)
+  ansible.builtin.user:
+    name: "{{ hmcp_user }}"
+    groups: "{{ ['systemd-journal', 'docker'] | select('in', ansible_facts.getent_group) | list }}"
+    append: true
+  become: true
+  notify: Restart host-mcp
+
+# ── Ship the SHA-pinned source, then pip-install into a venv (no GitHub egress). ──
+- name: Ensure app + audit dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ hmcp_app_dir }}"
+    - "{{ hmcp_src_dir }}"
+  when: not ansible_check_mode
+
+- name: Ship the host-mcp source to the host
+  ansible.builtin.copy:
+    src: "{{ hmcp_source_path }}/"
+    dest: "{{ hmcp_src_dir }}/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  become: true
+  register: hmcp_src_shipped
+  when: not ansible_check_mode
+
+# Ensure the venv + deps + package exist (first run installs everything; later a
+# no-op). pip won't reinstall the SAME version on a source change, so...
+- name: Ensure host-mcp is installed in the venv (venv + deps + package)
+  ansible.builtin.pip:
+    name: "{{ hmcp_src_dir }}[http]"
+    virtualenv: "{{ hmcp_venv }}"
+    virtualenv_command: python3 -m venv
+    state: present
+  become: true
+  when: not ansible_check_mode
+  notify: Restart host-mcp
+
+# ...force-reinstall JUST the package (no deps) whenever the shipped source changed,
+# so a same-version content change (e.g. an allow-list edit) actually reconciles.
+- name: Reinstall host-mcp on source change (same-version content reconcile)
+  ansible.builtin.pip:
+    name: "{{ hmcp_src_dir }}"
+    virtualenv: "{{ hmcp_venv }}"
+    extra_args: "--no-deps"          # state=forcereinstall already adds --force-reinstall
+    state: forcereinstall
+  become: true
+  when:
+    - not ansible_check_mode
+    - hmcp_src_shipped is changed
+  notify: Restart host-mcp
+
+# ── Let unprivileged ICMP sockets work (ping_host) WITHOUT CAP_NET_RAW. ──
+- name: Resolve the service user's primary GID
+  ansible.builtin.command:
+    cmd: "id -g {{ hmcp_user }}"
+  become: true
+  register: hmcp_gid_result
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Enable unprivileged ping for the service group
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-agentic-devops-host-mcp.conf
+    content: "net.ipv4.ping_group_range = {{ hmcp_gid_result.stdout }} {{ hmcp_gid_result.stdout }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: not ansible_check_mode
+  notify: Reload sysctl
+
+# ── The bearer token: fetch from Secrets Manager on the CONTROLLER (deploy role),
+#    never logged, then template into the 0640 EnvironmentFile. ──
+- name: Fetch the host-mcp bearer token from Secrets Manager
+  ansible.builtin.command:
+    cmd: >-
+      aws secretsmanager get-secret-value
+      --secret-id {{ hmcp_token_secret }}
+      --query SecretString --output text --region {{ hmcp_region }}
+  delegate_to: localhost
+  become: false
+  register: hmcp_token_raw
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Render the EnvironmentFile (token 0640, root:service-user)
+  ansible.builtin.template:
+    src: host-mcp.env.j2
+    dest: "{{ hmcp_env_file }}"
+    owner: root
+    group: "{{ hmcp_user }}"
+    mode: "0640"
+  become: true
+  vars:
+    hmcp_token: "{{ hmcp_token_raw.stdout }}"
+  no_log: true
+  when: not ansible_check_mode
+  notify: Restart host-mcp
+
+# ── Install the hardened unit (single source: the committed .service.example). ──
+- name: Install the hardened systemd unit
+  ansible.builtin.copy:
+    src: "{{ hmcp_unit_src }}"
+    dest: "{{ hmcp_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: not ansible_check_mode
+  notify:
+    - Reload systemd
+    - Restart host-mcp
+
+- name: "(check) Would install the native host-mcp sidecar"
+  ansible.builtin.debug:
+    msg: >-
+      Would install host-mcp natively on {{ inventory_hostname }}: user {{ hmcp_user }},
+      venv {{ hmcp_venv }} from shipped source, EnvironmentFile {{ hmcp_env_file }},
+      hardened unit → :{{ hmcp_port }} (profile={{ hmcp_profile }},
+      mutations={{ hmcp_allow_mutations }}).
+  when: ansible_check_mode
+
+- name: Flush handlers so the service is (re)started before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable + start the service
+  ansible.builtin.systemd_service:
+    name: agentic-devops-host-mcp.service
+    enabled: true
+    state: started
+  become: true
+  when: not ansible_check_mode
+
+# ── Verify: the unit is active and the port answers (token kept out of logs). ──
+- name: Verify the service is active
+  ansible.builtin.command:
+    cmd: systemctl is-active agentic-devops-host-mcp.service
+  become: true
+  register: hmcp_active
+  changed_when: false
+  failed_when: hmcp_active.stdout != "active"
+  when:
+    - not ansible_check_mode
+    - hmcp_run_verify | bool
+
+- name: Verify the MCP port is listening + auth layer responds
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      curl -sS -o /dev/null -w '%{http_code}' --max-time 5
+      -H "Authorization: Bearer ${TOK}"
+      http://127.0.0.1:{{ hmcp_port }}/mcp || true
+    executable: /bin/bash
+  environment:
+    TOK: "{{ hmcp_token_raw.stdout }}"
+  become: true
+  register: hmcp_http
+  changed_when: false
+  # A listening MCP endpoint answers the bearer-authed probe with an HTTP status
+  # (200/400/406 for a bare GET are all "up + authed"); a connection refused (000)
+  # means it isn't listening.
+  failed_when: hmcp_http.stdout == "000"
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - hmcp_run_verify | bool
+
+- name: Report the native sidecar endpoint
+  ansible.builtin.debug:
+    msg: >-
+      host-mcp native sidecar UP on {{ inventory_hostname }} →
+      http://{{ ansible_default_ipv4.address | default('127.0.0.1') }}:{{ hmcp_port }}/mcp
+      (active={{ hmcp_active.stdout | default('?') }}, probe={{ hmcp_http.stdout | default('?') }}).
+      Register this as a `host` MCP mount (config or admin registry); the co-located
+      proxy dials it via host.docker.internal:{{ hmcp_port }}.
+  when:
+    - not ansible_check_mode
+    - hmcp_run_verify | bool

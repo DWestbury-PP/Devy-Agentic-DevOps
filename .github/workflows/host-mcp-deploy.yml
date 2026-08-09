@@ -1,0 +1,140 @@
+name: Deploy host-MCP (native → hosts over SSM)
+
+# Dedicated CD for the NATIVE host-MCP sidecar — the systemd service that replaces
+# the containerized host-mcp so its host_* checks see the REAL host. Separate from
+# the compose deploy (deploy.yml) because the artifact is a pure-Python package
+# (no image → no build/deploy split) and the targets are a host SET, not one box.
+#
+# Immutability by default: enhanced mode (mutations) is an explicit, opt-in input
+# and is still read only at the sidecar's startup (self-reverts on the next deploy).
+#
+# The checked-out ref IS the SHA pin: the role ships that source tree to the host
+# and pip-installs it (no GitHub egress on the target needed).
+
+on:
+  workflow_dispatch:
+    inputs:
+      hosts:
+        description: "Which host(s) to deploy the native sidecar to"
+        type: choice
+        default: role_platform
+        options:
+          - role_platform # the platform host (co-located with the proxy)
+          - role_edge # both edge diagnostic hosts (must be RUNNING)
+          - edge-al2023 # a single edge host
+          - edge-ubuntu
+          - all # the whole running fleet
+      ref:
+        description: "Git ref/SHA to deploy (the shipped source = the pin)"
+        type: string
+        default: main
+      profile:
+        description: "Read profile the sidecar runs at"
+        type: choice
+        default: diagnostic
+        options: [read-only, diagnostic, elevated]
+      allow_mutations:
+        description: "Enhanced mode — enable gated reversible mutations (default OFF)"
+        type: boolean
+        default: false
+      mode:
+        description: "plan = --check --diff dry run; apply = install for real"
+        type: choice
+        default: plan
+        options: [plan, apply]
+  repository_dispatch:
+    types: [devy-host-mcp-deploy] # client_payload mirrors the inputs above
+
+permissions:
+  id-token: write # OIDC -> assume the deploy role
+  contents: read
+
+env:
+  # Account-specific values come from repo Actions variables (no account ID in source):
+  #   AWS_REGION           (optional; defaults to us-east-1)
+  #   DEPLOY_ROLE_ARN      the OIDC deploy role — needs secretsmanager:GetSecretValue
+  #                        on devy/mcp/host (the host-mcp bearer token)
+  #   SSM_TRANSFER_BUCKET  the aws_ssm file-staging bucket (consumed by the inventory)
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  DEPLOY_ROLE_ARN: ${{ vars.DEPLOY_ROLE_ARN }}
+
+jobs:
+  deploy:
+    name: ${{ (inputs.mode || github.event.client_payload.mode) == 'apply' && 'Apply' || 'Plan' }} · host-mcp → ${{ inputs.hosts || github.event.client_payload.hosts }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - name: Normalize inputs (dispatch OR repository_dispatch)
+        id: norm
+        env:
+          HOSTS: ${{ inputs.hosts || github.event.client_payload.hosts || 'role_platform' }}
+          REF: ${{ inputs.ref || github.event.client_payload.ref || 'main' }}
+          PROFILE: ${{ inputs.profile || github.event.client_payload.profile || 'diagnostic' }}
+          ALLOW_MUTATIONS: ${{ inputs.allow_mutations || github.event.client_payload.allow_mutations || false }}
+          MODE: ${{ inputs.mode || github.event.client_payload.mode || 'plan' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "hosts=${HOSTS}"
+            echo "ref=${REF}"
+            echo "profile=${PROFILE}"
+            echo "allow_mutations=${ALLOW_MUTATIONS}"
+            echo "mode=${MODE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "host-mcp deploy: hosts=${HOSTS} ref=${REF} profile=${PROFILE} mutations=${ALLOW_MUTATIONS} mode=${MODE}"
+
+      - name: Check out the ref to ship (the SHA pin)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.norm.outputs.ref }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install session-manager-plugin
+        run: |
+          curl -sS "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o /tmp/smp.deb
+          sudo dpkg -i /tmp/smp.deb
+
+      - name: Install Ansible + collections
+        run: |
+          python -m pip install --upgrade ansible boto3 botocore
+          ansible-galaxy collection install -r requirements.yml -p collections
+
+      - name: "${{ steps.norm.outputs.mode == 'apply' && 'Apply' || 'Plan (--check --diff)' }}"
+        id: run
+        env:
+          HOSTS: ${{ steps.norm.outputs.hosts }}
+          PROFILE: ${{ steps.norm.outputs.profile }}
+          ALLOW_MUTATIONS: ${{ steps.norm.outputs.allow_mutations }}
+          MODE: ${{ steps.norm.outputs.mode }}
+          # Consumed by deploy/inventory/aws_ec2.yml (aws_ssm file-staging bucket).
+          DEVY_SSM_TRANSFER_BUCKET: ${{ vars.SSM_TRANSFER_BUCKET }}
+        run: |
+          set -o pipefail
+          extra="$(python -c "import json,os;print(json.dumps({'hmcp_profile':os.environ['PROFILE'],'hmcp_allow_mutations':os.environ['ALLOW_MUTATIONS'].lower()=='true'}))")"
+          args=(host-mcp.yml --limit "$HOSTS" -e "$extra")
+          [ "$MODE" = "plan" ] && args+=(--check --diff)
+          echo "ansible-playbook ${args[*]}"
+          ansible-playbook "${args[@]}" 2>&1 | tee /tmp/host-mcp-deploy.txt
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ steps.norm.outputs.mode == 'apply' && '🚀 host-mcp deploy' || '🔎 host-mcp plan' }} — \`${{ steps.norm.outputs.hosts }}\`"
+            echo ""
+            echo "- **Ref:** \`${{ steps.norm.outputs.ref }}\` · **Profile:** \`${{ steps.norm.outputs.profile }}\` · **Mutations:** \`${{ steps.norm.outputs.allow_mutations }}\` · **Mode:** \`${{ steps.norm.outputs.mode }}\` · **Result:** \`${{ steps.run.outcome }}\`"
+            echo ""
+            echo "> Stopped edge boxes are absent from the running-only inventory — a no-match run is expected until you start them by hand (they are billable)."
+            echo ""
+            echo "<details><summary>Ansible output</summary>"
+            echo ""; echo '```'
+            tail -c 55000 /tmp/host-mcp-deploy.txt 2>/dev/null || true
+            echo '```'; echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

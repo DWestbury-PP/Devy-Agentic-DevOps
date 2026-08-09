@@ -1,0 +1,17 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+
+- name: Reload sysctl
+  ansible.builtin.command:
+    cmd: sysctl --system
+  become: true
+  changed_when: true
+
+- name: Restart host-mcp
+  ansible.builtin.systemd_service:
+    name: agentic-devops-host-mcp.service
+    state: restarted
+  become: true

@@ -43,6 +43,20 @@ def _is_write_tool(tool: Any) -> bool:
     return ann is not None and getattr(ann, "readOnlyHint", None) is False
 
 
+def _auth_headers(cfg: Any) -> Optional[dict[str, str]]:
+    """HTTP auth headers for a streamable-HTTP MCP mount. Default carries the token as
+    ``Authorization: Bearer <token>``; a custom ``auth_header`` (e.g. Grafana MCP's
+    ``X-Grafana-Api-Key``, which is NOT an Authorization/Bearer header) sends the token
+    verbatim in that header instead. Returns None when there's no token."""
+    token = getattr(cfg, "token", None)
+    if not token:
+        return None
+    header = getattr(cfg, "auth_header", None)
+    if header:
+        return {header: token}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _render_result(result: Any) -> Any:
     """Render an MCP tool result. Text-only results return a ``str`` (the common
     case); a result carrying image content returns a ``ToolResult`` so the base64
@@ -141,7 +155,7 @@ class MCPManager:
             else:
                 from mcp.client.streamable_http import streamablehttp_client
 
-                headers = {"Authorization": f"Bearer {cfg.token}"} if cfg.token else None
+                headers = _auth_headers(cfg)
                 async with streamablehttp_client(cfg.url or "", headers=headers) as (read, write, _):
                     await self._run_session(cfg, read, write, ready)
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the proxy

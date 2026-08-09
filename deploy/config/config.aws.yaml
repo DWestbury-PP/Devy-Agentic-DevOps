@@ -70,14 +70,14 @@ mcp_servers:
     transport: http
     url: http://host-mcp:8780/mcp
   # Grafana MCP (read-only). The proxy forwards the vaulted token in the X-Grafana-Api-Key
-  # header (mcp-grafana wants that header, not Authorization: Bearer); the sidecar carries
-  # only GRAFANA_URL. Doubly read-only: allow_writes:false here + -disable-write on the server.
+  # header (mcp-grafana wants THAT header, not Authorization: Bearer — hence auth_header);
+  # the sidecar carries only GRAFANA_URL. Read-only: -disable-write on the server + the
+  # proxy's readOnlyHint write-filter withholds any write tool from the assistant.
   - name: grafana
     transport: http
     url: http://grafana-mcp:8000/mcp
     auth_header: X-Grafana-Api-Key
     secret_ref: devy/mcp/grafana-cloud
-    allow_writes: false
 
 # Password mode (no SSO edge in the AWS variant yet — that's readiness #5/#7). Identity
 # is honor-system over the private SSM tunnel. Unverified chat callers get `operator`

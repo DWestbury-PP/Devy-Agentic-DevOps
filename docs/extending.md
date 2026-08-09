@@ -140,11 +140,15 @@ data source the investigation discovers via `find_tools` and folds into its
 `correlate_timeline` chronology — no core changes. See the RCA walkthrough in the
 [README](../README.md#try-the-rca-demo).
 
-For a third-party server like Grafana's, prefer the **admin MCP tab** (the S-4
-registry) over `config.yaml`: it's the general registration point for external MCP
-services, mounts **read-only by default** (write tools are flagged and only
-callable if you opt in with `allow_writes`), and stores the bearer as a
-vault-mastered `secret_ref` you set on the Secrets tab.
+For a third-party server like Grafana's, the **admin MCP tab** (the S-4 registry) is
+the interactive registration point: it mounts **read-only by default** (write tools
+are flagged and only callable if you opt in with `allow_writes`) and stores the
+bearer as a vault-mastered `secret_ref` you set on the Secrets tab. For a
+**declarative deployment** with no admin plane (e.g. the AWS variant), the same mount
+lives in `config.yaml` `mcp_servers` — `url` + `secret_ref` + `auth_header:
+X-Grafana-Api-Key` — and `deploy/config/config.aws.yaml` does exactly this. Both
+paths honor a custom `auth_header`; pick the registry for a running box, config for a
+version-controlled deploy.
 
 ### Reference: mounting the Grafana MCP (read-only)
 

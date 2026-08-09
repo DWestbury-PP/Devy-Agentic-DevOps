@@ -196,8 +196,11 @@ A second, deployment-level gate lives on the host-MCP sidecar
 Image attachments (composer paperclip/paste) and tool-rendered images (e.g.
 Grafana panels) are stored in a content-addressed (sha256) **S3 blob store** —
 LocalStack in dev, real S3 in prod (same `DEVY_MODE` + AWS wiring as secrets;
-dev needs `AWS_ENDPOINT_URL` set, else attachments are disabled). Blobs are served
-via `GET /v1/blobs/{hash}`. User turns store image *refs*, never base64.
+dev needs `AWS_ENDPOINT_URL` set, else attachments are disabled). Set
+`attachments.bucket` to your bucket name — in the AWS deploy it's `${DEVY_BLOBS_BUCKET}`
+(the `BLOBS_BUCKET` Actions variable), and the instance role needs
+`s3:{Get,Put,Head}Object` on it. Blobs are served via `GET /v1/blobs/{hash}`. User
+turns store image *refs*, never base64.
 
 ## Auth
 

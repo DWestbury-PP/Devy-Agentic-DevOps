@@ -43,8 +43,13 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
-  BUILD_ROLE_ARN: arn:aws:iam::083084509839:role/westbury-gha-devy-build-dev
+  # Account-specific values come from repo-level Actions variables so the public
+  # source carries no account ID / role name. Set under Settings → Secrets and
+  # variables → Actions → Variables (see docs/deploy-design.md § Required variables):
+  #   AWS_REGION      (optional; defaults to us-east-1)
+  #   BUILD_ROLE_ARN  arn:aws:iam::<account>:role/<your-gha-build-role>
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  BUILD_ROLE_ARN: ${{ vars.BUILD_ROLE_ARN }}
   PROJECT_PREFIX: devy
 
 jobs:

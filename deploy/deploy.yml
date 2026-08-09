@@ -20,7 +20,7 @@
 #      whitespace, so any value with a space silently truncates.
 # Static inventory: one line `devy-platform ansible_aws_ssm_instance_id=<i-…>` under
 # [role_platform], plus [role_platform:vars] ansible_connection=community.aws.aws_ssm +
-# ansible_aws_ssm_region + ansible_aws_ssm_bucket_name=westbury-ansible-ssm-transfer-dev.
+# ansible_aws_ssm_region + ansible_aws_ssm_bucket_name=$DEVY_SSM_TRANSFER_BUCKET.
 #
 # Edge deploy (role_edge — host-mcp only) is Phase-2, gated on the Linux host-mcp + bearer-token
 # auth work (readiness #7); a role_edge play joins here when that lands.

@@ -54,8 +54,14 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
-  DEPLOY_ROLE_ARN: arn:aws:iam::083084509839:role/westbury-gha-devy-deploy-dev
+  # Account-specific values come from repo-level Actions variables so the public
+  # source carries no account ID / role name. Set under Settings → Secrets and
+  # variables → Actions → Variables (see docs/deploy-design.md § Required variables):
+  #   AWS_REGION           (optional; defaults to us-east-1)
+  #   DEPLOY_ROLE_ARN      arn:aws:iam::<account>:role/<your-gha-deploy-role>
+  #   SSM_TRANSFER_BUCKET  the aws_ssm file-staging bucket (consumed by the inventory)
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  DEPLOY_ROLE_ARN: ${{ vars.DEPLOY_ROLE_ARN }}
   SSM_PREFIX: /devy/builds
 
 jobs:
@@ -176,6 +182,8 @@ jobs:
           EXTRA_VARS: ${{ needs.resolve.outputs.extra_vars }}
           TARGETS: ${{ needs.resolve.outputs.targets }}
           MODE: ${{ needs.resolve.outputs.mode }}
+          # Consumed by deploy/inventory/aws_ec2.yml (aws_ssm file-staging bucket).
+          DEVY_SSM_TRANSFER_BUCKET: ${{ vars.SSM_TRANSFER_BUCKET }}
         run: |
           set -o pipefail
           args=(deploy.yml --limit "$TARGETS" -e "$EXTRA_VARS")

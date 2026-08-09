@@ -110,10 +110,10 @@ def test_resolve_roles_default_when_nothing_matches():
 def test_email_map_gives_role_without_any_groups():
     # The Gmail case: no group claim at all, role comes purely from the email map.
     priv, pub = _keypair()
-    tok = _sign(priv, {"email": "darrell.westbury@gmail.com", "iss": "idp", "aud": "devy"})
+    tok = _sign(priv, {"email": "admin@example.com", "iss": "idp", "aud": "devy"})
     ja = JwtAuth(public_key=pub, issuer="idp", audience="devy")
-    p = ja.principal(tok, {}, {"darrell.westbury@gmail.com": "admin"}, {}, "viewer")
-    assert p.roles == {"admin"} and p.email == "darrell.westbury@gmail.com"
+    p = ja.principal(tok, {}, {"admin@example.com": "admin"}, {}, "viewer")
+    assert p.roles == {"admin"} and p.email == "admin@example.com"
 
 
 def test_email_map_drives_allowed_tier(tmp_path, pool, pg_url, monkeypatch):

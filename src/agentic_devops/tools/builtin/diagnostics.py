@@ -115,7 +115,7 @@ def _build_argv(check: str, args: dict[str, Any]) -> tuple[Optional[list[str]], 
             "no system log reachable from this environment — tried journalctl, "
             "/var/log/syslog, /var/log/messages. A containerized proxy has no host "
             "syslog. If a host MCP is mounted, use its host tools instead — "
-            "host_journal (recent system logs) or host_reboot_history (reboot / "
+            "host_journal_query (system logs) or host_reboot_history (reboot / "
             "shutdown history), discoverable via find_tools(category='host'). "
             "Otherwise run the host MCP on the target host (or a host with systemd)."
         )
@@ -201,7 +201,7 @@ def build_diagnostics_tool(
             "don't over-trust a single reading as purely container-local. There is no "
             "host syslog here. For authoritative host state — disk, memory, reboot "
             "history, system logs, services — use the mounted host MCP tools "
-            "(host_journal, host_reboot_history, host_disk, …) via find_tools(category='host')."
+            "(host_journal_query, host_reboot_history, host_disk, …) via find_tools(category='host')."
         )
         when_to_use = (
             "Only when asked specifically about the proxy's OWN container/process "

@@ -19,15 +19,17 @@ diagnostics — no shell, no mutations:
 
 - **Resource:** `disk` (usage + inodes on macOS), `memory` (pressure / free),
   `cpu_load`, `processes` (ranked by CPU), `top_snapshot` (load + memory totals,
-  per-process state), `disk_io` (I/O throughput + iowait — macOS).
+  per-process state), `disk_io` (I/O throughput + iowait).
 - **Network:** `network` (listening sockets), `connections` (sockets **with the
   owning process**), and reachability — `ping_host`, `dns_lookup` (the host's
   *real* resolver/cache), `dns_config`, `http_check` (endpoint status + DNS / TLS /
-  total latency) — macOS.
-- **Logs:** the systemd journal family on Linux (`journal`, `journal_unit`,
-  `journal_grep`, `journal_priority`, `journal_kernel`, `journal_boot`); on macOS
-  the unified-log store via **`log_query`** (predicate + severity + relative window
-  or absolute start/end). `tail_file` reads a service's own redirected error log —
+  total latency).
+- **Logs:** on Linux, the systemd journal via **`journal_query`** (one rich,
+  indexed query — an absolute `since`/`until` window + severity floor + unit +
+  grep, composable in one call), plus `journal_kernel` (dmesg-style) and
+  `journal_boot` (a specific boot); on macOS the unified-log store via
+  **`log_query`** (predicate + severity + relative window or absolute start/end).
+  `tail_file` reads a service's own redirected error log —
   but only one that resolves inside an operator-declared allow-list of log
   directories (default `/var/log`, `/opt/homebrew/var/log`, `/usr/local/var/log`,
   `/Library/Logs`). It exists for the case the journal/unified log can't cover: a
@@ -36,14 +38,16 @@ diagnostics — no shell, no mutations:
   crash-loops actually lives. The path is `realpath`-resolved and rejected unless
   it lands within an allowed root, so `..` traversal and symlink escapes can't reach
   anything else.
-- **Boot / power / crash:** `reboot_history` (restart history), `boot_time` (exact
-  boot = the *recovery* instant), `panic_reports`, `thermal_status`,
-  `power_settings` — macOS.
+- **Boot / time / power / crash:** `reboot_history` (restart history), `boot_time`
+  (exact boot = the *recovery* instant), `time_sync` (clock / timezone / NTP-sync —
+  Linux; the local-vs-UTC offset to read before correlating with dashboards); macOS
+  adds `panic_reports`, `thermal_status`, `power_settings`.
 - **Services / daemons:** `services` (the manager's inventory + state),
   `service_status` (one named service — is it up, and why did it last exit?),
-  cross-OS via systemd on Linux and launchd on macOS; plus `brew_services`
-  (Homebrew-managed services, macOS).
-- **Hardware:** `hardware_info` (model / chip / RAM / serial — macOS).
+  `failed_units` (the failed set right now — Linux), cross-OS via systemd on Linux
+  and launchd on macOS; plus `brew_services` (Homebrew-managed services, macOS).
+- **Hardware:** `hardware_info` (CPU / cores / arch via `lscpu` on Linux;
+  model / chip / RAM / serial on macOS).
 - **Docker** (needs access to the Docker socket): `docker_ps`, `docker_ps_all`,
   `docker_logs`, `docker_inspect`, `docker_stats`, `docker_top`, `docker_images`,
   `docker_system_df`.
@@ -71,7 +75,7 @@ Genuinely portable checks share one command; the rest diverge per-OS:
 |---|---|---|
 | `disk` / `cpu_load` | `df -h` / `uptime` | `df -h` (+inodes) / `uptime` |
 | `memory` | `free -h` | `memory_pressure -Q` |
-| `os_info` | `uname -a` | `sw_vers` |
+| `os_info` | `hostnamectl` | `sw_vers` |
 | `network` | `ss -tuln` | `netstat -an -p tcp` |
 | `connections` | `ss -tunap` | `lsof -nP -iTCP` |
 | `processes` / `top_snapshot` | `ps` / `top -bn1` | `ps` / `top -l 1` |
@@ -79,22 +83,23 @@ Genuinely portable checks share one command; the rest diverge per-OS:
 | `services` / `service_status` | `systemctl …` | `launchctl …` |
 | `restart_service` (gated) | `systemctl restart` | `brew services restart` |
 
-**Linux-native** (systemd / journald) — indexed, server-side journal filters, the
+**Linux-native** (systemd / journald) — indexed, server-side log queries, the
 surgical way to pull an incident slice on a production host without dumping and
-scanning: `journal`, `journal_unit`, `journal_grep`, `journal_priority`
-(severity floor), `journal_kernel` (dmesg-style), `journal_boot` (a specific
-boot's log — default the previous one), and the gated `reload_config`.
+scanning: `journal_query` (one rich primitive — an absolute `since`/`until`
+window, severity floor, unit, and grep, composable in one call), `journal_kernel`
+(dmesg-style), `journal_boot` (a specific boot's log — default the previous one),
+`failed_units` (the failed set right now), `time_sync` (clock / timezone / NTP),
+and the gated `reload_config`.
 
 **macOS-native** (unified log, `pmset`, launchd, BSD tools): `log_query`,
-`panic_reports`, `thermal_status`, `power_settings`, `disk_io`, `boot_time`,
-`ping_host`, `dns_lookup`, `dns_config`, `http_check`, `hardware_info`,
-`brew_services`.
+`panic_reports`, `thermal_status`, `power_settings`, `brew_services`.
 
 > Authored independently on purpose: forcing one cross-OS command set had quietly
-> amputated macOS's best diagnostics — the unified log's severity/boundary power,
-> `pmset` power/thermal telemetry, native reachability. Each OS now gets its native
-> depth. *(The macOS surface is complete; the Linux surface gets the same
-> strengths-first pass next.)*
+> amputated each OS's best diagnostics — macOS's unified-log severity/boundary
+> power and `pmset` telemetry; Linux's journald filters and systemd/`hostnamectl`
+> reach. Each OS now gets its native depth. *(Both surfaces are now authored;
+> genuinely portable primitives — `df`, `uptime`, `last`, reachability via `curl`,
+> the `docker_*` family — stay shared.)*
 
 ### macOS unified log — `log_query`
 

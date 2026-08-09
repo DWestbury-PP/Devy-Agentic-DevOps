@@ -10,8 +10,9 @@
 # Per-OS authoring: a check with only a `Linux:` (or only `Darwin:`) argv is
 # advertised ONLY on that OS. Each host therefore presents a coherent, native
 # surface authored to that OS's strengths — no lowest-common-denominator subset.
-# (macOS is authored here; the Linux surface gets the same treatment in its own
-# pass. Genuinely portable primitives — df, uptime, last, docker — stay shared.)
+# (Both macOS and Linux are now authored to their strengths — macOS via the
+# unified log + pmset/system_profiler, Linux via journald + systemd/hostnamectl.
+# Genuinely portable primitives — df, uptime, last, docker — stay shared.)
 #
 # This is the SecOps boundary: the agent can read host + Docker health, sweep
 # logs, and run common diagnostics — but it can never get a shell, and the
@@ -41,9 +42,9 @@ checks:
 
   os_info:
     profile: read-only
-    description: "OS / kernel identification."
+    description: "OS / kernel / machine identification — 'what box and what OS is this?'. Linux: `hostnamectl` (distribution PRETTY_NAME + version, kernel, architecture, virtualization, hardware vendor/model, machine-id — one clean read). macOS: `sw_vers` (product name + version + build)."
     platform:
-      Linux: ["uname", "-a"]
+      Linux: ["hostnamectl"]
       Darwin: ["sw_vers"]
 
   network:
@@ -67,9 +68,16 @@ checks:
 
   boot_time:
     profile: read-only
-    description: "Exact system boot time (`sysctl -n kern.boottime`) — the precise moment the host came up, i.e. the RECOVERY time after an outage or restart. macOS only. Pairs with `log_query --end <boot>` to find the last log activity BEFORE the boot (the failure ONSET — a distinct timestamp from recovery; do not conflate them)."
+    description: "Exact system boot time — the precise moment the host came up, i.e. the RECOVERY time after an outage or restart. Linux: `uptime -s` ('YYYY-MM-DD HH:MM:SS', local time). macOS: `sysctl -n kern.boottime`. Pairs with a bounded log query BEFORE the boot to find the failure ONSET (a distinct timestamp from recovery — do not conflate them): `journal_query --until <boot>` on Linux, `log_query --end <boot>` on macOS."
     platform:
+      Linux: ["uptime", "-s"]
       Darwin: ["sysctl", "-n", "kern.boottime"]
+
+  time_sync:
+    profile: read-only
+    description: "Clock, timezone, and NTP synchronization state (`timedatectl`) — the host's LOCAL time, UTC time, configured timezone, and whether the system clock is NTP-synchronized. Linux/systemd only. IMPORTANT for RCA correlation: host tools report the host's LOCAL time, while metrics/log backends (Prometheus/Loki/Grafana) are usually UTC — read the offset here before correlating a host timestamp against a dashboard, and flag clock drift (unsynchronized) as a correlation hazard."
+    platform:
+      Linux: ["timedatectl"]
 
   # ---- Host: diagnostic -------------------------------------------------
   processes:
@@ -88,8 +96,9 @@ checks:
 
   disk_io:
     profile: diagnostic
-    description: "Disk I/O throughput and the CPU time-split (`iostat -c 2`, two 1-second samples): per-disk tps / KB-per-transfer / MB-per-second plus the us/sy/id CPU breakdown. The answer to 'is the box slow because of DISK I/O (or iowait)?' that `disk` (space only) and `top_snapshot` can't give. macOS only (Linux iostat flags differ; added in the Linux pass)."
+    description: "Disk I/O throughput and the CPU time-split — the answer to 'is the box slow because of DISK I/O (or iowait)?' that `disk` (space only) and `top_snapshot` can't give. Linux: `iostat -xz 1 2` (per-device util% / await / r_await / w_await plus the us/sy/iowait CPU split; two 1-second samples — requires the `sysstat` package, which the native install provisions). macOS: `iostat -c 2` (per-disk tps / KB-per-transfer / MB-per-second + CPU split)."
     platform:
+      Linux: ["iostat", "-xz", "1", "2"]
       Darwin: ["iostat", "-c", "2"]
 
   connections:
@@ -99,76 +108,50 @@ checks:
       Linux: ["ss", "-tunap"]
       Darwin: ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN,ESTABLISHED"]
 
-  # ---- Linux journald native filters (indexed, server-side) — the surgical,
-  #      cheap way to pull an incident slice on a production host. Linux-only;
-  #      macOS uses log_query (below), whose predicate covers the same ground
-  #      (severity via messageType, kernel/boot via process/predicate).
-  journal:
+  # ---- Linux journald — the crown jewel. journald is indexed and server-side, so
+  #      ONE rich primitive (journal_query) exposes its real power: absolute
+  #      incident-window bounds (--since/--until), server-side severity (-p), unit
+  #      (-u) and text (--grep) scoping — all composable in a single call. This is
+  #      the Linux mirror of the macOS unified-log `log_query`. Linux-only.
+  #      journal_kernel (-k) and journal_boot (prior boot) stay separate below —
+  #      each reads as its own investigative door.
+  journal_query:
     profile: diagnostic
-    description: "Recent systemd journal entries (Linux). macOS has no equivalent here — use `log_query` (the unified-log store) with a scoped predicate."
+    description: "Query the systemd journal (Linux) — the primary log door on a host running under systemd (Amazon Linux 2023, RHEL, Fedora, Ubuntu). One rich, indexed query that composes four scopes: an absolute incident WINDOW via `since`/`until` (accepts full 'YYYY-MM-DD HH:MM:SS', a bare 'YYYY-MM-DD', or a relative expression journald understands — '1 hour ago', 'yesterday', '-2h'); minimum SEVERITY via `priority` (err = errors and worse — filtered server-side, far cheaper than pulling everything and scanning); a systemd `unit` (e.g. nginx.service); and a text/regex `grep`. Combine them freely — e.g. errors from sshd.service in the last 30 minutes. With no filters it returns the most recent `lines` entries. This is the Linux analogue of the macOS `log_query`. For KERNEL messages (OOM kills, hardware faults) use `journal_kernel`; for a specific PRIOR boot use `journal_boot`."
     platform:
       Linux: ["journalctl", "--no-pager", "-n", "{lines}"]
     args:
       lines:
         type: int
-        default: 100
-        min: 1
-        max: 1000
-        description: "Number of recent lines."
-
-  journal_unit:
-    profile: diagnostic
-    description: "Recent journal entries for one systemd unit (log sweep; Linux/systemd only)."
-    platform:
-      Linux: ["journalctl", "--no-pager", "-n", "{lines}", "-u", "{unit}"]
-    args:
-      unit:
-        type: string
-        required: true
-        pattern: "^[A-Za-z0-9@._-]+$"
-        description: "systemd unit, e.g. nginx.service."
-      lines:
-        type: int
         default: 200
         min: 1
-        max: 2000
-        description: "Number of recent lines."
-
-  journal_grep:
-    profile: diagnostic
-    description: "Search recent systemd journal entries for a pattern (Linux; `journalctl --grep`). macOS uses `log_query` with an `eventMessage CONTAINS[c]` predicate instead (its /var/log/system.log is effectively empty on modern macOS)."
-    platform:
-      Linux: ["journalctl", "--no-pager", "-n", "{lines}", "--grep", "{pattern}"]
-    args:
-      pattern:
+        max: 5000
+        description: "Max entries to return (the safety cap; narrow with since/until/priority/unit/grep rather than raising this)."
+      since:
         type: string
-        required: true
-        pattern: "^[^\\n]{1,120}$"
-        description: "Text/regex to grep for (max 120 chars, single line)."
-      lines:
-        type: int
-        default: 200
-        min: 1
-        max: 2000
-        description: "Max matching lines to return."
-
-  journal_priority:
-    profile: diagnostic
-    description: "Recent journal entries at or above a severity — e.g. errors only. Filtered server-side by journald (indexed), so it's far cheaper than pulling everything and scanning. Linux/systemd only (macOS: `log_query` with `messageType == 16` for errors / `17` for faults)."
-    platform:
-      Linux: ["journalctl", "--no-pager", "-p", "{priority}", "-n", "{lines}"]
-    args:
+        flag: "--since"
+        pattern: "^[A-Za-z0-9 :.,+-]{1,40}$"
+        description: "Start of the window — absolute 'YYYY-MM-DD HH:MM:SS' (or bare 'YYYY-MM-DD'), or a relative expression journald accepts ('1 hour ago', 'yesterday', '-2h'). Scopes the query to an incident interval; passed as one argument, never a shell."
+      until:
+        type: string
+        flag: "--until"
+        pattern: "^[A-Za-z0-9 :.,+-]{1,40}$"
+        description: "End of the window — same formats as `since` (defaults to now when only `since` is given)."
       priority:
         type: string
-        default: "err"
+        flag: "-p"
         enum: ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
-        description: "Lowest severity to include (err = errors and worse; warning includes warnings)."
-      lines:
-        type: int
-        default: 200
-        min: 1
-        max: 2000
-        description: "Max entries to return."
+        description: "Lowest severity to include, filtered server-side (err = errors and worse; warning includes warnings)."
+      unit:
+        type: string
+        flag: "-u"
+        pattern: "^[A-Za-z0-9@._-]+$"
+        description: "Restrict to one systemd unit, e.g. nginx.service."
+      grep:
+        type: string
+        flag: "--grep"
+        pattern: "^[^\\n]{1,120}$"
+        description: "Text/regex to match in the message (max 120 chars, single line); passed as one argument, never a shell."
 
   journal_kernel:
     profile: diagnostic
@@ -283,6 +266,12 @@ checks:
         pattern: "^[A-Za-z0-9@._-]+$"
         description: "Service identifier — a systemd unit on Linux (nginx.service) or a launchd label on macOS (homebrew.mxcl.alloy)."
 
+  failed_units:
+    profile: diagnostic
+    description: "Services in the FAILED state right now (`systemctl --failed`) — the single highest-signal 'what is broken on this host?' read. If a daemon crashed or wouldn't start it shows here; follow up with `service_status <unit>` for why it last exited and `journal_query -u <unit>` for its logs. Linux/systemd only (on macOS a launchd job with a non-zero last-exit surfaces via `services`)."
+    platform:
+      Linux: ["systemctl", "--failed", "--no-pager", "--no-legend"]
+
   brew_services:
     profile: diagnostic
     description: "Homebrew-managed services and their state (`brew services list`) — started/stopped/error plus the managing user. macOS-idiomatic: many locally-installed agents (Grafana Alloy, databases, exporters) run as Homebrew services rather than raw launchd jobs. macOS only (Homebrew is the common package/service manager on dev Macs; Linux uses systemd)."
@@ -319,8 +308,9 @@ checks:
   #      these tell you whether the host can actually REACH and RESOLVE things.
   ping_host:
     profile: diagnostic
-    description: "ICMP reachability + round-trip latency to a host (`ping -c {count} -t {timeout} {host}`) — 'can this host reach X, and how fast?'. macOS only (ping flags differ on Linux; added in the Linux pass). host is a single argument, never a shell."
+    description: "ICMP reachability + round-trip latency to a host — 'can this host reach X, and how fast?'. Linux: `ping -c {count} -w {timeout} {host}` (`-w` = overall deadline in seconds). macOS: `ping -c {count} -t {timeout} {host}` (`-t` = timeout). host is a single argument, never a shell."
     platform:
+      Linux: ["ping", "-c", "{count}", "-w", "{timeout}", "{host}"]
       Darwin: ["ping", "-c", "{count}", "-t", "{timeout}", "{host}"]
     args:
       host:
@@ -343,8 +333,9 @@ checks:
 
   dns_lookup:
     profile: diagnostic
-    description: "Resolve a hostname via the host's ACTUAL resolver and cache (`dscacheutil -q host -a name {host}`) — reflects what THIS host sees for DNS (split-horizon, /etc/hosts, negative cache), not a public resolver. 'Is DNS resolving correctly here?'. macOS only."
+    description: "Resolve a hostname via the host's ACTUAL resolver and nsswitch stack — reflects what THIS host sees for DNS (split-horizon, /etc/hosts, systemd-resolved cache), not a public resolver. 'Is DNS resolving correctly here?'. Linux: `getent hosts {host}` (goes through nsswitch — files + DNS + resolved). macOS: `dscacheutil -q host -a name {host}`."
     platform:
+      Linux: ["getent", "hosts", "{host}"]
       Darwin: ["dscacheutil", "-q", "host", "-a", "name", "{host}"]
     args:
       host:
@@ -356,8 +347,9 @@ checks:
   http_check:
     profile: diagnostic
     timeout: 30
-    description: "HTTP(S) endpoint health with timing (`curl` → status code plus DNS / TLS-handshake / total latency; body discarded to /dev/null) — 'is this endpoint up, is TLS ok, and where is the time going?'. GET only. macOS only (curl is portable; added to Linux in the pass). The URL is a single argument, never a shell."
+    description: "HTTP(S) endpoint health with timing (`curl` → status code plus DNS / TLS-handshake / total latency; body discarded to /dev/null) — 'is this endpoint up, is TLS ok, and where is the time going?'. GET only. Cross-OS (curl is portable — identical argv on Linux and macOS). The URL is a single argument, never a shell."
     platform:
+      Linux: ["curl", "-sS", "-o", "/dev/null", "-w", "http=%{http_code} dns=%{time_namelookup}s tls=%{time_appconnect}s total=%{time_total}s", "--max-time", "{timeout}", "{url}"]
       Darwin: ["curl", "-sS", "-o", "/dev/null", "-w", "http=%{http_code} dns=%{time_namelookup}s tls=%{time_appconnect}s total=%{time_total}s", "--max-time", "{timeout}", "{url}"]
     args:
       url:
@@ -374,15 +366,17 @@ checks:
 
   dns_config:
     profile: read-only
-    description: "The host's DNS resolver configuration (`scutil --dns`) — configured nameservers, search domains, and per-resolver scoping. 'What DNS is this host actually configured to use?' (complements `dns_lookup`, which tests resolution). macOS only."
+    description: "The host's DNS resolver configuration — 'what DNS is this host actually configured to use?' (complements `dns_lookup`, which tests resolution). Linux: `cat /etc/resolv.conf` (nameservers + search domains). NOTE: on systemd-resolved hosts (typically Ubuntu) resolv.conf shows only the local stub `127.0.0.53` — the real upstream servers sit behind it, so use `dns_lookup` to confirm resolution actually works. macOS: `scutil --dns` (per-resolver scoping)."
     platform:
+      Linux: ["cat", "/etc/resolv.conf"]
       Darwin: ["scutil", "--dns"]
 
   # ---- Hardware context (macOS) --------------------------------------------
   hardware_info:
     profile: read-only
-    description: "Hardware identification (`system_profiler SPHardwareDataType`) — model, chip, core/memory configuration, and serial. Context for 'what box is this?' when correlating incidents across hosts. macOS only."
+    description: "Hardware identification — context for 'what box is this?' when correlating incidents across hosts. Linux: `lscpu` (CPU model, cores/sockets, architecture, virtualization flags; RAM total is in `memory`, deeper board/DMI detail needs root and is out of scope). macOS: `system_profiler SPHardwareDataType` (model, chip, core/memory config, serial)."
     platform:
+      Linux: ["lscpu"]
       Darwin: ["system_profiler", "SPHardwareDataType"]
 
   # ---- Docker: diagnostic (read-only; requires docker.sock access) ------

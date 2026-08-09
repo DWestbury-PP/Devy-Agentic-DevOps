@@ -91,40 +91,47 @@ def test_docker_inspect_and_top_require_valid_container():
         assert argv[-1] == "web"  # substituted as a single, final token
 
 
-def test_journal_is_linux_only(monkeypatch):
-    # Mac-first pass: `journal` (recent journald entries) is now authored Linux-only;
-    # macOS reaches the far richer unified log through `log_query` instead. Cross-OS
-    # symmetry was dropped so each OS is authored to its strengths.
+def test_journal_query_is_linux_only(monkeypatch):
+    # Linux pass: the 4-tool journal family (journal/journal_priority/journal_grep/
+    # journal_unit) folded into ONE rich `journal_query` — the Linux mirror of the
+    # macOS unified-log `log_query`. Linux-only; macOS uses log_query instead.
     al = _allowlist()
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
-    argv, err = al.build_argv("journal", {})
-    assert err is None and argv[0] == "journalctl"
-    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
-    _, err = al.build_argv("journal", {})
-    assert err and "not supported" in err
-
-
-def test_journal_grep_is_linux_only(monkeypatch):
-    # macOS variant removed — /var/log/system.log is effectively empty on modern
-    # macOS (measured: 0 lines). macOS greps the unified log via a log_query predicate.
-    al = _allowlist()
-    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
-    argv, err = al.build_argv("journal_grep", {"pattern": "panic", "lines": 50})
+    argv, err = al.build_argv("journal_query", {})
     assert err is None
-    assert argv[0] == "journalctl" and "--grep" in argv
-    assert argv[argv.index("--grep") + 1] == "panic"     # pattern its own token
-    assert "50" in argv
+    assert argv == ["journalctl", "--no-pager", "-n", "200"]   # no filters = recent slice
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
-    _, err = al.build_argv("journal_grep", {"pattern": "panic"})
+    _, err = al.build_argv("journal_query", {})
     assert err and "not supported" in err
+    # the folded-away tools no longer exist under any switch
+    for gone in ("journal", "journal_priority", "journal_grep", "journal_unit"):
+        assert gone not in al._checks
 
 
-def test_journal_unit_stays_linux_only(monkeypatch):
-    # Genuinely systemd-specific checks report cleanly on macOS rather than misfiring.
+def test_journal_query_composes_bounds_severity_unit_grep(monkeypatch):
+    # The rich primitive composes an absolute window (--since/--until), server-side
+    # severity (-p), a systemd unit (-u) and text (--grep) in one indexed call —
+    # each an optional flag-arg that contributes nothing when absent.
     al = _allowlist()
-    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
-    _, err = al.build_argv("journal_unit", {"unit": "nginx.service"})
-    assert err and "not supported" in err
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    argv, err = al.build_argv("journal_query", {
+        "lines": 50, "since": "2026-08-09 14:00:00", "until": "2026-08-09 15:00:00",
+        "priority": "err", "unit": "sshd.service", "grep": "denied"})
+    assert err is None
+    assert argv[:4] == ["journalctl", "--no-pager", "-n", "50"]
+    assert argv[argv.index("--since") + 1] == "2026-08-09 14:00:00"   # one whole token
+    assert argv[argv.index("--until") + 1] == "2026-08-09 15:00:00"
+    assert argv[argv.index("-p") + 1] == "err"
+    assert argv[argv.index("-u") + 1] == "sshd.service"
+    assert argv[argv.index("--grep") + 1] == "denied"
+    # an absent flag-arg emits nothing
+    argv, err = al.build_argv("journal_query", {"lines": 10})
+    assert err is None and argv == ["journalctl", "--no-pager", "-n", "10"]
+    # enum guards priority; unit pattern guards injection
+    _, err = al.build_argv("journal_query", {"priority": "bogus"})
+    assert err
+    _, err = al.build_argv("journal_query", {"unit": "a; rm -rf /"})
+    assert err
 
 
 def test_reboot_history_is_read_only_and_portable(monkeypatch):
@@ -211,19 +218,12 @@ def test_panic_reports_macos_only(monkeypatch):
     assert err and "not supported" in err
 
 
-def test_linux_journald_native_filters(monkeypatch):
+def test_linux_journald_kernel_and_boot(monkeypatch):
     al = _allowlist()
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
 
-    # severity filter (indexed, server-side)
-    argv, err = al.build_argv("journal_priority", {})
-    assert err is None
-    assert argv == ["journalctl", "--no-pager", "-p", "err", "-n", "200"]
-    # enum guards the priority value
-    _, err = al.build_argv("journal_priority", {"priority": "bogus"})
-    assert err
-
-    # kernel-only (dmesg-style)
+    # kernel-only (dmesg-style) — its own investigative door, kept separate from
+    # the rich journal_query fold.
     argv, err = al.build_argv("journal_kernel", {"lines": 50})
     assert err is None
     assert argv == ["journalctl", "--no-pager", "-k", "-n", "50"]
@@ -235,28 +235,30 @@ def test_linux_journald_native_filters(monkeypatch):
     # boot offset is pattern-guarded (no injection, no arbitrary flags)
     _, err = al.build_argv("journal_boot", {"boot": "; reboot"})
     assert err
+    # enum guards journal_boot's priority
+    _, err = al.build_argv("journal_boot", {"priority": "bogus"})
+    assert err
 
 
-def test_linux_journald_filters_not_supported_on_macos(monkeypatch):
+def test_linux_journal_tools_not_supported_on_macos(monkeypatch):
     al = _allowlist()
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
-    for check in ("journal_priority", "journal_kernel", "journal_boot"):
+    for check in ("journal_query", "journal_kernel", "journal_boot"):
         _, err = al.build_argv(check, {})
         assert err and "not supported" in err, check
 
 
-def test_journal_grep_pattern_constraint():
-    # Test the pattern constraint directly on the ArgSpec — platform-independent and
-    # the security-relevant bit. Single-argv-token substitution is covered elsewhere.
-    spec = _allowlist("diagnostic")._checks["journal_grep"].args["pattern"]
-    # shell metacharacters are fine as DATA — they only ever become one argv
-    # token, never a shell command.
-    val, err = spec.validate("pattern", "error|panic; rm -rf /")
+def test_journal_query_grep_pattern_constraint():
+    # Test the grep flag-arg's pattern directly on the ArgSpec — platform-independent
+    # and the security-relevant bit (the value only ever becomes one argv token).
+    spec = _allowlist("diagnostic")._checks["journal_query"].args["grep"]
+    # shell metacharacters are fine as DATA — never a shell command.
+    val, err = spec.validate("grep", "error|panic; rm -rf /")
     assert err is None and val == "error|panic; rm -rf /"
     # newlines and over-length patterns are rejected
-    _, err = spec.validate("pattern", "line1\nline2")
+    _, err = spec.validate("grep", "line1\nline2")
     assert err
-    _, err = spec.validate("pattern", "x" * 200)
+    _, err = spec.validate("grep", "x" * 200)
     assert err
 
 
@@ -541,14 +543,16 @@ def test_optional_flag_args_and_suppression():
 def test_available_checks_filters_by_current_os(monkeypatch):
     # A check with only a Darwin (or only a Linux) argv is advertised only on that OS
     # — the basis for authoring each host to its native strengths, no LCD subset.
+    # (boot_time/disk_io/reachability are now CROSS-OS, so they can't mark a side;
+    # use the genuinely OS-exclusive checks as the markers.)
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
     names = {c.name for c in _allowlist().available_checks()}
-    assert {"log_query", "boot_time", "thermal_status", "brew_services"} <= names
-    assert "journal" not in names and "journal_priority" not in names  # Linux-only
+    assert {"log_query", "thermal_status", "power_settings", "brew_services"} <= names
+    assert "journal_query" not in names and "failed_units" not in names  # Linux-only
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
     names = {c.name for c in _allowlist().available_checks()}
-    assert {"journal", "journal_priority", "journal_kernel"} <= names
-    assert "log_query" not in names and "boot_time" not in names  # Darwin-only
+    assert {"journal_query", "journal_kernel", "failed_units", "time_sync"} <= names
+    assert "log_query" not in names and "thermal_status" not in names  # Darwin-only
 
 
 def test_log_query_absolute_bounds_supersede_window(monkeypatch):
@@ -593,8 +597,42 @@ def test_new_mac_primitives_build_and_validate(monkeypatch):
     assert err is None and argv[-1] == "https://api.example.com/healthz"
     _, err = al.build_argv("http_check", {"url": "file:///etc/passwd"})
     assert err
-    # all macOS-authored — cleanly "not supported" on Linux (never misfire)
+    # genuinely macOS-only telemetry (no Linux equivalent) — cleanly "not supported"
+    # on Linux, never misfire. (boot_time/disk_io/ping_host/http_check/dns_config are
+    # now cross-OS and covered by test_linux_surface_primitives.)
     monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
-    for check in ("boot_time", "thermal_status", "disk_io", "ping_host", "http_check", "dns_config"):
+    for check in ("thermal_status", "power_settings", "panic_reports", "brew_services", "log_query"):
+        _, err = al.build_argv(check, {})
+        assert err and "not supported" in err, check
+
+
+def test_linux_surface_primitives(monkeypatch):
+    # The Linux strengths-first pass: identity/resource/reachability authored to
+    # Linux idiom (the mirror of the Mac primitives above).
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Linux")
+    al = _allowlist()
+    assert al.build_argv("os_info", {})[0] == ["hostnamectl"]
+    assert al.build_argv("boot_time", {})[0] == ["uptime", "-s"]
+    assert al.build_argv("time_sync", {})[0] == ["timedatectl"]
+    assert al.build_argv("disk_io", {})[0] == ["iostat", "-xz", "1", "2"]
+    assert al.build_argv("hardware_info", {})[0] == ["lscpu"]
+    assert al.build_argv("failed_units", {})[0] == ["systemctl", "--failed", "--no-pager", "--no-legend"]
+    assert al.build_argv("dns_config", {})[0] == ["cat", "/etc/resolv.conf"]
+    # reachability: Linux ping uses -w (deadline); getent for resolution; portable curl
+    assert al.build_argv("ping_host", {"host": "1.1.1.1"})[0] == ["ping", "-c", "3", "-w", "5", "1.1.1.1"]
+    assert al.build_argv("dns_lookup", {"host": "example.com"})[0] == ["getent", "hosts", "example.com"]
+    argv, err = al.build_argv("http_check", {"url": "https://api.example.com/healthz"})
+    assert err is None and argv[0] == "curl" and argv[-1] == "https://api.example.com/healthz"
+    # injection guards still apply on the Linux argv
+    _, err = al.build_argv("ping_host", {"host": "a; rm -rf /"})
+    assert err
+    _, err = al.build_argv("dns_lookup", {"host": "a; reboot"})
+    assert err
+
+
+def test_time_sync_and_failed_units_are_linux_only(monkeypatch):
+    al = _allowlist()
+    monkeypatch.setattr(al_mod.platform, "system", lambda: "Darwin")
+    for check in ("time_sync", "failed_units"):
         _, err = al.build_argv(check, {})
         assert err and "not supported" in err, check

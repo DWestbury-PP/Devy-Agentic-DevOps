@@ -22,9 +22,11 @@ devy_compose_files:
 # The workflow's checkout satisfies it automatically; a by-hand run from deploy/ needs nothing.
 devy_compose_src: "{{ playbook_dir | dirname }}"
 
-# config.yaml shipped to the host config dir. The real per-env config is a deploy input — the
-# config axis is parked as its own effort (§13); the example is a working starting point.
-devy_config_file: "{{ devy_compose_src }}/config.example.yaml"
+# config.yaml shipped to the host config dir — the real AWS prod config: correct 4.x Anthropic
+# tiers + cross-provider fallbacks, the containerized host-mcp mount, operator assistant_role
+# (not the example's admin footgun), and AWS deployment_context. Non-secret — provider keys
+# resolve from Secrets Manager at runtime. Override per-env with -e devy_config_file=<path>.
+devy_config_file: "{{ devy_compose_src }}/deploy/config/config.aws.yaml"
 
 # ── Release inputs ──
 # devy_images: {proxy: <uri>, host-mcp: <uri>, chat-ui: <uri>} — a coherent set (one manifest).

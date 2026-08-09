@@ -1,0 +1,80 @@
+# Agentic DevOps — AWS deployment config (prod variant).
+#
+# Shipped to the host's /opt/devy/config/config.yaml by the `devy` deploy role
+# (defaults: devy_config_file). This closes the "config axis parked" gap
+# (deploy-design.md §13) — the deploy no longer ships config.example.yaml.
+#
+# SAFE TO COMMIT: this file carries NO secrets. Provider keys, MCP bearers, etc.
+# resolve from AWS Secrets Manager via the host's instance IAM role at runtime
+# (DEVY_MODE=prod is baked into docker-compose-aws.yml); this file only names them.
+
+default_tier: balanced
+
+database:
+  url: ${DATABASE_URL}   # bundled compose Postgres (docker-compose-aws.yml) unless overridden
+
+# Real AWS Secrets Manager (no LocalStack). DEVY_MODE=prod from the compose file
+# wins regardless; stated here for clarity. boto3 uses the instance IAM role.
+secrets:
+  mode: prod
+  region: us-east-1
+  cache_ttl: 60
+  audit_enabled: true
+
+# Tiers — the 4.x Anthropic family this deployment's key carries (the dev key has
+# NO 3.5 access), each with cross-provider fallbacks (OpenAI → Gemini; keys in SM).
+# Users pick a tier; the concrete model stays hidden. NO Ollama tier here — there is
+# no Ollama server in AWS (the example's fast tier pointed at localhost:11434).
+tiers:
+  fast:
+    model: anthropic/claude-haiku-4-5-20251001
+    label: Fast
+    max_tokens: 2048
+    fallbacks:
+      - { model: openai/gpt-5-mini, max_tokens: 4096 }
+      - { model: gemini/gemini-flash-latest, max_tokens: 4096 }
+  balanced:
+    model: anthropic/claude-sonnet-4-6
+    label: Balanced
+    max_tokens: 4096
+    fallbacks:
+      - { model: openai/gpt-5-mini, max_tokens: 6144 }
+      - { model: gemini/gemini-flash-latest, max_tokens: 6144 }
+  deep:
+    model: anthropic/claude-opus-4-8
+    label: Deep
+    max_tokens: 8192
+    fallbacks:
+      - { model: openai/gpt-5, max_tokens: 8192 }
+      - { model: gemini/gemini-pro-latest, max_tokens: 8192 }
+
+# Mount the containerized host MCP (host + docker diagnostics) on the compose network.
+# It serves without a bearer on the internal net (no host port is published). The
+# vault holds devy/mcp/host for the day the deploy role injects HOST_MCP_TOKEN into
+# both containers (defense-in-depth); until then an internal open mount is correct.
+mcp_servers:
+  - name: host
+    transport: http
+    url: http://host-mcp:8780/mcp
+
+# Password mode (no SSO edge in the AWS variant yet — that's readiness #5/#7). Identity
+# is honor-system over the private SSM tunnel. Unverified chat callers get `operator`
+# (read + host/Docker DIAGNOSTICS), NOT admin — so no elevated/mutating actions without
+# a real verified identity. (The example config's default is `admin`, the footgun.)
+rbac:
+  assistant_role: operator
+  default_role: viewer
+
+# AWS grounding, injected each turn so Devy knows where it runs. NOTE the key caveat:
+# the host MCP is a CONTAINER here, so host_* checks see the container's namespace,
+# not the EC2 host. (Real host inspection = a native/edge host-mcp — readiness #7.)
+deployment_context: "Host: AWS EC2 (Amazon Linux 2023, x86_64), single-node dev/test; the Devy stack runs in Docker on this host. The host MCP runs as a CONTAINER here, so host_* diagnostics inspect the container's own namespace (plus the read-only mounted docker.sock for docker_* checks), NOT the underlying EC2 host — say so when you report host-level findings rather than implying they describe the physical host. Any observability backends (Grafana/Prometheus/Loki) are UTC; state the zone on every timestamp."
+
+# A broad host+docker investigation needs headroom beyond the code default of 16.
+max_iterations: 28
+
+# LangSmith waterfall tracing; key is devy/provider/langsmith in SM. capture follows
+# DEVY_MODE (prod → metadata). Best-effort — a tracing failure never breaks a turn.
+tracing: langsmith
+langsmith:
+  project: devy-aws

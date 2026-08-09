@@ -58,8 +58,8 @@ devy_grafana_url: "{{ lookup('env', 'GRAFANA_URL') | default('', true) }}"
 
 # ── Service tiers ──
 # App tier is recreated on deploy; the data tier (Postgres) is left running (§18.5/§18.7).
-# grafana-mcp + oauth2-proxy are intentionally omitted from Phase-1 (front door / extra MCP
-# come with #5/#7); add them here when their config/secrets are wired.
+# grafana-mcp is now in the app tier (read-only Grafana MCP, config-mounted). oauth2-proxy
+# (the SSO/TLS front door) is still intentionally omitted from Phase-1 — comes with #5/#7.
 devy_app_services: [proxy, host-mcp, chat-ui, grafana-mcp]
 devy_data_services: [postgres]
 

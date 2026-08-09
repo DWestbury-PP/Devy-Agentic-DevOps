@@ -5,10 +5,13 @@ The app-delivery layer that sits on top of the foundation: **`aws-terraform`** p
 software delivery* — reusing the same GitHub-Actions-over-SSM control plane rather than inventing a
 new one. Demo deployable: the **Devy Agentic DevOps** platform onto the 3-host fleet.
 
-> **Status: design-only, pre-build (2026-07-26).** Nothing here is built yet. Dev account only;
-> **stage/prod are breadcrumbs** (same as [`multi-environment.md`](multi-environment.md)).
-> **Config-versioning is deliberately parked** as its own future workstream (§13). This doc captures
-> the framing agreed during design so it carries cleanly into development.
+> **Status: Phase-1 built & live-verified (2026-08-09).** The `deploy/` role, the `deploy.yml` CD
+> workflow, the `build.yml` CI, and the AWS prod config (`deploy/config/config.aws.yaml`) all exist
+> and deploy the platform stack to the dev fleet over SSM — chat, host diagnostics, attachments, and
+> Grafana all verified live on `devy-platform`. Dev account only; **stage/prod are breadcrumbs** (same
+> as [`multi-environment.md`](multi-environment.md)). A **versioned config-retrieval service** remains
+> parked (§13) — but the per-env AWS config now ships with the role; the example placeholder is no
+> longer used.
 
 ---
 
@@ -71,6 +74,8 @@ once for your account; a fork sets its own:
 | `BUILD_ROLE_ARN` | `build.yml` | `arn:aws:iam::<account>:role/<project>-gha-build-<env>` |
 | `DEPLOY_ROLE_ARN` | `deploy.yml` | `arn:aws:iam::<account>:role/<project>-gha-deploy-<env>` |
 | `SSM_TRANSFER_BUCKET` | `deploy.yml` → `inventory/aws_ec2.yml` | the `aws_ssm` file-staging bucket |
+| `BLOBS_BUCKET` | `deploy.yml` → `.env` → config's `${DEVY_BLOBS_BUCKET}` | S3 bucket for image attachments |
+| `GRAFANA_URL` | `deploy.yml` → `.env` → grafana-mcp sidecar + `deployment_context` | Grafana Cloud tenant URL |
 | `AWS_REGION` | both (optional) | defaults to `us-east-1` if unset |
 
 None are secrets (ARNs/account IDs/bucket names aren't credentials) — repo **variables**, not secrets.
@@ -233,12 +238,17 @@ un-erroring.
 targeting makes any gap self-evident); it becomes necessary at fleet scale, where silent skips hide
 inside large runs. Implement then, against this shape.
 
-## 13. Config axis — parked (its own session)
+## 13. Config axis — per-env config shipped; versioned retrieval still parked
 
-Devy's demo-grade config = the **per-env compose overlay + AWS Secrets Manager** (fetched on-host via
+**Update (2026-08-09):** the per-env config now ships — `deploy/config/config.aws.yaml` is a real,
+committed AWS prod config (correct tiers, host+grafana mounts, `assistant_role=operator`, AWS
+`deployment_context`) and the role's `devy_config_file` points at it (no longer `config.example.yaml`).
+Account-specific values stay out of source via `${DEVY_BLOBS_BUCKET}`/`${GRAFANA_URL}` env expansion.
+
+Devy's demo-grade config = that **per-env config file + AWS Secrets Manager** (fetched on-host via
 IAM — the Alloy pattern). Kept **separate from the manifest**, so a fix-forward config change re-runs
 the deploy with new values and **no rebuild** — the demo-grade equivalent of "publish a config
-dot-release, restart to adopt."
+dot-release, restart to adopt." What remains parked is only the *versioned config-retrieval service*:
 
 A full **versioned config-retrieval service** (entrypoint pulls a versioned file by name, injected
 before the core service starts; restart-with-flag to adopt a new dot-release) is a **flagged future
@@ -268,7 +278,8 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **Manifest format & storage:** a compose `.env` of `IMAGE` vars vs a YAML file; git-tracked +
   attached as a GitHub Release asset for official releases.
 - **Webhook security model** (L2): scoped token vs GitHub App vs a small authenticated relay.
-- **Config-versioning approach:** parked — its own session (§13).
+- **Config-versioning approach:** the per-env config file ships (§13); only the *versioned
+  config-retrieval service* remains parked — its own session.
 - **Coverage audit:** the reconcile-against-tags shape is documented (§12); implement at fleet scale,
   not at today's 3-host footprint.
 - **Smoke depth:** the Devy indicative set is defined above; trading-grade depth is deferred (role

@@ -1,0 +1,41 @@
+---
+# host_mcp_native — install the host MCP as a hardened, UNPRIVILEGED systemd
+# service on a Linux host (deploy-design: the native sidecar that replaces the
+# containerized host-mcp so host_* checks see the REAL host). The Ansible mirror
+# of host-mcp/deploy/install-native-linux.sh — idempotent, check-mode-friendly.
+
+# ── Identity + paths on the target host (match the manual installer) ──
+hmcp_user: devy-hostmcp
+hmcp_app_dir: /opt/agentic-devops-host-mcp
+hmcp_venv: "{{ hmcp_app_dir }}/venv"
+hmcp_src_dir: "{{ hmcp_app_dir }}/src" # the shipped host-mcp source (SHA-pinned = the checkout)
+hmcp_env_dir: /etc/agentic-devops
+hmcp_env_file: "{{ hmcp_env_dir }}/host-mcp.env"
+hmcp_unit_path: /etc/systemd/system/agentic-devops-host-mcp.service
+hmcp_audit_dir: /var/log/agentic-devops-host-mcp
+
+# ── Server posture ──
+hmcp_bind: 0.0.0.0 # front with the NSG scoped to Devy's subnet + the bearer token
+hmcp_port: 8781
+hmcp_profile: diagnostic
+# IMMUTABILITY IS THE DEFAULT. Enhanced mode is a deliberate, restart-gated operator
+# act — flip to true only for a bounded DEV/RCA window (and grant the scoped OS
+# privilege for the systemctl verbs separately). Never default-on.
+hmcp_allow_mutations: false
+
+# ── Where the source comes from ──
+# The controller ships the checked-out host-mcp/ tree to the host and pip-installs
+# from that local path — no GitHub egress needed, and the checkout IS the SHA pin.
+# devy_compose_src defaults to the repo root (the play sits in deploy/).
+hmcp_compose_src: "{{ playbook_dir | dirname }}"
+hmcp_source_path: "{{ hmcp_compose_src }}/host-mcp"
+hmcp_unit_src: "{{ hmcp_source_path }}/deploy/agentic-devops-host-mcp.service.example"
+
+# ── The bearer token: the SAME secret the proxy sends to authenticate to host-mcp.
+#    Fetched from Secrets Manager on the CONTROLLER (the deploy role needs
+#    secretsmanager:GetSecretValue on this id) and templated with no_log. ──
+hmcp_token_secret: devy/mcp/host
+hmcp_region: us-east-1
+
+# ── Toggles ──
+hmcp_run_verify: true

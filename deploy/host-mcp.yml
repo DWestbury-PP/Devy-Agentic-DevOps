@@ -1,0 +1,21 @@
+---
+# Devy CD — deploy the NATIVE host-MCP sidecar to a Linux host set over SSM.
+#
+# Deliberately SEPARATE from deploy.yml (the compose app-tier release): a different
+# artifact (a hardened systemd service, not container images), a different target
+# set (the whole fleet — the platform host AND the edge diagnostic hosts), and no
+# image-resolution / migration / smoke lifecycle. Orchestrated by the
+# host-mcp-deploy GitHub Actions workflow (git-SHA-pinned via the checkout it ships).
+#
+#   # by-hand from deploy/ on a Linux controller (dynamic inventory just works):
+#   ansible-playbook host-mcp.yml --limit role_platform
+#   ansible-playbook host-mcp.yml --limit edge-al2023 -e hmcp_profile=diagnostic
+#
+# `hosts: all` + the workflow's `--limit <target>` scopes it (role_platform /
+# role_edge / a single host / all). Stopped edge boxes are simply absent from the
+# running-only inventory — CI never starts a billable instance (by design).
+- name: Deploy the native host MCP sidecar
+  hosts: all
+  gather_facts: true
+  roles:
+    - host_mcp_native

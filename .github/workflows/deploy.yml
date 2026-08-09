@@ -187,6 +187,8 @@ jobs:
           # Rendered into the host .env by the devy role → config.yaml's ${DEVY_BLOBS_BUCKET}
           # (image-attachment S3 bucket). Account-specific, so it lives in an Actions var.
           DEVY_BLOBS_BUCKET: ${{ vars.BLOBS_BUCKET }}
+          # Grafana tenant URL → grafana-mcp sidecar + config.yaml's ${GRAFANA_URL} grounding.
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
         run: |
           set -o pipefail
           args=(deploy.yml --limit "$TARGETS" -e "$EXTRA_VARS")

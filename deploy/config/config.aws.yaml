@@ -69,6 +69,15 @@ mcp_servers:
   - name: host
     transport: http
     url: http://host-mcp:8780/mcp
+  # Grafana MCP (read-only). The proxy forwards the vaulted token in the X-Grafana-Api-Key
+  # header (mcp-grafana wants that header, not Authorization: Bearer); the sidecar carries
+  # only GRAFANA_URL. Doubly read-only: allow_writes:false here + -disable-write on the server.
+  - name: grafana
+    transport: http
+    url: http://grafana-mcp:8000/mcp
+    auth_header: X-Grafana-Api-Key
+    secret_ref: devy/mcp/grafana-cloud
+    allow_writes: false
 
 # Password mode (no SSO edge in the AWS variant yet — that's readiness #5/#7). Identity
 # is honor-system over the private SSM tunnel. Unverified chat callers get `operator`
@@ -81,7 +90,7 @@ rbac:
 # AWS grounding, injected each turn so Devy knows where it runs. NOTE the key caveat:
 # the host MCP is a CONTAINER here, so host_* checks see the container's namespace,
 # not the EC2 host. (Real host inspection = a native/edge host-mcp — readiness #7.)
-deployment_context: "Host: AWS EC2 (Amazon Linux 2023, x86_64), single-node dev/test; the Devy stack runs in Docker on this host. The host MCP runs as a CONTAINER here, so host_* diagnostics inspect the container's own namespace (plus the read-only mounted docker.sock for docker_* checks), NOT the underlying EC2 host — say so when you report host-level findings rather than implying they describe the physical host. Any observability backends (Grafana/Prometheus/Loki) are UTC; state the zone on every timestamp."
+deployment_context: "Host: AWS EC2 (Amazon Linux 2023, x86_64), single-node dev/test; the Devy stack runs in Docker on this host. The host MCP runs as a CONTAINER here, so host_* diagnostics inspect the container's own namespace (plus the read-only mounted docker.sock for docker_* checks), NOT the underlying EC2 host — say so when you report host-level findings rather than implying they describe the physical host. Grafana, Prometheus, and Loki are UTC; state the zone on every timestamp. Grafana Cloud UI base URL is ${GRAFANA_URL} — build ABSOLUTE links from it (a dashboard is <base>/d/<uid>/<slug>, an Explore link uses <base>/explore), or use the generate_deeplink tool; never emit a bare relative /d/... path."
 
 # A broad host+docker investigation needs headroom beyond the code default of 16.
 max_iterations: 28

@@ -50,11 +50,17 @@ devy_env: {}
 # the bucket resolves to "" and attachments are effectively off.
 devy_blobs_bucket: "{{ lookup('env', 'DEVY_BLOBS_BUCKET') | default('', true) }}"
 
+# Grafana tenant URL for the grafana-mcp sidecar + config.yaml's ${GRAFANA_URL} grounding.
+# Account-specific → from the GRAFANA_URL env var (deploy workflow sets it from the
+# GRAFANA_URL Actions var; export for a by-hand run). Empty → the sidecar still starts but
+# has no Grafana to reach (mount will surface an auth/URL error, not crash the deploy).
+devy_grafana_url: "{{ lookup('env', 'GRAFANA_URL') | default('', true) }}"
+
 # ── Service tiers ──
 # App tier is recreated on deploy; the data tier (Postgres) is left running (§18.5/§18.7).
 # grafana-mcp + oauth2-proxy are intentionally omitted from Phase-1 (front door / extra MCP
 # come with #5/#7); add them here when their config/secrets are wired.
-devy_app_services: [proxy, host-mcp, chat-ui]
+devy_app_services: [proxy, host-mcp, chat-ui, grafana-mcp]
 devy_data_services: [postgres]
 
 # ── Toggles + smoke targets ──

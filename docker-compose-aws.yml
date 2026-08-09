@@ -31,6 +31,9 @@ services:
       # S3 blob bucket for image attachments — name is account-specific, rendered into
       # .env by the deploy role from the BLOBS_BUCKET Actions var; config.yaml expands it.
       DEVY_BLOBS_BUCKET: ${DEVY_BLOBS_BUCKET:-}
+      # Grafana tenant URL — config.yaml's deployment_context expands ${GRAFANA_URL} for
+      # absolute dashboard links. Account-specific → rendered from the GRAFANA_URL var.
+      GRAFANA_URL: ${GRAFANA_URL:-}
     volumes:
       # Config dir shipped by the deploy role (config.yaml; no secrets on disk in prod).
       - "${AGENTIC_DEVOPS_CONFIG_DIR:-${HOME}/.config/agentic-devops}:/config"
@@ -99,6 +102,30 @@ services:
     depends_on:
       proxy:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Grafana MCP (read-only, mounted into the proxy's tool router). Stock upstream image,
+  # pinned BY DIGEST to the known-good version the local stack runs (byte-identical). Pulled
+  # from Docker Hub like the Postgres image — NOT one of our ECR-built components. The proxy
+  # forwards the vaulted Grafana token (devy/mcp/grafana-cloud) in the X-Grafana-Api-Key
+  # header per request; only GRAFANA_URL (non-secret tenant) sits on the sidecar. Read-only
+  # doubly: -disable-write here AND allow_writes:false on the proxy mount. Compose-net only.
+  grafana-mcp:
+    image: mcp/grafana@sha256:9362bcf6aa0e44e61f645b905cec03fb346a946a34a4dafecd7f3e28d3724014
+    container_name: agentic-devops-grafana-mcp
+    environment:
+      GRAFANA_URL: ${GRAFANA_URL:-}
+    command:
+      - "-t"
+      - "streamable-http"
+      - "-address"
+      - "0.0.0.0:8000"
+      - "-endpoint-path"
+      - "/mcp"
+      # The proxy dials us by the compose service name — allow that Host value.
+      - "-allowed-hosts"
+      - "grafana-mcp:8000"
+      - "-disable-write"
     restart: unless-stopped
 
 volumes:

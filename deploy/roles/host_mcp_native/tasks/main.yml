@@ -29,7 +29,7 @@
   become: true
   when:
     - not ansible_check_mode
-    - ansible_pkg_mgr in ['dnf', 'dnf5', 'yum']
+    - ansible_facts.pkg_mgr in ['dnf', 'dnf5', 'yum']
 
 - name: Install OS deps (apt family — Ubuntu/Debian)
   ansible.builtin.apt:
@@ -39,11 +39,11 @@
   become: true
   when:
     - not ansible_check_mode
-    - ansible_pkg_mgr == 'apt'
+    - ansible_facts.pkg_mgr == 'apt'
 
 - name: Select the venv interpreter (>=3.10) for this distro
   ansible.builtin.set_fact:
-    hmcp_venv_python: "{{ 'python3.11' if ansible_pkg_mgr in ['dnf', 'dnf5', 'yum'] else 'python3' }}"
+    hmcp_venv_python: "{{ 'python3.11' if ansible_facts.pkg_mgr in ['dnf', 'dnf5', 'yum'] else 'python3' }}"
 
 # ── Unprivileged service user + the ONLY two group grants (journal + docker). ──
 - name: Create the unprivileged service user
@@ -250,7 +250,7 @@
   ansible.builtin.debug:
     msg: >-
       host-mcp native sidecar UP on {{ inventory_hostname }} →
-      http://{{ ansible_default_ipv4.address | default('127.0.0.1') }}:{{ hmcp_port }}/mcp
+      http://{{ ansible_facts.default_ipv4.address | default('127.0.0.1') }}:{{ hmcp_port }}/mcp
       (active={{ hmcp_active.stdout | default('?') }}, probe={{ hmcp_http.stdout | default('?') }}).
       Register this as a `host` MCP mount (config or admin registry); the co-located
       proxy dials it via host.docker.internal:{{ hmcp_port }}.

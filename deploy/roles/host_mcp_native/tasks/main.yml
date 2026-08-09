@@ -93,16 +93,36 @@
   register: hmcp_src_shipped
   when: not ansible_check_mode
 
-# Ensure the venv + deps + package exist (first run installs everything; later a
-# no-op). pip won't reinstall the SAME version on a source change, so...
-- name: Ensure host-mcp is installed in the venv (venv + deps + package)
-  ansible.builtin.pip:
-    name: "{{ hmcp_src_dir }}[http]"
-    virtualenv: "{{ hmcp_venv }}"
-    virtualenv_command: "{{ hmcp_venv_python }} -m venv"
-    state: present
+# Build the venv + install via the venv's OWN pip through `command` — NOT the
+# ansible pip module, which imports `packaging` on the host's auto-discovered
+# interpreter (bare python3.11 lacks it). This also mirrors the shell installer.
+- name: Create the venv (>=3.10 interpreter)
+  ansible.builtin.command:
+    cmd: "{{ hmcp_venv_python }} -m venv {{ hmcp_venv }}"
+    creates: "{{ hmcp_venv }}/bin/python"
   become: true
   when: not ansible_check_mode
+
+- name: Ensure host-mcp + deps are installed in the venv
+  ansible.builtin.command:
+    cmd: "{{ hmcp_venv }}/bin/pip install --upgrade {{ hmcp_src_dir }}[http]"
+  become: true
+  register: hmcp_pip_install
+  changed_when: "'Successfully installed' in hmcp_pip_install.stdout"
+  when: not ansible_check_mode
+  notify: Restart host-mcp
+
+# pip won't reinstall the SAME version on a content change, so force-reinstall JUST
+# the package (no deps) whenever the shipped source changed — an allow-list edit
+# then actually reconciles.
+- name: Reinstall host-mcp on source change (same-version content reconcile)
+  ansible.builtin.command:
+    cmd: "{{ hmcp_venv }}/bin/pip install --force-reinstall --no-deps {{ hmcp_src_dir }}"
+  become: true
+  when:
+    - not ansible_check_mode
+    - hmcp_src_shipped is changed
+  changed_when: true
   notify: Restart host-mcp
 
 # A hardened AMI's umask (077) can leave the venv tree 0700 → the unprivileged
@@ -114,20 +134,6 @@
   become: true
   changed_when: false
   when: not ansible_check_mode
-
-# ...force-reinstall JUST the package (no deps) whenever the shipped source changed,
-# so a same-version content change (e.g. an allow-list edit) actually reconciles.
-- name: Reinstall host-mcp on source change (same-version content reconcile)
-  ansible.builtin.pip:
-    name: "{{ hmcp_src_dir }}"
-    virtualenv: "{{ hmcp_venv }}"
-    extra_args: "--no-deps"          # state=forcereinstall already adds --force-reinstall
-    state: forcereinstall
-  become: true
-  when:
-    - not ansible_check_mode
-    - hmcp_src_shipped is changed
-  notify: Restart host-mcp
 
 # ── Let unprivileged ICMP sockets work (ping_host) WITHOUT CAP_NET_RAW. ──
 - name: Resolve the service user's primary GID

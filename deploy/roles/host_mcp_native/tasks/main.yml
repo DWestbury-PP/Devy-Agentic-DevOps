@@ -19,10 +19,12 @@
       role ships + pip-installs). The deploy workflow's checkout satisfies this.
   run_once: true
 
-# ── OS deps: python venv + sysstat (iostat for disk_io). Distro-aware. ──
+# ── OS deps: a >=3.10 python + sysstat (iostat for disk_io). Distro-aware.
+#    AL2023/RHEL's DEFAULT python3 is 3.9 (too old) — install python3.11 there and
+#    build the venv with it (venv self-bootstraps pip). Ubuntu's python3 is >=3.10. ──
 - name: Install OS deps (dnf family — AL2023/RHEL/Fedora)
   ansible.builtin.dnf:
-    name: [python3, python3-pip, sysstat]
+    name: [python3.11, sysstat]
     state: present
   become: true
   when:
@@ -31,13 +33,17 @@
 
 - name: Install OS deps (apt family — Ubuntu/Debian)
   ansible.builtin.apt:
-    name: [python3, python3-venv, python3-pip, sysstat]
+    name: [python3, python3-venv, sysstat]
     state: present
     update_cache: true
   become: true
   when:
     - not ansible_check_mode
     - ansible_pkg_mgr == 'apt'
+
+- name: Select the venv interpreter (>=3.10) for this distro
+  ansible.builtin.set_fact:
+    hmcp_venv_python: "{{ 'python3.11' if ansible_pkg_mgr in ['dnf', 'dnf5', 'yum'] else 'python3' }}"
 
 # ── Unprivileged service user + the ONLY two group grants (journal + docker). ──
 - name: Create the unprivileged service user
@@ -93,11 +99,21 @@
   ansible.builtin.pip:
     name: "{{ hmcp_src_dir }}[http]"
     virtualenv: "{{ hmcp_venv }}"
-    virtualenv_command: python3 -m venv
+    virtualenv_command: "{{ hmcp_venv_python }} -m venv"
     state: present
   become: true
   when: not ansible_check_mode
   notify: Restart host-mcp
+
+# A hardened AMI's umask (077) can leave the venv tree 0700 → the unprivileged
+# service user can't traverse to the interpreter (203/EXEC). Make it root-owned but
+# world-traversable (a+rX = read for all, +x on dirs only) — data files stay 0644.
+- name: Make the app tree readable + traversable by the service user
+  ansible.builtin.command:
+    cmd: "chmod -R a+rX {{ hmcp_app_dir }}"
+  become: true
+  changed_when: false
+  when: not ansible_check_mode
 
 # ...force-reinstall JUST the package (no deps) whenever the shipped source changed,
 # so a same-version content change (e.g. an allow-list edit) actually reconciles.

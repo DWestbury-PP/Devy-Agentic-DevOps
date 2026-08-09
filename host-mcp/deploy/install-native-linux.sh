@@ -44,18 +44,32 @@ HOST_MCP_PROFILE="${HOST_MCP_PROFILE:-diagnostic}"
 
 if [ "$(id -u)" != "0" ]; then echo "must run as root" >&2; exit 1; fi
 
+# Some hardened AMIs default root's umask to 077 → a venv built under it becomes
+# 0700 and the unprivileged service user can't traverse it (203/EXEC at start).
+# Force a sane umask; the token file is separately locked down below.
+umask 022
+
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
-# 1. package deps: python venv + sysstat (iostat for disk_io). Detect dnf vs apt.
-log "installing OS deps (python3, sysstat)"
+# 1. package deps: a >=3.10 python + sysstat (iostat for disk_io). Detect dnf vs apt.
+#    AL2023/RHEL's DEFAULT python3 is 3.9 (too old for host-mcp) — install python3.11
+#    explicitly there; a venv built with it self-bootstraps pip via ensurepip.
+#    Ubuntu's python3 is already >=3.10. Override with HOST_MCP_PYTHON if needed.
+PY="${HOST_MCP_PYTHON:-}"
+log "installing OS deps (python >=3.10, sysstat)"
 if command -v dnf >/dev/null 2>&1; then
-  dnf install -y python3 python3-pip sysstat >/dev/null
+  dnf install -y python3.11 sysstat >/dev/null
+  : "${PY:=python3.11}"
 elif command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq >/dev/null && apt-get install -y python3 python3-venv python3-pip sysstat >/dev/null
+  apt-get update -qq >/dev/null && apt-get install -y python3 python3-venv sysstat >/dev/null
+  : "${PY:=python3}"
 else
   echo "no supported package manager (dnf/apt) found" >&2; exit 1
 fi
+command -v "$PY" >/dev/null 2>&1 || { echo "python interpreter '$PY' not found after install" >&2; exit 1; }
+"$PY" -c 'import sys; assert sys.version_info[:2] >= (3, 10), sys.version' \
+  || { echo "'$PY' is older than 3.10 — set HOST_MCP_PYTHON to a >=3.10 interpreter" >&2; exit 1; }
 
 # 2. unprivileged service user + group membership (create groups only if present).
 log "ensuring service user ${SERVICE_USER}"
@@ -66,8 +80,11 @@ getent group systemd-journal >/dev/null 2>&1 && usermod -aG systemd-journal "$SE
 getent group docker          >/dev/null 2>&1 && usermod -aG docker "$SERVICE_USER"
 
 # 3. venv + package (pinned source). --upgrade makes re-runs reconcile the version.
-log "building venv + installing host-mcp from: ${HOST_MCP_SOURCE}"
-python3 -m venv "$VENV"
+log "building venv (${PY}) + installing host-mcp from: ${HOST_MCP_SOURCE}"
+install -d -m 0755 "$APP_DIR"
+# --clear so a re-run rebuilds cleanly (no stale interpreter symlinks from a prior
+# attempt with a different python).
+"$PY" -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 if [ -d "$HOST_MCP_SOURCE" ]; then
   # Local checkout: pip accepts "<path>[extra]".
@@ -76,7 +93,10 @@ else
   # Git (or any URL): PEP 508 direct reference — "<dist>[extra] @ <url>".
   "$VENV/bin/pip" install --quiet --upgrade "agentic-devops-host-mcp[http] @ ${HOST_MCP_SOURCE}"
 fi
-chown -R root:root "$APP_DIR"   # code owned by root, executed (read-only) by the service user
+# Code owned by root; readable + TRAVERSABLE by the unprivileged service user
+# (a+rX = read for all, +x on directories only) regardless of the host umask.
+chown -R root:root "$APP_DIR"
+chmod -R a+rX "$APP_DIR"
 
 # 3b. let unprivileged ICMP sockets work (ping_host) WITHOUT CAP_NET_RAW.
 log "enabling unprivileged ping (net.ipv4.ping_group_range)"
@@ -87,7 +107,7 @@ sysctl -q --system || true
 # 4. EnvironmentFile — token 0640 root:devy-hostmcp (readable by the service, not world).
 log "writing ${ENV_FILE}"
 install -d -m 0755 "$ENV_DIR"
-umask 077
+( umask 077   # scope the strict umask to just the token file
 cat > "$ENV_FILE" <<EOF
 # Managed by install-native-linux.sh — do not edit by hand except to toggle
 # enhanced mode (see below). Regenerated on each install.
@@ -102,6 +122,7 @@ HOST_MCP_AUDIT=/var/log/agentic-devops-host-mcp/audit.jsonl
 # privilege grant (scoped polkit/sudoers) for systemctl verbs to actually run:
 # HOST_MCP_ALLOW_MUTATIONS=true
 EOF
+)   # end scoped umask
 chown "root:${SERVICE_USER}" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
 

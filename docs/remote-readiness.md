@@ -94,24 +94,26 @@ pipeline gate on it.
 - **Implicit → explicit:** "the container does whatever on boot" → "a modular, ordered, observable
   startup the pipeline can reason about."
 
-### 7. ⬜ host-mcp to the edges  ⚠️ SECURITY GATE
-Deploy `host-mcp` to the `role_edge` hosts (containerized with `docker.sock`, or native), and open the
-**platform → edge `:8780` SG rule** (the breadcrumb we've carried since the Terraform design). This is
-what makes the proxy↔edge diagnostic mesh (and tier-3 smoke) real.
-
-**Two prerequisites, both currently unmet — do NOT expose host-mcp on the edges without them:**
-- **A RHEL/AL2023/Ubuntu variant of host-mcp.** Today host-mcp is **Mac-only**; there is no Linux build.
-  The edge deploy is blocked on building (and containerizing) that variant.
-- **Bearer-token auth, retrieved from ASM.** An MCP server bound to `docker.sock` with no authentication
-  is a **wide-open RCE surface** — network controls (private subnet + the platform→edge SG) are necessary
-  but **not sufficient** (a compromised proxy or any lateral movement ⇒ full host control on every edge).
-  The Linux variant MUST require a bearer token that the proxy presents and the edge validates, sourced
-  from a new `devy/mcp/host` secret in ASM. That secret then earns the edges a **tightly-scoped** IAM read
-  grant in `aws-terraform` (its own edge permission set — NOT a widening of `devy-platform-secrets`; the
-  hook is already noted in `bootstrap/dev/instance-permission-sets.tf`). App-layer auth + network + secret
-  scope land together as the Phase-2 edge-hardening bundle.
-- **Implicit → explicit:** "I run everything on one box" → "components land on their designated hosts by
-  role, wired by explicit network rules **and mutually authenticated**."
+### 7. ✅ host-mcp to the edges — DONE (native systemd, 2026-08-10; PRs #107–#113)
+Shipped — and **better than the original plan**: the host MCP runs on the edges (and the platform) as a
+**hardened, unprivileged native systemd unit**, NOT a `docker.sock`-bound container, which sidesteps the
+wide-open-RCE concern this gate was about. The proxy↔edge diagnostic mesh is live — verified: Devy
+diagnosed the platform **and** both edge hosts in a single turn. Full treatment: [`docs/host-mcp.md`](host-mcp.md).
+All prerequisites met:
+- **Linux variant of host-mcp** ✅ — a cross-distro native surface (AL2023/RHEL/Fedora + Ubuntu), authored
+  to journald/systemd strengths (`journal_query`, `failed_units`, `time_sync`, `hardware_info`, …).
+  Deployed by [`host-mcp-deploy.yml`](../.github/workflows/host-mcp-deploy.yml) — SHA-pinned source shipped
+  over SSM, installed as the hardened unit.
+- **Bearer-token auth from ASM** ✅ — the sidecar requires a bearer over HTTP; the proxy presents the
+  vaulted `devy/mcp/host` token. And the native unit is **unprivileged** (`devy-hostmcp`, zero
+  capabilities, `ProtectSystem=strict`) — defense in depth *beyond* the token, so a compromised proxy
+  can't get a shell or escalate on an edge.
+- **Scoped IAM + SG** ✅ — the deploy role's `secretsmanager:GetSecretValue` on `devy/mcp/host` is
+  codified in Terraform (its own statement, not a widening); the **platform→edge `:8781` SG rule** is open
+  (SG-to-SG, least privilege). Layered: allow-list (no shell) → unprivileged user → systemd sandbox →
+  bearer → SG.
+- **Implicit → explicit:** ✅ components land on their designated hosts by role, wired by explicit SG rules
+  **and mutually authenticated**.
 
 ## Already done
 

@@ -22,12 +22,14 @@ on:
         # Curated presets. "all" stays registry-driven (every devy-* ECR), so a new
         # component is picked up by "all" automatically; only the convenience preset
         # below needs a line added — or use the advanced override for any combination.
+        # NOTE: host-mcp is NOT built here anymore — on AWS it deploys as a native systemd
+        # unit (host-mcp-deploy.yml), not an ECR image; its Dockerfile stays for the LOCAL
+        # demo only. Retire the devy-host-mcp ECR repo in Terraform so "all" stops matching it.
         type: choice
         default: all
         options:
           - all
           - proxy
-          - host-mcp
           - chat-ui
       components_advanced:
         description: "Advanced: explicit comma-separated list (e.g. proxy,chat-ui). Overrides the dropdown when non-empty."

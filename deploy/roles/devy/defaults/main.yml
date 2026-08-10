@@ -23,13 +23,14 @@ devy_compose_files:
 devy_compose_src: "{{ playbook_dir | dirname }}"
 
 # config.yaml shipped to the host config dir — the real AWS prod config: correct 4.x Anthropic
-# tiers + cross-provider fallbacks, the containerized host-mcp mount, operator assistant_role
+# tiers + cross-provider fallbacks, the native host-mcp + edge mounts, operator assistant_role
 # (not the example's admin footgun), and AWS deployment_context. Non-secret — provider keys
 # resolve from Secrets Manager at runtime. Override per-env with -e devy_config_file=<path>.
 devy_config_file: "{{ devy_compose_src }}/deploy/config/config.aws.yaml"
 
 # ── Release inputs ──
-# devy_images: {proxy: <uri>, host-mcp: <uri>, chat-ui: <uri>} — a coherent set (one manifest).
+# devy_images: {proxy: <uri>, chat-ui: <uri>} — a coherent set (one manifest). No host-mcp
+# image — the host MCP is native (systemd), deployed separately by host-mcp-deploy.yml.
 # Provided by the workflow, or resolved from SSM by devy_commit (resolve.yml).
 devy_images: {}
 devy_commit: ""
@@ -56,11 +57,22 @@ devy_blobs_bucket: "{{ lookup('env', 'DEVY_BLOBS_BUCKET') | default('', true) }}
 # has no Grafana to reach (mount will surface an auth/URL error, not crash the deploy).
 devy_grafana_url: "{{ lookup('env', 'GRAFANA_URL') | default('', true) }}"
 
+# Native EDGE host-MCP sidecar URLs — config.yaml's ${EDGE_*_MCP_URL} mounts. The edges
+# run the host MCP as native systemd units (host-mcp-deploy.yml) and are reached across
+# the subnet (SG allows platform→edge:8781). Account-specific → from env vars (the deploy
+# workflow sets them from the EDGE_AL2023_MCP_URL / EDGE_UBUNTU_MCP_URL Actions vars).
+# Empty → a best-effort "unreachable" mount that never blocks the proxy's startup.
+devy_edge_al2023_url: "{{ lookup('env', 'EDGE_AL2023_MCP_URL') | default('', true) }}"
+devy_edge_ubuntu_url: "{{ lookup('env', 'EDGE_UBUNTU_MCP_URL') | default('', true) }}"
+
 # ── Service tiers ──
 # App tier is recreated on deploy; the data tier (Postgres) is left running (§18.5/§18.7).
 # grafana-mcp is now in the app tier (read-only Grafana MCP, config-mounted). oauth2-proxy
 # (the SSO/TLS front door) is still intentionally omitted from Phase-1 — comes with #5/#7.
-devy_app_services: [proxy, host-mcp, chat-ui, grafana-mcp]
+# host-mcp is NO LONGER a compose service on AWS — it runs natively (systemd) per host,
+# deployed by host-mcp-deploy.yml. The proxy reaches the co-located sidecar via
+# host.docker.internal:8781. Only the remaining containerized services recreate here.
+devy_app_services: [proxy, chat-ui, grafana-mcp]
 devy_data_services: [postgres]
 
 # ── Toggles + smoke targets ──

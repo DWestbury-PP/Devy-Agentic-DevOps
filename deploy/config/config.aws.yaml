@@ -63,12 +63,27 @@ tiers:
 
 # Mount the containerized host MCP (host + docker diagnostics) on the compose network.
 # It serves without a bearer on the internal net (no host port is published). The
-# vault holds devy/mcp/host for the day the deploy role injects HOST_MCP_TOKEN into
-# both containers (defense-in-depth); until then an internal open mount is correct.
+# The `host` mount is the co-located NATIVE host-MCP sidecar — a hardened systemd unit
+# on THIS EC2 host (deployed by host-mcp-deploy.yml), reached over the Docker host
+# gateway. It sees the REAL host (journal/systemd/reboot), NOT a container namespace.
+# The proxy forwards the vaulted devy/mcp/host bearer (secret_ref).
 mcp_servers:
   - name: host
     transport: http
-    url: http://host-mcp:8780/mcp
+    url: http://host.docker.internal:8781/mcp
+    secret_ref: devy/mcp/host
+  # EDGE host-MCP sidecars — native systemd units on the edge fleet, deployed the same
+  # way, reached across the subnet (the SG allows platform→edge:8781). URLs are
+  # account-specific → rendered from the EDGE_*_MCP_URL Actions vars; an unset/empty var
+  # is a best-effort "unreachable" mount that never blocks startup. Same bearer.
+  - name: edge_al2023
+    transport: http
+    url: ${EDGE_AL2023_MCP_URL}
+    secret_ref: devy/mcp/host
+  - name: edge_ubuntu
+    transport: http
+    url: ${EDGE_UBUNTU_MCP_URL}
+    secret_ref: devy/mcp/host
   # Grafana MCP (read-only). The proxy forwards the vaulted token in the X-Grafana-Api-Key
   # header (mcp-grafana wants THAT header, not Authorization: Bearer — hence auth_header);
   # the sidecar carries only GRAFANA_URL. Read-only: -disable-write on the server + the
@@ -87,10 +102,10 @@ rbac:
   assistant_role: operator
   default_role: viewer
 
-# AWS grounding, injected each turn so Devy knows where it runs. NOTE the key caveat:
-# the host MCP is a CONTAINER here, so host_* checks see the container's namespace,
-# not the EC2 host. (Real host inspection = a native/edge host-mcp — readiness #7.)
-deployment_context: "Host: AWS EC2 (Amazon Linux 2023, x86_64), single-node dev/test; the Devy stack runs in Docker on this host. The host MCP runs as a CONTAINER here, so host_* diagnostics inspect the container's own namespace (plus the read-only mounted docker.sock for docker_* checks), NOT the underlying EC2 host — say so when you report host-level findings rather than implying they describe the physical host. Grafana, Prometheus, and Loki are UTC; state the zone on every timestamp. Grafana Cloud UI base URL is ${GRAFANA_URL} — build ABSOLUTE links from it (a dashboard is <base>/d/<uid>/<slug>, an Explore link uses <base>/explore), or use the generate_deeplink tool; never emit a bare relative /d/... path."
+# AWS grounding, injected each turn so Devy knows where it runs. The host MCP now runs
+# NATIVELY (systemd) on every host, so host_* checks reflect the REAL host — no container
+# caveat. host_* = this EC2 host; edge_al2023_*/edge_ubuntu_* = the remote edge hosts.
+deployment_context: "Host: AWS EC2 (Amazon Linux 2023, x86_64), single-node dev/test; the Devy stack runs in Docker on this host, but the host MCP runs NATIVELY as a systemd unit — so the host_* tools reflect the REAL EC2 host (journal, systemd units, reboot history, disk), not a container. Report host_* findings as the actual host. The docker_* checks (via the socket) see the Devy stack's own containers. Remote edge hosts are reachable natively too: the edge_al2023_* tools target the Amazon Linux 2023 edge host and edge_ubuntu_* target the Ubuntu edge host — each is that host's real native sidecar, so name which host a finding is about. Host tools report LOCAL host time; Grafana, Prometheus, and Loki are UTC — state the zone on every timestamp and convert before correlating. Grafana Cloud UI base URL is ${GRAFANA_URL} — build ABSOLUTE links from it (a dashboard is <base>/d/<uid>/<slug>, an Explore link uses <base>/explore), or use the generate_deeplink tool; never emit a bare relative /d/... path."
 
 # A broad host+docker investigation needs headroom beyond the code default of 16.
 max_iterations: 28

@@ -72,7 +72,7 @@ Devy is a platform; these are its plug points. Each is documented in
 | Extend… | How | Docs |
 |---|---|---|
 | **Tools** (eyes & hands) | Register a `ToolSpec`; the agent discovers it by intent via `find_tools` | [Tools & MCP](docs/extending.md#tools) |
-| **Remote hosts** | Deploy the safe-allowlist **host MCP** (no shell, profile-gated) | [host-mcp/](host-mcp/README.md) |
+| **Remote hosts** | Deploy the safe-allowlist **host MCP** (no shell, profile-gated) — native systemd unit per host | [The host MCP](docs/host-mcp.md) · [host-mcp/](host-mcp/README.md) |
 | **Any in-house system** | Mount any **MCP server** (stdio or authenticated HTTP) | [Extending → MCP](docs/extending.md#mcp-servers) |
 | **Observability** | Built-in **LangSmith** tracing; bring-your-own Grafana / CloudWatch / CloudTrail MCP | [Extending → Observability](docs/extending.md#observability) |
 | **Models** | Map `fast`/`balanced`/`deep` tiers to any LiteLLM provider, with **automatic cross-provider failover** (e.g. Anthropic → OpenAI → Gemini) | [Configuration](docs/configuration.md#provider-failover-fallbacks) |

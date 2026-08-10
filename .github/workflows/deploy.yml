@@ -189,6 +189,10 @@ jobs:
           DEVY_BLOBS_BUCKET: ${{ vars.BLOBS_BUCKET }}
           # Grafana tenant URL → grafana-mcp sidecar + config.yaml's ${GRAFANA_URL} grounding.
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          # Native EDGE host-MCP sidecar URLs → config.yaml's ${EDGE_*_MCP_URL} mounts.
+          # Account-specific (private IPs), so they live in Actions vars; unset → no edge mount.
+          EDGE_AL2023_MCP_URL: ${{ vars.EDGE_AL2023_MCP_URL }}
+          EDGE_UBUNTU_MCP_URL: ${{ vars.EDGE_UBUNTU_MCP_URL }}
         run: |
           set -o pipefail
           args=(deploy.yml --limit "$TARGETS" -e "$EXTRA_VARS")

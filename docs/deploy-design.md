@@ -42,12 +42,16 @@ GitOps:
 
 | Fleet host | Role tag / group | Devy services |
 |---|---|---|
-| `devy-platform` (t3.large, AL2023) | `role_platform` | `proxy` (FastAPI brain), `chat-ui` (nginx), `oauth2-proxy` (edge), `grafana-mcp`, Postgres/pgvector |
-| `edge-al2023`, `edge-ubuntu` | `role_edge` | `host-mcp` (:8780) — one diagnostic agent per host |
+| `devy-platform` (t3.large, AL2023) | `role_platform` | `proxy` (FastAPI brain), `chat-ui` (nginx), `oauth2-proxy` (edge), `grafana-mcp`, Postgres/pgvector — **plus the host MCP as a native systemd unit** (`:8781`), not a container |
+| `edge-al2023`, `edge-ubuntu` | `role_edge` | the host MCP as a **native systemd unit** (`:8781`) — one diagnostic agent per host |
 
-The proxy on the platform talks to `host-mcp` on the edges over **:8780** — which cashes in the
-**platform→edge SG rule** left as a breadcrumb in the Terraform design (§7 item 5). The Ansible
-inventory already groups `role_platform` / `role_edge`, so `--limit` targeting is free.
+The host MCP runs **natively** (a hardened systemd unit) on **every** host — deployed by
+[`host-mcp-deploy.yml`](../.github/workflows/host-mcp-deploy.yml), not the app-tier `deploy.yml`.
+The platform proxy reaches its co-located sidecar over the Docker host gateway
+(`host.docker.internal:8781`) and the edge sidecars across the subnet at `:8781` — which cashes in
+the **platform→edge SG rule** (inbound `:8781` from the platform SG only). The Ansible inventory
+groups `role_platform` / `role_edge`, so `--limit` targeting is free. Full treatment:
+[The host MCP](host-mcp.md).
 
 ## 3. Two planes
 
@@ -83,10 +87,12 @@ For a by-hand deploy, `export DEVY_SSM_TRANSFER_BUCKET=<bucket>` before running 
 
 ## 4. Registry & image tagging
 
-- **Per-component ECRs:** `devy-proxy`, `devy-host-mcp`, `devy-chat-ui`. **Immutable** tags.
+- **Per-component ECRs:** `devy-proxy`, `devy-chat-ui`. **Immutable** tags. (The host MCP is
+  **not** an ECR image anymore — it deploys as a native systemd unit via `host-mcp-deploy.yml`;
+  the stale `devy-host-mcp` repo should be retired in Terraform so registry-driven `all` builds
+  stop matching it.)
 - **Tag scheme (all four coordinates):** `<component>:<release-or-branch>-<shortsha>-<utc-timestamp>`
-  — e.g. `devy-host-mcp:feat-mcp-diag-a1b2c3d-20260726T1432Z`,
-  `devy-proxy:v0.9.1-9f8e7d6-20260726T1500Z`. Human-legible in the ECR console, globally unique.
+  — e.g. `devy-proxy:v0.9.1-9f8e7d6-20260726T1500Z`. Human-legible in the ECR console, globally unique.
 - **Keyless pull** via the instance-role permission-set menu (extends the `alloy-secrets` pattern
   with an ECR-pull set). No registry credentials on hosts or in the pipeline.
 - **New `ecr` Terraform module** — cashes in the planned "v1 self-service primitive."

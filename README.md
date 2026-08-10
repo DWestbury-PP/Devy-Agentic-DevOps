@@ -242,7 +242,10 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
   (billing, auth, rate-limit, overload) — a friendly message replaces raw provider
   errors, and traces record which model actually served each turn.
 - **MCP**: mount any MCP server, plus the deployable **safe-allowlist host MCP**
-  (host + Docker diagnostics, no shell, profile-gated, bearer auth).
+  (host + Docker diagnostics, no shell, profile-gated, bearer auth) — shipped as a
+  **hardened, unprivileged native systemd unit per host**, so one Devy can reach a
+  **fleet** of hosts for cross-host diagnostics (live-verified: platform + two edge
+  hosts). See [The host MCP](docs/host-mcp.md).
 - **Knowledge base**: enriched ingest (deterministic structural context, optional
   LLM synopsis) of **OKF**-formatted Markdown (YAML frontmatter → metadata, filters,
   and a `memory_index` orientation tool) → **hybrid** `search_knowledge` (vector +

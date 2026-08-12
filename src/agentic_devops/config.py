@@ -164,6 +164,28 @@ class KnowledgeConfig(BaseModel):
     docgen_max_files: int = 40  # signal-file cap per component (cost guard)
 
 
+class ReleasesConfig(BaseModel):
+    """The CI→CD build ledger — SSM Parameter Store under ``ssm_prefix``.
+
+    **Read-only from Devy's side.** CI (``build.yml``) writes the ledger; Devy only
+    *reads* it to answer "what can I deploy?" (the ``releases`` CLI, the
+    ``/v1/admin/releases`` API, and the ``list_releases`` tool). See
+    [`docs/ci-cd.md`](../../docs/ci-cd.md).
+
+    **Real-AWS-only.** Unlike secrets, the ledger has no LocalStack mirror — CI writes
+    it to the real account's Parameter Store — so in-proxy reads use the ambient
+    instance IAM role (which needs ``ssm:GetParameter*`` on ``ssm_prefix/*``) and the
+    CLI uses your ambient/SSO credentials. ``endpoint_url`` exists only for hermetic
+    tests / a LocalStack dev loop; leave it unset for real AWS.
+    """
+
+    ssm_prefix: str = "/devy/builds"
+    # None → falls back to secrets.region (one region knob for the deployment).
+    region: Optional[str] = None
+    # LocalStack/test override; None → real AWS SSM via the default credential chain.
+    endpoint_url: Optional[str] = None
+
+
 class SecretsConfig(BaseModel):
     """Where external credentials (connector tokens, provider keys) come from.
 
@@ -345,6 +367,9 @@ class Settings(BaseSettings):
 
     # Secrets backend (dev=LocalStack / prod=AWS SM). Mode also settable via DEVY_MODE.
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+
+    # CI→CD build ledger (SSM Parameter Store). Read-only: powers the releases CLI/API/tool.
+    releases: ReleasesConfig = Field(default_factory=ReleasesConfig)
 
     # User-attached images → content-addressed S3 blob store (LocalStack dev / real S3 prod).
     attachments: AttachmentsConfig = Field(default_factory=AttachmentsConfig)

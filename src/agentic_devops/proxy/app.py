@@ -308,6 +308,18 @@ def create_app(
     # GitHub connector (Phase D-1): account registry (secrets-backed PAT) + client.
     github_store = GitHubAccountStore(pool, secrets)
 
+    # Release ledger (read-only): the CI→CD build manifest in SSM Parameter Store.
+    # Powers the `releases` CLI, /v1/admin/releases, and the list_releases tool.
+    # Best-effort — an unreadable ledger (instance role lacks ssm:GetParameter* on
+    # the prefix) degrades to empty results, never a boot failure. See docs/ci-cd.md.
+    from agentic_devops.proxy.releases import build_release_ledger
+
+    try:
+        release_ledger = build_release_ledger(settings)
+    except Exception as exc:  # noqa: BLE001 — never let ledger setup block startup
+        logger.warning("release ledger unavailable (releases surfaces degrade): %s", exc)
+        release_ledger = None
+
     # MCP Servers registry (Phase S-4): general HTTP MCP tool sources, called
     # on-demand via the same client as hosts; tools normalized into the router.
     from agentic_devops.proxy.mcp_registry import MCPServerStore
@@ -416,6 +428,15 @@ def create_app(
                 router.register(spec)
             except ValueError:
                 logger.warning("repo tool name clash, skipping: %s", spec.name)
+        # Release ledger (read-only): Devy can answer "what can I deploy?" in chat.
+        if release_ledger is not None:
+            from agentic_devops.tools.builtin.releases import build_release_tools
+
+            for spec in build_release_tools(release_ledger):
+                try:
+                    router.register(spec)
+                except ValueError:
+                    logger.warning("release tool name clash, skipping: %s", spec.name)
         # Guarded actions: register the PROPOSE-only tool when actions are enabled
         # (fail-closed on auth). Devy has no tool that executes a mutation — this
         # only writes a proposal a human must approve. The mutating host verbs
@@ -442,7 +463,7 @@ def create_app(
 
     # MCP Servers registry (Phase S-4): mount/refresh a registered server's tools
     # into the live router. Names can't collide with built-in categories.
-    RESERVED_CATEGORIES = {"knowledge", "memory", "diagnostics", "hosts", "repos", "mcp", "web"}
+    RESERVED_CATEGORIES = {"knowledge", "memory", "diagnostics", "hosts", "repos", "mcp", "web", "releases"}
 
     def _mount_mcp_server(server: Any) -> tuple[str, int, int]:
         """(status, tool_count, write_count). Withdraws the server's existing tools
@@ -807,6 +828,50 @@ def create_app(
     def admin_me(principal: Principal = Depends(require_admin)) -> dict[str, Any]:
         return {"authenticated": True, "id": principal.id, "email": principal.email,
                 "roles": sorted(principal.roles), "source": principal.source}
+
+    # ---- release ledger (admin, read-only) ----
+    # The HTTP face of the CI→CD build ledger — what web/Slack/Devy surfaces call to
+    # answer "what can I deploy?". Read-only (CI writes the ledger). 503 if the ledger
+    # client couldn't be built; each route degrades to empty/404 if it's unreadable.
+    def _ledger_or_503() -> Any:
+        if release_ledger is None:
+            raise HTTPException(status_code=503, detail="release ledger is not configured")
+        return release_ledger
+
+    @app.get("/v1/admin/releases")
+    def list_releases_admin(
+        limit: int = 20, _: dict = Depends(require_admin),
+    ) -> dict[str, Any]:
+        ledger = _ledger_or_503()
+        reachable = ledger.health()
+        return {
+            "reachable": reachable,
+            "prefix": ledger.prefix,
+            "releases": [r.to_dict() for r in ledger.list_releases(limit=limit)] if reachable else [],
+        }
+
+    @app.get("/v1/admin/releases/components")
+    def list_release_components_admin(_: dict = Depends(require_admin)) -> dict[str, Any]:
+        ledger = _ledger_or_503()
+        return {name: c.to_dict() for name, c in ledger.components_latest().items()}
+
+    @app.get("/v1/admin/releases/latest")
+    def latest_release_admin(
+        branch: str = "main", _: dict = Depends(require_admin),
+    ) -> dict[str, Any]:
+        ledger = _ledger_or_503()
+        r = ledger.resolve_branch(branch)
+        if r is None:
+            raise HTTPException(status_code=404, detail=f"no build recorded for branch {branch!r}")
+        return r.to_dict()
+
+    @app.get("/v1/admin/releases/{sha}")
+    def get_release_admin(sha: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        ledger = _ledger_or_503()
+        r = ledger.get_release(sha)
+        if r is None:
+            raise HTTPException(status_code=404, detail=f"no release recorded for commit {sha!r}")
+        return r.to_dict()
 
     # ---- host registry (admin) ----
     @app.get("/v1/admin/hosts", response_model=list[HostInfo])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 from typing import Optional
 
 import typer
@@ -530,6 +531,102 @@ def secrets_set(ref: str = typer.Argument(...), value: str = typer.Argument(...)
         raise typer.Exit(code=1)
     secrets.set(ref, value)
     typer.echo(f"set {ref}")
+
+
+# ---------------------------------------------------------------------------
+# releases — browse the CI→CD build ledger (SSM Parameter Store). Read-only.
+# The terminal surface over the same ReleaseLedger the API + agent tool use.
+# Runs with your ambient/SSO AWS credentials (the ledger lives in real AWS);
+# --profile/--region mirror `secrets sync`. See docs/ci-cd.md.
+# ---------------------------------------------------------------------------
+releases_app = typer.Typer(help="Browse deployable builds recorded by CI (the SSM release ledger).")
+app.add_typer(releases_app, name="releases")
+
+
+def _ledger(profile: Optional[str], region: Optional[str]):
+    from agentic_devops.config import load_settings
+    from agentic_devops.proxy.releases import build_release_ledger
+
+    ledger = build_release_ledger(load_settings(), profile=profile, region=region)
+    if not ledger.health():
+        typer.echo(
+            f"Ledger unreachable at {ledger.prefix} — check your AWS credentials/region "
+            "and that ssm:GetParameter* is allowed on that path.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return ledger
+
+
+def _status_mark(r) -> str:
+    return "✓ complete" if r.complete else "· partial "
+
+
+@releases_app.command("ls")
+def releases_ls(
+    limit: int = typer.Option(20, "--limit", "-n", help="Max releases to show (newest first)."),
+    profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile (SSO) to read with."),
+    region: Optional[str] = typer.Option(None, "--region", help="AWS region (default: config)."),
+) -> None:
+    """List recorded builds, newest first — what's available to deploy."""
+    ledger = _ledger(profile, region)
+    releases = ledger.list_releases(limit=limit)
+    if not releases:
+        typer.echo("No builds recorded yet. Run the build workflow (docs/ci-cd.md § How to build).")
+        return
+    typer.echo(f"{'STATUS':11}  {'BUILT (UTC)':20}  {'BRANCH':16}  {'SHORT':8}  COMPONENTS")
+    for r in releases:
+        comps = ",".join(sorted(r.components)) or "—"
+        typer.echo(
+            f"{_status_mark(r):11}  {r.built_at or '—':20}  {r.branch or '—':16}  "
+            f"{r.short_sha or r.sha[:7]:8}  {comps}"
+        )
+
+
+@releases_app.command("show")
+def releases_show(
+    sha: str = typer.Argument(..., help="Commit SHA of the release (see `releases ls`)."),
+    profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile (SSO) to read with."),
+    region: Optional[str] = typer.Option(None, "--region", help="AWS region (default: config)."),
+) -> None:
+    """Show one release manifest in full (the deploy `-f commit=<sha>` target)."""
+    ledger = _ledger(profile, region)
+    r = ledger.get_release(sha)
+    if r is None:
+        typer.echo(f"No release recorded for commit {sha!r}.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(r.to_dict(), indent=2))
+
+
+@releases_app.command("latest")
+def releases_latest(
+    branch: str = typer.Argument("main", help="Branch whose newest build to resolve."),
+    profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile (SSO) to read with."),
+    region: Optional[str] = typer.Option(None, "--region", help="AWS region (default: config)."),
+) -> None:
+    """Resolve the newest build on a branch (what `deploy source=newest-on-branch` picks)."""
+    ledger = _ledger(profile, region)
+    r = ledger.resolve_branch(branch)
+    if r is None:
+        typer.echo(f"No build recorded for branch {branch!r}.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(r.to_dict(), indent=2))
+
+
+@releases_app.command("components")
+def releases_components(
+    profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile (SSO) to read with."),
+    region: Optional[str] = typer.Option(None, "--region", help="AWS region (default: config)."),
+) -> None:
+    """Show the newest image of each component (what `deploy source=assembled-latest` picks)."""
+    ledger = _ledger(profile, region)
+    comps = ledger.components_latest()
+    if not comps:
+        typer.echo("No component builds recorded yet.")
+        return
+    for name in sorted(comps):
+        c = comps[name]
+        typer.echo(f"{name:12}  {c.image}")
 
 
 if __name__ == "__main__":

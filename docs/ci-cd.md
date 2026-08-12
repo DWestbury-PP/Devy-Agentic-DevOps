@@ -139,28 +139,51 @@ Two semantics that aren't obvious from the shape:
   deep-merge — new component keys win) rather than overwriting the others. So you can
   fill a release incrementally and it converges to `complete`.
 
-### Browsing the ledger today
+### Browsing the ledger — the `releases` tooling
 
-There is **no dedicated browse tool yet** (see §6 — it's the natural next build). For
-now, read it directly with the AWS CLI:
+A single **read layer** (`proxy/releases.py` → `ReleaseLedger`) parses the ledger
+schema in one place; three thin surfaces sit on top, so "what can I deploy?" has a
+real answer everywhere:
+
+**1. The `releases` CLI** (terminal — runs with your ambient/SSO AWS credentials,
+`--profile`/`--region` like `secrets sync`; needs no new IAM):
 
 ```bash
-# Which commits have recorded builds?
-aws ssm get-parameters-by-path --path /devy/builds/by-commit \
-  --query 'Parameters[].Name' --output text
-
-# Newest build on a branch
-aws ssm get-parameter --name /devy/builds/by-branch/main/latest \
-  --query Parameter.Value --output text
-
-# A specific release manifest, pretty-printed
-aws ssm get-parameter --name /devy/builds/by-commit/<sha> \
-  --query Parameter.Value --output text | jq .
-
-# Newest image of each component (what assembled-latest would pick)
-aws ssm get-parameters-by-path --path /devy/builds/components --recursive \
-  --query 'Parameters[].Value' --output text
+agentic-devops releases ls               # recorded builds, newest first (STATUS/BUILT/BRANCH/…)
+agentic-devops releases latest main      # newest build on a branch (the newest-on-branch pick)
+agentic-devops releases show <sha>       # one manifest in full (the specific-commit / rollback target)
+agentic-devops releases components       # newest image per component (the assembled-latest pick)
 ```
+
+**2. The admin API** (what web/Slack/Devy surfaces call — RBAC-admin-gated):
+
+```
+GET /v1/admin/releases[?limit=20]     → { reachable, prefix, releases:[…] }
+GET /v1/admin/releases/latest?branch= → the newest release on a branch
+GET /v1/admin/releases/components     → newest image per component
+GET /v1/admin/releases/{sha}          → one release manifest
+```
+
+**3. The `list_releases` agent tool** — Devy answers "what can I deploy?" in chat
+(read-only; it reports, it never triggers a deploy).
+
+> **One deployment prerequisite for the API + tool (not the CLI):** the proxy's
+> instance role needs `ssm:GetParameter` + `ssm:GetParametersByPath` on
+> `/devy/builds/*`. That's an IaC-managed grant — until it lands, the API returns
+> `reachable: false` (empty) and the tool says so plainly, by design. The CLI is
+> unaffected (it uses your own credentials).
+
+The reader is **best-effort**: an unreadable ledger degrades to empty results, never
+an exception that takes a surface down.
+
+<details><summary>Raw AWS-CLI access (fallback, no tooling)</summary>
+
+```bash
+aws ssm get-parameter --name /devy/builds/by-branch/main/latest --query Parameter.Value --output text
+aws ssm get-parameter --name /devy/builds/by-commit/<sha> --query Parameter.Value --output text | jq .
+aws ssm get-parameters-by-path --path /devy/builds/components --recursive --query 'Parameters[].Value' --output text
+```
+</details>
 
 ---
 
@@ -329,9 +352,11 @@ out so nobody mistakes intent for reality:
 
 | Gap | Today | The next rung |
 |---|---|---|
-| **No release-browse tool** | read SSM by hand (§2) | a small `agentic-devops releases ls` CLI that lists/queries the ledger — and later, the thing a web/Slack/Devy surface calls |
+| **Release browse layer** | ✅ **done** — `releases` CLI + `/v1/admin/releases` API + `list_releases` tool (§2) | consume it from a web/Slack surface |
+| **SSM-read IAM grant** | pending — needed by the API + tool (not the CLI) | IaC adds `ssm:GetParameter*` on `/devy/builds/*` to the proxy instance role |
 | **Build has no webhook** | `build.yml` is dispatch-only | add a `repository_dispatch` to `build.yml` symmetrical to the deploy ones |
 | **Webhook auth model** | a token with `repo` scope | decide the durable model — a scoped fine-grained token, a GitHub App, or a small authenticated relay (`deploy-design.md` §16) |
+| **Trigger from Devy** | Devy can *read* the ledger (`list_releases`) | a propose-only `request_deploy` under guarded actions (human-approved) — the Devy-deploys-Devy beat |
 | **`deploy.yml` targets** | `role_platform` only | wire `role_edge` / `all` (Phase-2) |
 | **Slack notifications** | dormant step in `build.yml` | set `SLACK_WEBHOOK_URL` to light up build notices |
 | **Coverage audit** | fine at 3 hosts | reconcile-against-tags at fleet scale (`deploy-design.md` §12) |

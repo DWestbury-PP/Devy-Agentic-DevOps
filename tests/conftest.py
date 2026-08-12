@@ -104,6 +104,50 @@ def make_fake_secrets(writable: bool = True, store_file=None):
     return SecretsProvider(_FakeSMClient(), writable=writable, store_file=store_file)
 
 
+class _FakeSSMClient:
+    """In-memory SSM Parameter Store shape for the release-ledger tests — supports
+    the two reads the ledger uses (get_parameter, get_parameters_by_path). Set
+    ``deny=True`` to simulate an IAM-denied path (every call raises)."""
+
+    class exceptions:
+        class ParameterNotFound(Exception):
+            pass
+
+    def __init__(self, params: dict[str, str] | None = None, deny: bool = False) -> None:
+        self._d: dict[str, str] = dict(params or {})
+        self._deny = deny
+
+    def _guard(self) -> None:
+        if self._deny:
+            raise RuntimeError("AccessDeniedException: not authorized to perform ssm:GetParameter")
+
+    def get_parameter(self, Name: str):
+        self._guard()
+        if Name not in self._d:
+            raise self.exceptions.ParameterNotFound()
+        return {"Parameter": {"Name": Name, "Value": self._d[Name]}}
+
+    def get_parameters_by_path(self, Path: str, Recursive: bool = True, MaxResults: int = 10, NextToken: str | None = None):
+        self._guard()
+        matches = [
+            {"Name": k, "Value": v} for k, v in self._d.items()
+            if k == Path or k.startswith(Path.rstrip("/") + "/")
+        ]
+        # Emulate pagination so the ledger's NextToken loop is exercised.
+        start = int(NextToken) if NextToken else 0
+        page = matches[start:start + MaxResults]
+        out: dict = {"Parameters": page}
+        if start + MaxResults < len(matches):
+            out["NextToken"] = str(start + MaxResults)
+        return out
+
+
+def make_fake_ledger(params: dict[str, str] | None = None, deny: bool = False, prefix: str = "/devy/builds"):
+    from agentic_devops.proxy.releases import ReleaseLedger
+
+    return ReleaseLedger(_FakeSSMClient(params, deny=deny), prefix=prefix)
+
+
 @pytest.fixture()
 def secrets():
     """A writable in-memory SecretsProvider for store-level tests."""

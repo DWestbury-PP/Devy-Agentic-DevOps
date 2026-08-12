@@ -276,54 +276,77 @@ from the assistant endpoints** and **off unless explicitly configured**:
 
 ### Setting the admin credentials (runbook)
 
-Two values, two jobs — **don't mix them up** (they look alike, and swapping them
-fails silently):
+You won't do this often, so here's the whole thing end to end.
+
+**The two values — two jobs, don't mix them up** (they look alike, and swapping them
+fails *silently*):
 
 | Vault ref | Env var | What it is | How to recognize it |
 |---|---|---|---|
 | `devy/admin/password-hash` | `DEVY_ADMIN_PASSWORD_HASH` | bcrypt hash of your password (checked at login) | starts `$2b$`, **60 chars** |
 | `devy/admin/secret` | `DEVY_ADMIN_SECRET` | HS256 key that signs/verifies session tokens | **64 hex** chars |
 
-**1. Generate the pair** (in your own terminal — the values stay on your machine).
-The console script breaks on a repo path with spaces, so use the module form:
+**Which vault, and how you reach it.** The refs are the same everywhere; only the
+*backend* differs, and it's selected by the credential profile — not by the tool:
+
+| Deployment | Backend | How the tool reaches it |
+|---|---|---|
+| AWS (e.g. `devy-platform`) | real Secrets Manager | `aws … --profile <your-aws-sso-profile>` |
+| Local dev box | LocalStack SM | `--profile ls-devy` (its `~/.aws/config` embeds `endpoint_url=…:4566`), or `agentic-devops secrets set` |
+
+**Step 1 — generate the pair** (your own terminal; values stay on your machine). The
+console script breaks on a repo path with spaces, so use the module form:
 
 ```bash
 cd /path/to/Devy-Agentic-DevOps
 PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main admin set-password
-#   → devy/admin/password-hash = $2b$12$……   (the HASH — 60 chars)
+#   → devy/admin/password-hash = $2b$12$……   (the HASH — 60 chars, starts $2b$)
 #   → devy/admin/secret        = <64 hex>     (the SECRET)
 ```
 
-**2. Store both in the vault.** Pick the vault for the deployment you're configuring —
-these are *different* stores:
+**Step 2 — store both.** One tool (`aws`), one knob (`--profile`). Single-quote the
+hash — its `$` chars would be eaten by the shell otherwise. `create-secret` the first
+time; `put-secret-value` to overwrite/rotate.
 
 ```bash
-# PROD (AWS deployment): real Secrets Manager. Single-quote the hash — its $ chars
-# would be eaten by the shell otherwise. Use put-secret-value to overwrite/rotate.
-aws secretsmanager create-secret --name devy/admin/password-hash --secret-string '$2b$12$……'
-aws secretsmanager create-secret --name devy/admin/secret        --secret-string '<64 hex>'
+# → AWS (real Secrets Manager)
+aws --profile <your-aws-sso-profile> secretsmanager create-secret \
+    --name devy/admin/password-hash --secret-string '$2b$12$……'
+aws --profile <your-aws-sso-profile> secretsmanager create-secret \
+    --name devy/admin/secret        --secret-string '<64 hex>'
 
-# LOCAL dev box: the LocalStack-backed vault (NOT AWS).
-PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main secrets set devy/admin/password-hash '$2b$12$……'
-PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main secrets set devy/admin/secret        '<64 hex>'
+# → LocalStack (must be running: ./devy.sh up). See the persistence note below.
+aws --profile ls-devy secretsmanager create-secret --name devy/admin/password-hash --secret-string '$2b$12$……'
+aws --profile ls-devy secretsmanager create-secret --name devy/admin/secret        --secret-string '<64 hex>'
 ```
 
-**3. Verify before you rely on it** — a swapped paste is the common failure. Read each
-back and check the *format* (never print the values):
+> **LocalStack persistence gotcha.** LocalStack Community *doesn't persist* — recreate
+> the container and its Secrets Manager is wiped. Devy survives that only for secrets
+> written through **`agentic-devops secrets set`**, which mirrors to
+> `~/.config/agentic-devops/secrets-store.json` and re-seeds LocalStack on boot
+> (`rehydrate()`). Raw `aws --profile ls-devy` skips that mirror, so those creds vanish
+> on the next `./devy.sh` recreate. **For the local box, prefer `secrets set`:**
+> ```bash
+> PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main secrets set devy/admin/secret '<64 hex>'
+> ```
+> (Real AWS has no such issue — ASM persists, and `secrets set` refuses in prod mode anyway.)
+
+**Step 3 — verify before you rely on it.** A swapped paste is *the* common failure and
+it fails silently (a malformed hash rejects every login). Read each back and check the
+**format**, never the value — same command for either backend, just swap `--profile`:
 
 ```bash
-# prod — from the box via the instance role; expect: hash ≠ 64-hex, secret = 64-hex
 for n in devy/admin/password-hash devy/admin/secret; do
-  v=$(aws secretsmanager get-secret-value --secret-id "$n" --query SecretString --output text)
+  v=$(aws --profile <profile> secretsmanager get-secret-value --secret-id "$n" --query SecretString --output text)
   echo "$n : $(echo "$v" | grep -qE '^\$2[aby]\$[0-9]{2}\$' && echo bcrypt-hash \
         || (echo "$v" | grep -qE '^[0-9a-f]{64}$' && echo 64-hex || echo other))"
 done
 ```
 
-`devy/admin/password-hash` **must** report `bcrypt-hash`; if it reports `64-hex` you
-pasted the secret into the hash slot — re-store it with `put-secret-value`. Both hydrate
-into the environment at boot; until both are set (and the hash is a real hash), the admin
-plane stays disabled (`503`), and a malformed hash makes every login fail.
+`devy/admin/password-hash` **must** report `bcrypt-hash`; if it says `64-hex`, you
+pasted the secret into the hash slot — re-store it with `put-secret-value`. Both values
+hydrate into the environment at boot; until both are set *and the hash is a real hash*,
+the admin plane stays disabled (`503`) and login always fails.
 
 ### Killing the password backdoor (password → jwt cutover)
 

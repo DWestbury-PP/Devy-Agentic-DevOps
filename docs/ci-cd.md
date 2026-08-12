@@ -353,8 +353,8 @@ out so nobody mistakes intent for reality:
 | Gap | Today | The next rung |
 |---|---|---|
 | **Release browse layer** | ✅ **done** — `releases` CLI + `/v1/admin/releases` API + `list_releases` tool (§2) | consume it from a web/Slack surface |
-| **SSM-read IAM grant** | pending — needed by the API + tool (not the CLI) | IaC adds `ssm:GetParameter*` on `/devy/builds/*` to the proxy instance role |
-| **Build has no webhook** | `build.yml` is dispatch-only | add a `repository_dispatch` to `build.yml` symmetrical to the deploy ones |
+| **SSM-read IAM grant** | ✅ **done** — the proxy instance role reads `/devy/builds/*`; the API + `list_releases` tool are live on `devy-platform` | — |
+| **Build has no webhook** ⬅ *next* | `build.yml` is dispatch-only | add a `repository_dispatch` to `build.yml` symmetrical to the deploy ones |
 | **Webhook auth model** | a token with `repo` scope | decide the durable model — a scoped fine-grained token, a GitHub App, or a small authenticated relay (`deploy-design.md` §16) |
 | **Trigger from Devy** | Devy can *read* the ledger (`list_releases`) | a propose-only `request_deploy` under guarded actions (human-approved) — the Devy-deploys-Devy beat |
 | **`deploy.yml` targets** | `role_platform` only | wire `role_edge` / `all` (Phase-2) |

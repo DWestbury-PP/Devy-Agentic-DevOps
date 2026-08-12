@@ -343,6 +343,12 @@ play directly; operator and logic both live in Devy, the ops repo is uninvolved.
 `become_user` (file-ownership safety), idempotency, and `block`/`rescue` (halt-and-hold vs rollback) for free.
 
 ### 18.2 The manifest handoff — SSM Parameter Store, commit-keyed
+> **As-built contract (authoritative): [`docs/ci-cd.md` §2](ci-cd.md#2-the-handoff--the-ssm-release-ledger-the-seam).**
+> The ledger shipped *richer* than this sketch — three parameter shapes
+> (`by-commit/<sha>`, `by-branch/<branch>/latest`, `components/<c>/latest`) and a full
+> manifest schema with `status: complete|partial` + augment-on-rerun merge semantics.
+> This section is the design rationale; the CI/CD guide is the field reference.
+
 On a successful **whole-platform** build, CI writes an SSM Parameter Store entry: **key = the commit sha**
 of the built ref, **value = the COMPLETE set of component image URIs + git ref + timestamp + build run-id**.
 CD takes the commit sha as input, looks it up, and renders the `.env` of URIs — and **"key missing ⇒ CI

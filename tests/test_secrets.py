@@ -6,6 +6,7 @@ DEV write-through + re-hydration (survives restarts), and PROD read-only posture
 """
 
 import json
+import os
 
 import pytest
 
@@ -87,6 +88,69 @@ def test_provider_key_refs_matches_catalog():
 
     catalog = {p["ref"]: p["env"] for p in provider_specs()}
     assert catalog == provider_key_refs()
+
+
+# -- admin bootstrap creds join the vault model (hydration) -------------------
+
+def test_admin_secret_refs_map():
+    from agentic_devops.proxy.secrets import admin_secret_refs
+
+    assert admin_secret_refs() == {
+        "devy/admin/password-hash": "DEVY_ADMIN_PASSWORD_HASH",
+        "devy/admin/secret": "DEVY_ADMIN_SECRET",
+    }
+    assert admin_secret_refs("acme") == {
+        "acme/admin/password-hash": "DEVY_ADMIN_PASSWORD_HASH",
+        "acme/admin/secret": "DEVY_ADMIN_SECRET",
+    }
+
+
+def test_admin_creds_stay_out_of_editable_catalog():
+    """Bootstrap creds are set out-of-band, never via the admin Secrets tab."""
+    from agentic_devops.proxy.secrets import admin_secret_refs
+    from agentic_devops.proxy.secrets_catalog import settable_refs
+
+    assert set(admin_secret_refs()).isdisjoint(settable_refs())
+
+
+def test_hydrate_sets_env_from_vault(monkeypatch):
+    from agentic_devops.proxy.secrets import admin_secret_refs, hydrate_secret_refs
+
+    monkeypatch.delenv("DEVY_ADMIN_SECRET", raising=False)
+    s = make_fake_secrets(writable=True)
+    s.set("devy/admin/secret", "vault-secret")
+    hydrate_secret_refs(s, admin_secret_refs())
+    assert os.environ["DEVY_ADMIN_SECRET"] == "vault-secret"
+
+
+def test_hydrate_vault_wins_over_stale_env(monkeypatch):
+    from agentic_devops.proxy.secrets import admin_secret_refs, hydrate_secret_refs
+
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "stale-env")
+    s = make_fake_secrets(writable=True)
+    s.set("devy/admin/secret", "vault-wins")
+    hydrate_secret_refs(s, admin_secret_refs())
+    assert os.environ["DEVY_ADMIN_SECRET"] == "vault-wins"
+
+
+def test_hydrate_keeps_env_only_value(monkeypatch):
+    from agentic_devops.proxy.secrets import admin_secret_refs, hydrate_secret_refs
+
+    monkeypatch.setenv("DEVY_ADMIN_SECRET", "only-env")
+    s = make_fake_secrets(writable=True)  # vault empty
+    hydrate_secret_refs(s, admin_secret_refs())
+    assert os.environ["DEVY_ADMIN_SECRET"] == "only-env"  # not clobbered
+
+
+def test_hydrate_noop_when_absent_everywhere(monkeypatch):
+    from agentic_devops.proxy.secrets import admin_secret_refs, hydrate_secret_refs
+
+    monkeypatch.delenv("DEVY_ADMIN_SECRET", raising=False)
+    monkeypatch.delenv("DEVY_ADMIN_PASSWORD_HASH", raising=False)
+    s = make_fake_secrets(writable=True)
+    hydrate_secret_refs(s, admin_secret_refs())
+    assert "DEVY_ADMIN_SECRET" not in os.environ
+    assert "DEVY_ADMIN_PASSWORD_HASH" not in os.environ
 
 
 def test_health_reflects_reachability():

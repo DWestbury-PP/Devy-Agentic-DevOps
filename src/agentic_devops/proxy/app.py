@@ -80,7 +80,12 @@ from agentic_devops.proxy.auth import (
 from agentic_devops.proxy.documents import DocumentStore, JobStore
 from agentic_devops.proxy.attachments import AttachmentStore, DigestService
 from agentic_devops.proxy.blobs import build_blob_store
-from agentic_devops.proxy.secrets import build_secrets_provider, provider_key_refs
+from agentic_devops.proxy.secrets import (
+    admin_secret_refs,
+    build_secrets_provider,
+    hydrate_secret_refs,
+    provider_key_refs,
+)
 from agentic_devops.proxy.docgen_store import DocComponentStore, RepoDocgenStore
 from agentic_devops.proxy.github import GitHubAccountStore, RepoCrawlStore
 from agentic_devops.proxy.github_client import GitHubClient, GitHubError
@@ -243,31 +248,16 @@ def create_app(
     # Attachment metadata (the one-time vision digest is built after the provider).
     attachment_store = AttachmentStore(pool)
 
-    # Provider/LLM keys live in the vault; hydrate them into os.environ so the
-    # provider SDKs (via LiteLLM) find them. The VAULT IS AUTHORITATIVE: if the
-    # same key is also present in the environment (a transitional .env), the vault
-    # value wins and we warn so the operator removes the stale copy — no silent
-    # shadowing. A key that's ONLY in .env (not yet migrated) is kept, with a
-    # nudge to move it into the vault.
-    for _ref, _env_var in provider_key_refs(settings.secrets.namespace).items():
-        _vault_val = secrets.get(_ref)
-        _env_val = os.environ.get(_env_var)
-        if _vault_val:
-            if _env_val and _env_val != _vault_val:
-                logger.warning(
-                    "%s is set in BOTH .env and the secrets manager; using the vault "
-                    "value (the source of truth). Remove %s from your .env.",
-                    _env_var, _env_var,
-                )
-            os.environ[_env_var] = _vault_val
-            logger.info("hydrated %s from the secrets manager", _env_var)
-        elif _env_val:
-            logger.info(
-                "%s is set via the environment but not in the secrets manager; "
-                "consider `agentic-devops secrets set %s <value>` to make the vault "
-                "the source of truth.",
-                _env_var, _ref,
-            )
+    # Hydrate vault secrets into os.environ so downstream readers (provider SDKs via
+    # LiteLLM; auth.admin_auth_from_env) find them. The VAULT IS AUTHORITATIVE: a
+    # value also present in a transitional .env is shadowed (with a warning); a value
+    # only in .env is kept, with a nudge to migrate it. ONE routine for provider keys
+    # AND the admin bootstrap creds — the secret model stays uniform across every
+    # deploy variation (LocalStack in dev, ASM via the instance role in prod). The
+    # admin hydration must precede build_authenticator() below, which reads the env.
+    _ns = settings.secrets.namespace
+    hydrate_secret_refs(secrets, provider_key_refs(_ns))
+    hydrate_secret_refs(secrets, admin_secret_refs(_ns))
 
     # Host registry (control plane): secrets-backed token store + on-demand MCP caller.
     host_store = HostStore(pool, secrets)

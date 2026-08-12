@@ -98,6 +98,17 @@ mcp_servers:
 # is honor-system over the private SSM tunnel. Unverified chat callers get `operator`
 # (read + host/Docker DIAGNOSTICS), NOT admin — so no elevated/mutating actions without
 # a real verified identity. (The example config's default is `admin`, the footgun.)
+# Auth mode. `password` = the admin plane is unlocked by the operator password
+# (bootstrap + break-glass); the admin creds hydrate from the vault (ASM
+# `devy/admin/password-hash` + `devy/admin/secret`) at boot via the instance role —
+# no .env plumbing. Explicit here (it's also the default) to guard against a future
+# default change. Interim posture for this no-public-ingress test box (reachable
+# only via IAM-gated SSM port-forward). The clean cutover to a public instance is a
+# single switch: `mode: jwt` structurally closes the password path (see
+# docs/security.md § Killing the password backdoor).
+auth:
+  mode: password
+
 rbac:
   assistant_role: operator
   default_role: viewer

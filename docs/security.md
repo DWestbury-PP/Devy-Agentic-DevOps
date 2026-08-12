@@ -130,9 +130,23 @@ the admin UI because the platform isn't up yet — a bootstrap paradox — so th
 live in the environment:
 - `DATABASE_URL` (+ `POSTGRES_PASSWORD` for the bundled DB) — Devy can't start without it.
 - `DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET` — they gate the admin plane
-  *itself*; you can't set the admin-access secret through admin access.
+  *itself*; you can't set the admin-access secret through admin access. **They still
+  live in the vault** (`devy/admin/password-hash` + `devy/admin/secret`) and hydrate
+  into the environment at boot exactly like provider keys — so "bootstrap" describes
+  their *role*, not a `.env`-only transport. Kept **out** of the editable Secrets tab
+  (you shouldn't rotate the admin-login hash through the UI that login gates); set
+  them out-of-band with `agentic-devops admin set-password` → the vault.
 - Vault access: `DEVY_MODE` and, in dev, the LocalStack `AWS_*` wiring. In prod
-  this is an **instance IAM role** — no key at rest.
+  this is an **instance IAM role** — no key at rest. This is the one true bootstrap
+  dependency: because vault access itself needs no prior secret (the IAM role is
+  ambient), *every other* secret — provider keys, MCP bearers, and the admin creds —
+  can live in the vault.
+
+> **Invariant (one secret model, many deploys).** Every secret follows the vault
+> model; a deployment *variation* changes only **where the vault is** (`DEVY_MODE`:
+> LocalStack in dev, ASM via the instance role in prod) and **how identity is
+> proven** (`auth.mode`: password vs jwt) — never *how a secret is stored or
+> loaded*. New deploy shapes conform by default instead of adding special cases.
 
 **Plane 2 — Runtime external-service credentials** (the **vault**, managed on the
 admin **Secrets tab**). Everything Devy *reaches out to*, manageable while the
@@ -260,8 +274,33 @@ from the assistant endpoints** and **off unless explicitly configured**:
   tighten it if you run chat without SSO. **Approving** an action requires the
   `elevated` tier too.
 
-Generate the password-mode secrets with `agentic-devops admin set-password`; they
-live in `~/.config/agentic-devops/.env` (never committed).
+Generate the password-mode secrets with `agentic-devops admin set-password`, then
+store them in the vault (`devy/admin/password-hash` + `devy/admin/secret`) — the
+same manager as every other secret. They hydrate into the environment at boot (dev:
+LocalStack; prod: ASM via the instance role), so nothing admin-related needs to sit
+in `.env` or the deploy pipeline.
+
+### Killing the password backdoor (password → jwt cutover)
+
+`auth.mode` is the authoritative switch, and the password path is **structurally**
+closed under jwt — not merely "unset the secret and hope":
+
+- `Authenticator.principal()` in jwt mode calls **only** the JWT verifier; it never
+  consults the admin HS256 secret, so a password-minted token is unaccepted.
+- `login_enabled` is `mode == "password" and admin.enabled`, so `POST
+  /v1/admin/login` goes dark under jwt.
+
+So the cutover to a public, SSO-fronted instance is one switch plus hygiene:
+
+1. Set `auth.mode: jwt` (with the `jwks_url`/`issuer`/`audience` block above).
+2. Don't provision `devy/admin/*` to that deployment at all — no admin password
+   material present.
+3. Verify the structural close: `POST /v1/admin/login` → `404`/`403`; a
+   password-minted token → `401`; only the SSO JWT is accepted.
+
+Until then, `password` mode is the intended **bootstrap + break-glass** path — sound
+for a no-public-ingress box reachable only via an IAM-gated SSM port-forward, where
+the password sits *behind* the AWS IAM boundary rather than on the internet.
 
 ## Guarded mutating actions
 

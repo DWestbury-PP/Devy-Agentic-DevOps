@@ -1,18 +1,22 @@
 name: Build & push images (ECR)
 
-# Manual, parameterized container build for the Devy platform.
+# Parameterized container build for the Devy platform. Two doors in — the UI/ref-picker
+# (workflow_dispatch) and the GitHub API (repository_dispatch: devy-build) — never an
+# auto-build on push (the release model is coordinated, not GitOps). See docs/deploy-design.md.
 #
 # Builds ONE, several, or ALL components in parallel (a matrix, one runner each) and
 # pushes immutable tags to their per-component ECRs. Registry-driven: the component
 # list and each build's Dockerfile/context come from the ECR provenance tags
 # (Project/Component/SourceRepo/Dockerfile), so a new component ECR is picked up by
-# "all" with no change here. Deliberate/dispatch-only — no auto-build on push (the
-# release model is coordinated, not GitOps). See docs/deploy-design.md.
+# "all" with no change here.
 #
-# The branch/tag is chosen with GitHub's native "Use workflow from" ref picker — the
-# build pins to that commit (github.sha). On a successful push the `record` job writes
-# a build manifest to SSM Parameter Store (keyed by commit SHA, with a human label and
-# branch/component "latest" pointers) that the CD process lists, picks, and resumes from.
+# Which commit? The `matrix` job resolves ONE effective ref/SHA up front and every leg
+# builds from it: the ref-picker pins to the chosen commit (github.sha); a dispatch may
+# name a branch/tag (client_payload.ref) whose tip is checked out (repository_dispatch
+# always runs on the default branch, so github.sha would otherwise be wrong). On a
+# successful push the `record` job writes a build manifest to SSM Parameter Store (keyed
+# by that SHA, with a human label and branch/component "latest" pointers) that the CD
+# process lists, picks, and resumes from.
 
 on:
   workflow_dispatch:
@@ -39,6 +43,17 @@ on:
         description: "Push to ECR + record the build (uncheck for a build-only dry run)"
         type: boolean
         default: true
+
+  # Programmatic door — symmetric with deploy.yml / host-mcp-deploy.yml. Fire a build
+  # via the GitHub API (POST /repos/…/dispatches) instead of the UI. client_payload
+  # mirrors the dispatch inputs — all optional:
+  #   {ref, components, components_advanced, push}
+  # defaults: ref = default-branch HEAD (repository_dispatch always runs on the default
+  # branch — pass a branch/tag to build its tip), components = all, push = true.
+  # Whoever calls the API is authenticated by their token; WHO may call it (the
+  # webhook-auth model) is decided separately — see docs/deploy-design.md §16.
+  repository_dispatch:
+    types: [devy-build]
 
 permissions:
   id-token: write # OIDC -> assume the build role
@@ -71,27 +86,56 @@ jobs:
       built_at: ${{ steps.meta.outputs.built_at }}
       branch_safe: ${{ steps.meta.outputs.branch_safe }}
       label: ${{ steps.meta.outputs.label }}
+      effective_sha: ${{ steps.meta.outputs.effective_sha }}
+      effective_ref: ${{ steps.meta.outputs.effective_ref }}
+      push: ${{ steps.meta.outputs.push }}
     steps:
+      # Resolve the build ref to one true commit. A repository_dispatch payload may name
+      # a branch/tag (client_payload.ref) — but that event always runs on the default
+      # branch, so github.sha is NOT the requested tip. The ref-picker path pins to the
+      # exact chosen commit (github.sha). Checking out `client_payload.ref || github.sha`
+      # collapses both to a single HEAD the whole release then builds from.
+      - name: Checkout build ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.client_payload.ref || github.sha }}
+
       - name: Compute build identity (one stamp for the whole release)
         id: meta
+        env:
+          DISPATCH_REF: ${{ github.event.client_payload.ref }}
+          IN_PUSH: ${{ inputs.push }}
+          DP_PUSH: ${{ github.event.client_payload.push }}
         run: |
           set -euo pipefail
-          short_sha="${GITHUB_SHA:0:7}"
-          # Branch/tag names can contain slashes (feature/foo) — sanitize for image
+          # The commit actually checked out — the immutable identity for every tag/manifest.
+          effective_sha="$(git rev-parse HEAD)"
+          short_sha="${effective_sha:0:7}"
+          # Ref name for labels + the by-branch pointer: the dispatched branch/tag, else
+          # the picker's ref. Names can contain slashes (feature/foo) — sanitize for image
           # tags and SSM path segments alike.
-          branch_safe="$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+          ref_name="${DISPATCH_REF:-${GITHUB_REF_NAME}}"
+          branch_safe="$(echo "${ref_name}" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
           branch_safe="${branch_safe:-detached}"
+          # push: workflow_dispatch always sends a boolean; repository_dispatch may omit it
+          # (default true — a programmatic build trigger means to publish).
+          if   [ -n "${IN_PUSH}" ]; then push="${IN_PUSH}"
+          elif [ -n "${DP_PUSH}" ]; then push="${DP_PUSH}"
+          else push="true"; fi
           stamp="$(date -u +%Y%m%dT%H%M%SZ)"          # compact, for image tags
           built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # ISO-8601, for the manifest
           label="${branch_safe}-${short_sha}-$(date -u +%Y-%m-%d-%H%M)Z"   # human-facing
           {
+            echo "effective_sha=${effective_sha}"
+            echo "effective_ref=${ref_name}"
             echo "short_sha=${short_sha}"
             echo "branch_safe=${branch_safe}"
+            echo "push=${push}"
             echo "stamp=${stamp}"
             echo "built_at=${built_at}"
             echo "label=${label}"
           } >> "$GITHUB_OUTPUT"
-          echo "Build identity: ${label}  (commit ${GITHUB_SHA})"
+          echo "Build identity: ${label}  (commit ${effective_sha}, push=${push})"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -102,8 +146,8 @@ jobs:
       - name: Resolve components -> matrix (registry-driven)
         id: resolve
         env:
-          COMPONENTS: ${{ inputs.components }}
-          COMPONENTS_ADVANCED: ${{ inputs.components_advanced }}
+          COMPONENTS: ${{ inputs.components || github.event.client_payload.components || 'all' }}
+          COMPONENTS_ADVANCED: ${{ inputs.components_advanced || github.event.client_payload.components_advanced || '' }}
         run: |
           set -euo pipefail
 
@@ -177,10 +221,10 @@ jobs:
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
-      - name: Checkout Devy @ ${{ github.sha }}
+      - name: Checkout Devy @ ${{ needs.matrix.outputs.effective_sha }}
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }} # pin every leg to the dispatched commit
+          ref: ${{ needs.matrix.outputs.effective_sha }} # pin every leg to the resolved commit
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -212,20 +256,20 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: ${{ inputs.push }}
+          push: ${{ needs.matrix.outputs.push }}
           tags: ${{ steps.tag.outputs.image }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
           provenance: false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.matrix.outputs.effective_sha }}
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
 
       # A successful push contributes one fragment to the release manifest. Skipped on
       # dry runs (push=false: no image exists) and on build failure (nothing to record).
       - name: Write manifest fragment
-        if: ${{ success() && inputs.push }}
+        if: ${{ success() && needs.matrix.outputs.push == 'true' }}
         run: |
           set -euo pipefail
           mkdir -p _manifest
@@ -239,7 +283,7 @@ jobs:
             > "_manifest/${{ matrix.component }}.json"
 
       - name: Upload manifest fragment
-        if: ${{ success() && inputs.push }}
+        if: ${{ success() && needs.matrix.outputs.push == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: manifest-${{ matrix.component }}
@@ -252,9 +296,9 @@ jobs:
           {
             echo "### ${{ matrix.component }} — ${{ job.status }}"
             echo ""
-            echo "- **Pushed:** \`${{ inputs.push }}\`"
+            echo "- **Pushed:** \`${{ needs.matrix.outputs.push }}\`"
             echo "- **Image:** \`${{ steps.tag.outputs.image }}\`"
-            echo "- **Ref:** \`${{ github.ref_name }}\` · **Commit:** \`${{ github.sha }}\`"
+            echo "- **Ref:** \`${{ needs.matrix.outputs.effective_ref }}\` · **Commit:** \`${{ needs.matrix.outputs.effective_sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # TODO(slack): post build completion to the CI/CD notifications channel once the
@@ -265,7 +309,7 @@ jobs:
           set -euo pipefail
           text=":package: Devy build *${{ matrix.component }}* — ${{ job.status }}
           • image: ${{ steps.tag.outputs.image }}
-          • ref: ${{ github.ref_name }} (${{ github.sha }})
+          • ref: ${{ needs.matrix.outputs.effective_ref }} (${{ needs.matrix.outputs.effective_sha }})
           • run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           jq -n --arg text "$text" '{text:$text}' \
             | curl -sf -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"
@@ -281,7 +325,7 @@ jobs:
   record:
     name: Record build manifest (SSM)
     needs: [matrix, build]
-    if: ${{ !cancelled() && inputs.push && needs.matrix.result == 'success' && needs.matrix.outputs.count != '0' }}
+    if: ${{ !cancelled() && needs.matrix.outputs.push == 'true' && needs.matrix.result == 'success' && needs.matrix.outputs.count != '0' }}
     runs-on: ubuntu-latest
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -299,10 +343,10 @@ jobs:
 
       - name: Assemble + write SSM manifest
         env:
-          SHA: ${{ github.sha }}
+          SHA: ${{ needs.matrix.outputs.effective_sha }}
           SHORT_SHA: ${{ needs.matrix.outputs.short_sha }}
           BRANCH: ${{ needs.matrix.outputs.branch_safe }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ needs.matrix.outputs.effective_ref }}
           BUILT_AT: ${{ needs.matrix.outputs.built_at }}
           LABEL: ${{ needs.matrix.outputs.label }}
           REQUESTED: ${{ needs.matrix.outputs.count }}

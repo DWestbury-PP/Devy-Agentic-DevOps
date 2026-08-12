@@ -71,6 +71,10 @@ gh workflow run build.yml -f components=all -f push=false
 gh workflow run build.yml --ref feat/my-change -f components=proxy
 ```
 
+`build.yml` is also reachable via the **API door** (`repository_dispatch: devy-build`)
+for programmatic triggers — same parameters, as `client_payload` (`{ref, components,
+components_advanced, push}`). See [§6 — Firing the webhook](#firing-the-webhook-l2).
+
 ### Inputs
 
 | Input | Type | Default | Meaning |
@@ -313,11 +317,16 @@ are cheap to add without ever forking the deploy logic (design: `deploy-design.m
 
 - **L1 — the primitive (built).** Each workflow has strong, typed inputs and a
   plan/apply discipline. Runnable from the Actions tab or `gh workflow run`.
-- **L2 — one door in (built for deploy + host-mcp).** Both CD workflows accept a
+- **L2 — one door in (built for all three workflows).** Every workflow accepts a
   **`repository_dispatch`** event whose `client_payload` **mirrors the dispatch inputs
   exactly** — so a webhook and a button are the *same call*, with no divergent logic:
+  - `build.yml` ← event type **`devy-build`** (`{ref, components, components_advanced, push}`)
   - `deploy.yml` ← event type **`devy-deploy`** (`{source, branch, commit, targets, mode}`)
   - `host-mcp-deploy.yml` ← event type **`devy-host-mcp-deploy`** (`{hosts, ref, profile, allow_mutations, mode}`)
+
+  `repository_dispatch` always runs on the **default branch**, so `build.yml` resolves
+  the commit from `client_payload.ref` (a branch/tag whose tip it checks out), defaulting
+  to the default-branch HEAD — the ref-picker path (`workflow_dispatch`) stays exact-commit.
 - **L3 — many faces (open canvas).** Any surface that can send an authenticated webhook
   becomes a deploy button: a web console, a Slack `/deploy` command, or **Devy itself**
   (the dogfood beat — Devy proposing and, on human approval, triggering its own deploy).
@@ -354,8 +363,8 @@ out so nobody mistakes intent for reality:
 |---|---|---|
 | **Release browse layer** | ✅ **done** — `releases` CLI + `/v1/admin/releases` API + `list_releases` tool (§2) | consume it from a web/Slack surface |
 | **SSM-read IAM grant** | ✅ **done** — the proxy instance role reads `/devy/builds/*`; the API + `list_releases` tool are live on `devy-platform` | — |
-| **Build has no webhook** ⬅ *next* | `build.yml` is dispatch-only | add a `repository_dispatch` to `build.yml` symmetrical to the deploy ones |
-| **Webhook auth model** | a token with `repo` scope | decide the durable model — a scoped fine-grained token, a GitHub App, or a small authenticated relay (`deploy-design.md` §16) |
+| **Build has no webhook** | ✅ **done** — `build.yml` accepts `repository_dispatch: devy-build` (`{ref, components, components_advanced, push}`), symmetric with the deploy workflows | — |
+| **Webhook auth model** ⬅ *next* | a token with `repo` scope | decide the durable model — a scoped fine-grained token, a GitHub App, or a small authenticated relay (`deploy-design.md` §16) |
 | **Trigger from Devy** | Devy can *read* the ledger (`list_releases`) | a propose-only `request_deploy` under guarded actions (human-approved) — the Devy-deploys-Devy beat |
 | **`deploy.yml` targets** | `role_platform` only | wire `role_edge` / `all` (Phase-2) |
 | **Slack notifications** | dormant step in `build.yml` | set `SLACK_WEBHOOK_URL` to light up build notices |

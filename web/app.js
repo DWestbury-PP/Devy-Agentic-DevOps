@@ -44,6 +44,9 @@ const USER_KEY = "devy_user";
 // replaces the honor-system name; detected via oauth2-proxy's /oauth2/userinfo. Null
 // in password/dev mode (no edge) → the localStorage name is used as before.
 let ssoEmail = null;
+// The deployment's auth model, from /v1/whoami ("password" | "jwt"). Drives the
+// two-mode header UX (see detectAuthMode). Defaults to password until whoami answers.
+let authMode = "password";
 const getUserId = () => (ssoEmail || localStorage.getItem(USER_KEY) || "").trim();
 function setUserId(v) {
   v = (v || "").trim();
@@ -880,21 +883,34 @@ const userPopEmail = document.getElementById("user-pop-email");
 const userPopRoles = document.getElementById("user-pop-roles");
 const adminLink = document.getElementById("admin-link");
 
-async function detectSSO() {
-  // /v1/whoami is served by the proxy in BOTH modes: behind the SSO edge it decodes
-  // the forwarded id_token → verified email/roles/picture; in password/dev it returns
-  // {authenticated:false} and we keep the honor-system name. (Supersedes the old
-  // oauth2-proxy /oauth2/userinfo probe — this one also carries roles for the Admin nav.)
+async function detectAuthMode() {
+  // /v1/whoami reports the deployment's auth model (+ the verified principal under
+  // SSO). It drives the header UX, which differs by mode:
+  //
+  //                      │ admin link                  │ account chip (avatar/roles)
+  //   ───────────────────┼─────────────────────────────┼───────────────────────────
+  //   password (no edge) │ ALWAYS shown — it's the      │ hidden: no SSO identity;
+  //                      │ gateway to the password gate │ chat identity is the honor-
+  //                      │ (admin.html self-gates)      │ system name in the drawer
+  //   jwt / SSO          │ shown only when is_admin     │ shown: Google avatar +
+  //                      │                              │ email + roles; sign-out
+  //                      │                              │ via the edge (/oauth2/…)
+  //
+  // The password-mode "always show admin" is deliberate: hiding it unless an SSO
+  // admin role was confirmed left password-mode operators with no way to reach
+  // /admin.html except typing the URL. The console still gates on the password, so
+  // showing the link is a convenience, not an exposure.
   try {
     const r = await fetch("/v1/whoami", { headers: { Accept: "application/json" } });
-    if (r.ok) {
-      const j = await r.json();
-      if (j && j.authenticated && j.email) applySignedIn(j);
-      // is_admin is null in dev mode (unknown); the admin console gates itself, so we
-      // only surface the shortcut when a verified role confirms it.
-      if (j && j.is_admin === true && adminLink) adminLink.hidden = false;
+    if (!r.ok) return;
+    const j = await r.json();
+    authMode = (j && j.mode) || "password";
+    document.documentElement.dataset.authMode = authMode;  // for CSS / debugging
+    if (j && j.authenticated && j.email) applySignedIn(j);  // SSO account chip
+    if (adminLink) {
+      adminLink.hidden = !(authMode !== "jwt" || j.is_admin === true);
     }
-  } catch (_) { /* no proxy reachable → honor-system identity */ }
+  } catch (_) { /* proxy unreachable → honor-system identity, header defaults stand */ }
 }
 
 function applySignedIn(who) {
@@ -941,7 +957,7 @@ if (userChip) {
 
 /* ---------- boot ---------- */
 async function boot() {
-  await detectSSO();
+  await detectAuthMode();
   await loadTiers();
   greet();
   input.focus();

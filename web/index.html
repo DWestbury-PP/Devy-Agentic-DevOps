@@ -29,9 +29,14 @@
       <button id="copy-btn" class="ghost" title="copy this conversation as Markdown">⧉ copy</button>
       <button id="hist-btn" class="ghost" title="conversation history">☰ history</button>
       <button id="new-btn" class="ghost" title="start a new conversation">+ new</button>
+      <!-- Admin entry point. Visibility is auth-mode-aware (app.js detectAuthMode):
+           password mode → always shown (the console self-gates on the password);
+           jwt/SSO → shown only for a verified admin role. Starts hidden; unhidden
+           once whoami reports the mode. -->
       <a id="admin-link" class="ghost" href="./admin.html" title="admin console" hidden>⚙ admin</a>
       <!-- Auth-aware account chip: Google avatar (or initial) + a popover with the
-           signed-in email and a sign-out action. Shown only when signed in via SSO. -->
+           signed-in email and a sign-out action. SSO/jwt ONLY — in password mode
+           there is no signed-in identity, so this stays hidden. -->
       <div id="user-menu" class="user-menu" hidden>
         <button id="user-chip" class="user-chip" title="account" aria-haspopup="true" aria-expanded="false">
           <span id="user-avatar" class="avatar" aria-hidden="true"></span>

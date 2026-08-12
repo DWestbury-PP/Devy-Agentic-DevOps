@@ -598,13 +598,19 @@ def releases_ls(
 
 @releases_app.command("show")
 def releases_show(
-    sha: str = typer.Argument(..., help="Commit SHA of the release (see `releases ls`)."),
+    sha: str = typer.Argument(..., help="Commit SHA — full or abbreviated (see `releases ls`)."),
     profile: Optional[str] = typer.Option(None, "--profile", help="AWS profile (SSO) to read with."),
     region: Optional[str] = typer.Option(None, "--region", help="AWS region (default: config)."),
 ) -> None:
     """Show one release manifest in full (the deploy `-f commit=<sha>` target)."""
+    from agentic_devops.proxy.releases import AmbiguousShaError
+
     ledger = _ledger(profile, region)
-    r = ledger.get_release(sha)
+    try:
+        r = ledger.resolve_release(sha)
+    except AmbiguousShaError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     if r is None:
         typer.echo(f"No release recorded for commit {sha!r}.", err=True)
         raise typer.Exit(code=1)

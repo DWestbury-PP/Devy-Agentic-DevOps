@@ -62,6 +62,32 @@ def test_get_release_and_missing():
     assert led.get_release("nope") is None
 
 
+def test_resolve_release_exact_full_sha():
+    led = make_fake_ledger(_params(_manifest("deadbeef0123456")))
+    assert led.resolve_release("deadbeef0123456").sha == "deadbeef0123456"
+
+
+def test_resolve_release_abbreviated_sha():
+    led = make_fake_ledger(_params(_manifest("deadbeef0123456"), _manifest("cafef00d999")))
+    # A short prefix (as printed by `releases ls`) resolves via the by-commit scan.
+    assert led.resolve_release("deadbee").sha == "deadbeef0123456"
+    assert led.resolve_release("cafe").sha == "cafef00d999"
+
+
+def test_resolve_release_unknown_returns_none():
+    led = make_fake_ledger(_params(_manifest("deadbeef0123456")))
+    assert led.resolve_release("nomatch") is None
+
+
+def test_resolve_release_ambiguous_prefix_raises():
+    from agentic_devops.proxy.releases import AmbiguousShaError
+
+    led = make_fake_ledger(_params(_manifest("abc111aaa"), _manifest("abc222bbb")))
+    with pytest.raises(AmbiguousShaError) as ei:
+        led.resolve_release("abc")
+    assert set(ei.value.candidates) == {"abc111a", "abc222b"}
+
+
 def test_resolve_branch_follows_pointer():
     led = make_fake_ledger(_params(
         _manifest("aaa1111"), branch_latest={"main": "aaa1111"},

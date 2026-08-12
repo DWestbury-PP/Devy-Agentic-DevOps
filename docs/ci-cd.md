@@ -151,7 +151,7 @@ real answer everywhere:
 ```bash
 agentic-devops releases ls               # recorded builds, newest first (STATUS/BUILT/BRANCH/…)
 agentic-devops releases latest main      # newest build on a branch (the newest-on-branch pick)
-agentic-devops releases show <sha>       # one manifest in full (the specific-commit / rollback target)
+agentic-devops releases show <sha>       # one manifest in full — SHA may be abbreviated (copy from `ls`)
 agentic-devops releases components       # newest image per component (the assembled-latest pick)
 ```
 

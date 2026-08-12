@@ -857,8 +857,13 @@ def create_app(
 
     @app.get("/v1/admin/releases/{sha}")
     def get_release_admin(sha: str, _: dict = Depends(require_admin)) -> dict[str, Any]:
+        from agentic_devops.proxy.releases import AmbiguousShaError
+
         ledger = _ledger_or_503()
-        r = ledger.get_release(sha)
+        try:
+            r = ledger.resolve_release(sha)  # accepts a full or abbreviated SHA
+        except AmbiguousShaError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         if r is None:
             raise HTTPException(status_code=404, detail=f"no release recorded for commit {sha!r}")
         return r.to_dict()

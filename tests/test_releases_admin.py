@@ -73,6 +73,11 @@ def test_get_release_and_404(client):
     assert client.get("/v1/admin/releases/nope").status_code == 404
 
 
+def test_get_release_by_abbreviated_sha(client):
+    # A short prefix resolves via resolve_release (matches `releases ls` output).
+    assert client.get("/v1/admin/releases/aaa").json()["sha"] == "aaa1111"
+
+
 def test_latest_by_branch(client):
     assert client.get("/v1/admin/releases/latest?branch=main").json()["sha"] == "aaa1111"
     assert client.get("/v1/admin/releases/latest?branch=absent").status_code == 404

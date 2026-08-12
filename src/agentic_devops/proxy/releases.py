@@ -30,6 +30,18 @@ from typing import Any, Optional
 logger = logging.getLogger("agentic_devops.releases")
 
 
+class AmbiguousShaError(ValueError):
+    """An abbreviated commit SHA matched more than one recorded release."""
+
+    def __init__(self, ref: str, candidates: list[str]) -> None:
+        self.ref = ref
+        self.candidates = candidates
+        super().__init__(
+            f"ambiguous commit prefix {ref!r} matches {len(candidates)} releases: "
+            + ", ".join(candidates)
+        )
+
+
 def safe_branch(branch: str) -> str:
     """Sanitize a branch name to the ledger's key form — identical to ``build.yml``'s
     ``tr '/' '-' | tr -cd 'A-Za-z0-9._-'`` (so ``feat/foo`` → ``feat-foo``)."""
@@ -176,6 +188,33 @@ class ReleaseLedger:
         except (ValueError, TypeError) as exc:
             logger.warning("release ledger: malformed manifest at by-commit/%s: %s", sha, exc)
             return None
+
+    def resolve_release(self, ref: str) -> Optional[Release]:
+        """Resolve a full **or abbreviated** commit SHA to its release.
+
+        Tries an exact ``by-commit/<ref>`` read first (one ``GetParameter`` — the
+        fast path for a full SHA). On a miss, falls back to a prefix scan of
+        ``by-commit/*`` so an abbreviated SHA (as printed by ``releases ls``)
+        resolves too. Returns ``None`` if nothing matches; raises
+        :class:`AmbiguousShaError` if the prefix matches more than one release."""
+        ref = ref.strip()
+        exact = self.get_release(ref)
+        if exact is not None:
+            return exact
+        key_prefix = f"{self.prefix}/by-commit/"
+        matches: list[Release] = []
+        for name, val in self._by_path("by-commit"):
+            key_sha = name[len(key_prefix):] if name.startswith(key_prefix) else name.rstrip("/").split("/")[-1]
+            if key_sha.startswith(ref):
+                try:
+                    matches.append(Release.from_manifest(json.loads(val)))
+                except (ValueError, TypeError):
+                    continue
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise AmbiguousShaError(ref, sorted(m.short_sha or m.sha[:7] for m in matches))
+        return matches[0]
 
     def resolve_branch(self, branch: str) -> Optional[Release]:
         """The newest recorded release on ``branch`` (pointer → manifest)."""

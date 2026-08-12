@@ -130,9 +130,23 @@ the admin UI because the platform isn't up yet — a bootstrap paradox — so th
 live in the environment:
 - `DATABASE_URL` (+ `POSTGRES_PASSWORD` for the bundled DB) — Devy can't start without it.
 - `DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET` — they gate the admin plane
-  *itself*; you can't set the admin-access secret through admin access.
+  *itself*; you can't set the admin-access secret through admin access. **They still
+  live in the vault** (`devy/admin/password-hash` + `devy/admin/secret`) and hydrate
+  into the environment at boot exactly like provider keys — so "bootstrap" describes
+  their *role*, not a `.env`-only transport. Kept **out** of the editable Secrets tab
+  (you shouldn't rotate the admin-login hash through the UI that login gates); set
+  them out-of-band with `agentic-devops admin set-password` → the vault.
 - Vault access: `DEVY_MODE` and, in dev, the LocalStack `AWS_*` wiring. In prod
-  this is an **instance IAM role** — no key at rest.
+  this is an **instance IAM role** — no key at rest. This is the one true bootstrap
+  dependency: because vault access itself needs no prior secret (the IAM role is
+  ambient), *every other* secret — provider keys, MCP bearers, and the admin creds —
+  can live in the vault.
+
+> **Invariant (one secret model, many deploys).** Every secret follows the vault
+> model; a deployment *variation* changes only **where the vault is** (`DEVY_MODE`:
+> LocalStack in dev, ASM via the instance role in prod) and **how identity is
+> proven** (`auth.mode`: password vs jwt) — never *how a secret is stored or
+> loaded*. New deploy shapes conform by default instead of adding special cases.
 
 **Plane 2 — Runtime external-service credentials** (the **vault**, managed on the
 admin **Secrets tab**). Everything Devy *reaches out to*, manageable while the
@@ -260,8 +274,101 @@ from the assistant endpoints** and **off unless explicitly configured**:
   tighten it if you run chat without SSO. **Approving** an action requires the
   `elevated` tier too.
 
-Generate the password-mode secrets with `agentic-devops admin set-password`; they
-live in `~/.config/agentic-devops/.env` (never committed).
+### Setting the admin credentials (runbook)
+
+You won't do this often, so here's the whole thing end to end.
+
+**The two values — two jobs, don't mix them up** (they look alike, and swapping them
+fails *silently*):
+
+| Vault ref | Env var | What it is | How to recognize it |
+|---|---|---|---|
+| `devy/admin/password-hash` | `DEVY_ADMIN_PASSWORD_HASH` | bcrypt hash of your password (checked at login) | starts `$2b$`, **60 chars** |
+| `devy/admin/secret` | `DEVY_ADMIN_SECRET` | HS256 key that signs/verifies session tokens | **64 hex** chars |
+
+**Which vault, and how you reach it.** The refs are the same everywhere; only the
+*backend* differs, and it's selected by the credential profile — not by the tool:
+
+| Deployment | Backend | How the tool reaches it |
+|---|---|---|
+| AWS (e.g. `devy-platform`) | real Secrets Manager | `aws … --profile <your-aws-sso-profile>` |
+| Local dev box | LocalStack SM | `--profile ls-devy` (its `~/.aws/config` embeds `endpoint_url=…:4566`), or `agentic-devops secrets set` |
+
+**Step 1 — generate the pair** (your own terminal; values stay on your machine). The
+console script breaks on a repo path with spaces, so use the module form:
+
+```bash
+cd /path/to/Devy-Agentic-DevOps
+PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main admin set-password
+#   → devy/admin/password-hash = $2b$12$……   (the HASH — 60 chars, starts $2b$)
+#   → devy/admin/secret        = <64 hex>     (the SECRET)
+```
+
+**Step 2 — store both.** One tool (`aws`), one knob (`--profile`). Single-quote the
+hash — its `$` chars would be eaten by the shell otherwise. `create-secret` the first
+time; `put-secret-value` to overwrite/rotate.
+
+```bash
+# → AWS (real Secrets Manager)
+aws --profile <your-aws-sso-profile> secretsmanager create-secret \
+    --name devy/admin/password-hash --secret-string '$2b$12$……'
+aws --profile <your-aws-sso-profile> secretsmanager create-secret \
+    --name devy/admin/secret        --secret-string '<64 hex>'
+
+# → LocalStack (must be running: ./devy.sh up). See the persistence note below.
+aws --profile ls-devy secretsmanager create-secret --name devy/admin/password-hash --secret-string '$2b$12$……'
+aws --profile ls-devy secretsmanager create-secret --name devy/admin/secret        --secret-string '<64 hex>'
+```
+
+> **LocalStack persistence gotcha.** LocalStack Community *doesn't persist* — recreate
+> the container and its Secrets Manager is wiped. Devy survives that only for secrets
+> written through **`agentic-devops secrets set`**, which mirrors to
+> `~/.config/agentic-devops/secrets-store.json` and re-seeds LocalStack on boot
+> (`rehydrate()`). Raw `aws --profile ls-devy` skips that mirror, so those creds vanish
+> on the next `./devy.sh` recreate. **For the local box, prefer `secrets set`:**
+> ```bash
+> PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main secrets set devy/admin/secret '<64 hex>'
+> ```
+> (Real AWS has no such issue — ASM persists, and `secrets set` refuses in prod mode anyway.)
+
+**Step 3 — verify before you rely on it.** A swapped paste is *the* common failure and
+it fails silently (a malformed hash rejects every login). Read each back and check the
+**format**, never the value — same command for either backend, just swap `--profile`:
+
+```bash
+for n in devy/admin/password-hash devy/admin/secret; do
+  v=$(aws --profile <profile> secretsmanager get-secret-value --secret-id "$n" --query SecretString --output text)
+  echo "$n : $(echo "$v" | grep -qE '^\$2[aby]\$[0-9]{2}\$' && echo bcrypt-hash \
+        || (echo "$v" | grep -qE '^[0-9a-f]{64}$' && echo 64-hex || echo other))"
+done
+```
+
+`devy/admin/password-hash` **must** report `bcrypt-hash`; if it says `64-hex`, you
+pasted the secret into the hash slot — re-store it with `put-secret-value`. Both values
+hydrate into the environment at boot; until both are set *and the hash is a real hash*,
+the admin plane stays disabled (`503`) and login always fails.
+
+### Killing the password backdoor (password → jwt cutover)
+
+`auth.mode` is the authoritative switch, and the password path is **structurally**
+closed under jwt — not merely "unset the secret and hope":
+
+- `Authenticator.principal()` in jwt mode calls **only** the JWT verifier; it never
+  consults the admin HS256 secret, so a password-minted token is unaccepted.
+- `login_enabled` is `mode == "password" and admin.enabled`, so `POST
+  /v1/admin/login` goes dark under jwt.
+
+So the cutover to a public, SSO-fronted instance is one switch plus hygiene:
+
+1. Set `auth.mode: jwt` (with the `jwks_url`/`issuer`/`audience` block above).
+2. Don't provision `devy/admin/*` to that deployment at all — no admin password
+   material present.
+3. Verify the structural close: `POST /v1/admin/login` → `404`/`403`; a
+   password-minted token → `401`; only the SSO JWT is accepted.
+
+Until then, `password` mode is the intended **bootstrap + break-glass** path — sound
+for a no-public-ingress box reachable only via an IAM-gated SSM port-forward, where
+the password sits *behind* the AWS IAM boundary rather than on the internet.
 
 ## Guarded mutating actions
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -78,6 +79,48 @@ def provider_key_refs(namespace: str = "devy") -> dict[str, str]:
         f"{namespace}/provider/tavily": "TAVILY_API_KEY",
         f"{namespace}/provider/langsmith": "LANGSMITH_API_KEY",
     }
+
+
+# Admin-plane bootstrap credentials (Plane-1) — the LAST secret to join the vault
+# model. Set out-of-band (`agentic-devops admin set-password` → the vault), NOT via
+# the editable Secrets tab: you shouldn't rotate the admin-login hash through a UI
+# that same login gates. Hydrated into os.environ exactly like provider keys, so a
+# deploy variation changes only WHERE the vault is (LocalStack vs ASM), never how
+# these are handled. Read by auth.admin_auth_from_env(). ref → environment variable.
+def admin_secret_refs(namespace: str = "devy") -> dict[str, str]:
+    return {
+        f"{namespace}/admin/password-hash": "DEVY_ADMIN_PASSWORD_HASH",
+        f"{namespace}/admin/secret": "DEVY_ADMIN_SECRET",
+    }
+
+
+def hydrate_secret_refs(secrets: "SecretsProvider", refs: dict[str, str]) -> None:
+    """The single vault→env hydration routine (vault is authoritative).
+
+    For each ``{ref: ENV_VAR}``: if the vault holds a value, set it into
+    ``os.environ`` (warning if a differing ``.env`` copy is being shadowed); if only
+    ``.env`` has it, keep it and nudge to move it into the vault. Used for BOTH
+    provider keys and admin bootstrap creds — one implementation, so the secret model
+    stays uniform across every deploy variation."""
+    for ref, env_var in refs.items():
+        vault_val = secrets.get(ref)
+        env_val = os.environ.get(env_var)
+        if vault_val:
+            if env_val and env_val != vault_val:
+                logger.warning(
+                    "%s is set in BOTH .env and the secrets manager; using the vault "
+                    "value (the source of truth). Remove %s from your .env.",
+                    env_var, env_var,
+                )
+            os.environ[env_var] = vault_val
+            logger.info("hydrated %s from the secrets manager", env_var)
+        elif env_val:
+            logger.info(
+                "%s is set via the environment but not in the secrets manager; "
+                "consider `agentic-devops secrets set %s <value>` to make the vault "
+                "the source of truth.",
+                env_var, ref,
+            )
 
 
 class SecretsProvider:

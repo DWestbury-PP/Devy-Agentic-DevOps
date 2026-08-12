@@ -369,16 +369,29 @@ def admin_set_password(
         help="The admin password (prompted; not echoed).",
     ),
 ) -> None:
-    """Hash an admin password for the control plane (paste the output into .env)."""
+    """Hash an admin password for the control plane, then store it in the vault.
+
+    Prints a matched pair — the bcrypt password hash and a fresh random signing
+    secret. Store both in the vault under ``devy/admin/*``; they hydrate into the
+    environment at boot (dev: LocalStack; prod: AWS SM via the instance role).
+    """
     import secrets
 
     import bcrypt
 
     pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    typer.echo("\nAdd these to your .env (control-plane secrets — keep them out of git):\n")
-    typer.echo(f"DEVY_ADMIN_PASSWORD_HASH={pw_hash}")
-    typer.echo(f"DEVY_ADMIN_SECRET={secrets.token_hex(32)}")
-    typer.echo("\nUntil both are set, the admin plane stays disabled (endpoints return 503).")
+    admin_secret = secrets.token_hex(32)
+    typer.echo("\nStore these in the vault (control-plane bootstrap creds — keep out of git):\n")
+    typer.echo(f"  devy/admin/password-hash = {pw_hash}")
+    typer.echo(f"  devy/admin/secret        = {admin_secret}")
+    typer.echo(
+        "\n  dev  (LocalStack):  agentic-devops secrets set devy/admin/password-hash '<value>'"
+        "\n  prod (AWS SM):      aws secretsmanager create-secret --name devy/admin/password-hash"
+        " --secret-string '<value>'"
+        "\n                      (…and likewise for devy/admin/secret)"
+        "\n\nThey hydrate into the environment at boot. Until BOTH are set, the admin"
+        "\nplane stays disabled (endpoints return 503)."
+    )
 
 
 # -- secrets (S-1): manage the unified secrets manager (LocalStack/AWS SM) --------

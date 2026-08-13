@@ -182,14 +182,14 @@ jobs:
             arn="$(aws ecr describe-repositories --repository-names "$repo" \
                    --query 'repositories[0].repositoryArn' --output text 2>/dev/null || true)"
             if [ -z "$arn" ] || [ "$arn" = "None" ]; then
-              echo "::error::ECR repository '$repo' not found — add its block to the registry stack (ADR-022)."
+              echo "::error::ECR repository '$repo' not found — add it to your ECR registry IaC (with provenance tags)."
               exit 1
             fi
             tags="$(aws ecr list-tags-for-resource --resource-arn "$arn" --output json)"
             component="$(echo "$tags"  | jq -r '(.tags[] | select(.Key=="Component")  | .Value) // ""')"
             dockerfile="$(echo "$tags" | jq -r '(.tags[] | select(.Key=="Dockerfile") | .Value) // ""')"
             if [ -z "$component" ] || [ -z "$dockerfile" ]; then
-              echo "::error::Repo '$repo' is missing Component/Dockerfile provenance tags (ADR-022)."
+              echo "::error::Repo '$repo' is missing Component/Dockerfile provenance tags — set them on the ECR repo."
               exit 1
             fi
             context="$(dirname "$dockerfile")"

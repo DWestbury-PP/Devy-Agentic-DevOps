@@ -65,7 +65,7 @@ Two halves:
   previews the plan; `--only/--skip` scope it. Ref parity (`devy/provider/*`, `devy/github/*`, `devy/host/*`)
   is what makes the dev→prod resolve path identical.
 - **(b) let the host READ them — DONE (Terraform), least-privilege by role.** Rather than one broad
-  `devy/*` grant, the `aws-terraform` permission-set menu now splits secrets by role: `alloy-secrets`
+  `devy/*` grant, your IaC layer's permission-set menu now splits secrets by role: `alloy-secrets`
   narrowed to `devy/alloy/*` (every host runs Alloy) and a new **`devy-platform-secrets`**
   (`devy/{provider,github,host,mcp}/*`) attached to the **`devy-platform` host only**. Edges (host-mcp)
   read only the Alloy key — they never see provider/GitHub secrets. No CMK in play (the managed

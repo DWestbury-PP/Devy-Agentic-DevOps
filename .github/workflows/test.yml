@@ -1,0 +1,172 @@
+name: Test & lint
+
+# The CI gate for the app itself — the counterpart to build.yml/deploy.yml, which
+# ship it. Those are deliberately dispatch-only (the release model is coordinated,
+# not GitOps); this one runs on every PR, because its whole job is to catch drift
+# BEFORE a human hits it on a cold clone or a deploy host.
+#
+# It exists because a two-week gap between local and AWS work let several breakages
+# reach main unnoticed — retired model IDs in config.example.yaml, `docker compose`
+# commands that could never have worked, an unpinned lint contract that shifted with
+# whatever ruff a contributor had. All of that is mechanically checkable, so check it.
+#
+# Three jobs, deliberately cheap (~2 min total) so it never becomes the thing people
+# skip:
+#   test    — both suites on the Dockerfile's Python, against real pgvector
+#   lint    — ruff, against the rule set pinned in [tool.ruff.lint]
+#   sanity  — the shipped examples parse, and the docs don't reference a compose file
+#             that doesn't exist
+#
+# Local equivalents (see CONTRIBUTING.md) are the same commands, so a green CI run
+# and a green local run mean the same thing.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a PR supersedes the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (py3.12 + pgvector)
+    runs-on: ubuntu-latest
+    services:
+      # pgvector, not plain postgres — the knowledge/memory suites need the `vector`
+      # extension. Mapped to 5433 to match the local throwaway in CONTRIBUTING.md, so
+      # AGENTIC_TEST_DATABASE_URL is identical in CI and on a laptop.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentic_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentic_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTIC_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/agentic_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # 3.12 to match Dockerfile's python:3.12-slim. Testing on a different minor
+      # than we ship on is how you find out about a version-specific bug in prod.
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev]"
+
+      # -rs prints the reason for every skip. Without a reachable DB ~187 of 475 tests
+      # skip and the run still reports success — so make the skips visible in the log
+      # rather than letting a silently-degraded run look green.
+      - name: Proxy suite
+        run: .venv/bin/pytest -q -rs
+
+      - name: host-MCP suite
+        run: .venv/bin/pytest -q -rs host-mcp/tests
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev]"
+
+      # The rule set is pinned in [tool.ruff.lint], so this is reproducible on any
+      # ruff >= 0.6 — the version a contributor happens to have no longer changes the
+      # verdict. Both packages: host-mcp is a separate distribution.
+      - name: ruff
+        run: |
+          .venv/bin/ruff check src/ tests/
+          .venv/bin/ruff check host-mcp/src host-mcp/tests
+
+  sanity:
+    name: Shipped examples & compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # A new user copies config.example.yaml verbatim. If it doesn't parse, their
+      # first run fails — and nothing else in CI would have noticed.
+      #
+      # Via uv rather than the runner's python3: PyYAML isn't guaranteed present, and
+      # Ubuntu 24.04 runners are PEP 668 externally-managed, so `pip install` into the
+      # system interpreter can hard-fail. `--with` gets an ephemeral env, no venv.
+      - name: config.example.yaml parses
+        run: |
+          uv run --with pyyaml --no-project python -c \
+            "import yaml; yaml.safe_load(open('config.example.yaml')); print('ok')"
+
+      # Catches YAML errors and unresolvable interpolation in the files that actually
+      # start the stack. The AWS file and the SSO overlay reference secrets that only
+      # exist at deploy time, so feed them placeholders — we're checking structure,
+      # not values.
+      - name: compose files parse
+        run: |
+          docker compose -f docker-compose-local.yml config >/dev/null
+          echo "local: ok"
+          DEVY_PROXY_IMAGE=placeholder DEVY_CHAT_UI_IMAGE=placeholder \
+          POSTGRES_PASSWORD=placeholder DATABASE_URL=postgresql://u:p@h:5432/d \
+            docker compose -f docker-compose-aws.yml config >/dev/null
+          echo "aws: ok"
+          OAUTH2_PROXY_CLIENT_ID=placeholder OAUTH2_PROXY_CLIENT_SECRET=placeholder \
+          OAUTH2_PROXY_COOKIE_SECRET=placeholder \
+            docker compose -f docker-compose-local.yml -f docker-compose.auth.yml config >/dev/null
+          echo "auth overlay: ok"
+
+      # There is no docker-compose.yml here, so a bare `docker compose …` dies with
+      # "no configuration file provided: not found". That bug shipped in 6+ places,
+      # including a README line asserting it worked.
+      #
+      # Match COMMAND LINES only — lines that begin with `docker compose` (optionally
+      # behind a comment marker), not prose. Prose describing the problem ("there is
+      # no docker-compose.yml") reads identically to the problem itself, so a naive
+      # filename grep flags the very warnings that document it.
+      - name: no compose commands missing an -f file
+        run: |
+          FILES="README.md CONTRIBUTING.md docs/ docker-compose-local.yml docker-compose-aws.yml docker-compose.auth.yml"
+          bad=$(grep -rnE '^[[:space:]]*#?[[:space:]]*docker compose ' \
+                  --include='*.md' --include='*.yml' $FILES 2>/dev/null \
+                | grep -v -- '-f docker-compose' || true)
+          phantom=$(grep -rn -- '-f docker-compose\.yml' \
+                  --include='*.md' --include='*.yml' $FILES 2>/dev/null || true)
+          if [ -n "$bad$phantom" ]; then
+            echo "$bad$phantom"
+            echo '::error::A documented "docker compose" command names no -f file (or'
+            echo 'names docker-compose.yml, which does not exist). Use ./devy.sh, or'
+            echo 'pass -f docker-compose-local.yml / -aws.yml explicitly.'
+            exit 1
+          fi
+          echo "ok — every documented compose command names a real file"

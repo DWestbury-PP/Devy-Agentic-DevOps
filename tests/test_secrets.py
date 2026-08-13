@@ -195,7 +195,8 @@ def test_zero_ttl_always_refetches():
     client = _CountingSM()
     client._d["devy/x"] = "v"
     s = SecretsProvider(client, writable=True, cache_ttl=0)
-    s.get("devy/x"); s.get("devy/x")
+    s.get("devy/x")
+    s.get("devy/x")
     assert client.gets == 2
 
 

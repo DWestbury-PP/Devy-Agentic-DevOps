@@ -46,21 +46,26 @@ docker run -d --name agentic-test-pg -e POSTGRES_PASSWORD=postgres \
     -e POSTGRES_DB=agentic_test -p 5433:5432 pgvector/pgvector:pg16
 export AGENTIC_TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/agentic_test"
 
-python -m pytest -q                 # proxy suite → 475 passed
-python -m pytest -q host-mcp/tests  # host-MCP suite → 51 passed
-uvx ruff@0.6.9 check src/ tests/    # lint (pin the version — see below)
+pytest -q                           # proxy suite → 475 passed
+pytest -q host-mcp/tests            # host-MCP suite → 51 passed
+ruff check src/ tests/              # lint
+ruff check host-mcp/src host-mcp/tests
 ```
 
-Two gotchas worth knowing before you burn time on them:
+**CI runs exactly these commands** ([`test.yml`](.github/workflows/test.yml)) on the
+same Python 3.12, against a real pgvector service — so a green local run and a green
+CI run mean the same thing. Two things make that true, both pinned in `pyproject.toml`
+rather than left to whatever a contributor happens to have installed:
 
-- **`python -m pytest`, not bare `pytest`.** `[tool.pytest.ini_options] pythonpath`
-  lists `src` and `host-mcp/src` but not `.`, so the three modules importing
-  `tests.conftest` fail to collect under the bare entry point. The module form puts
-  the CWD on `sys.path`.
-- **Pin ruff.** `[tool.ruff]` sets only `line-length` + `target-version` — no explicit
-  rule selection — and the dev extra says `ruff>=0.4` with no upper bound. Ruff's
-  default rule set has grown a lot since, so an unpinned modern ruff reports ~642
-  findings against unchanged code (mostly `UP045`) versus 8 on 0.4–0.6.
+- `pythonpath` includes `"."`, so the bare `pytest` entry point can import
+  `tests.conftest`. Without it those modules fail to *collect* (not fail a test),
+  which reads like a broken checkout.
+- `[tool.ruff.lint] select` pins the rule set explicitly. Ruff's implicit defaults
+  have grown a lot over time; unpinned, the same unchanged code reported ~642 findings
+  on a current ruff versus 8 on an older one. Pinned, every ruff ≥ 0.6 agrees.
+
+If you widen the ruff rule set, do it deliberately in `pyproject.toml` — don't rely on
+a newer ruff's defaults, or the next contributor gets a different verdict than CI.
 
 The Go `ask` TUI (Go 1.26+):
 

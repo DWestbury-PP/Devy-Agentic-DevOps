@@ -78,7 +78,7 @@ def test_extract_links_keeps_internal_drops_external_and_anchors():
     links = extract_links(body)
     assert "/tables/orders.md" in links
     assert "./other.md" in links
-    assert all(not l.startswith("http") for l in links)
+    assert all(not link.startswith("http") for link in links)
     assert "#steps" not in links
 
 

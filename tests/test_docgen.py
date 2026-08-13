@@ -197,7 +197,6 @@ def test_assemble_okf_requires_type():
 
 
 def test_assemble_okf_roundtrips_frontmatter():
-    import yaml
     from agentic_devops.knowledge.frontmatter import parse_frontmatter
     doc = assemble_okf({"type": "architecture", "tags": ["a", "b"]}, "## Hi\n\ntext")
     fm, body = parse_frontmatter(doc)

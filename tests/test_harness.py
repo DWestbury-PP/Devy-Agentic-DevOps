@@ -287,9 +287,9 @@ def test_find_tools_list_only_surveys_without_loading():
                                               arguments={"category": "host", "list_only": True})]),
         ProviderResponse(text="surveyed"),
     ])
-    result = run_turn(provider, router, _settings(),
-                      messages=[{"role": "user", "content": "what host tools exist?"}],
-                      tier=ModelTier(model="fake"))
+    run_turn(provider, router, _settings(),
+             messages=[{"role": "user", "content": "what host tools exist?"}],
+             tier=ModelTier(model="fake"))
     # the survey did NOT load host tools into the callable set → the 2nd call was
     # offered only find_tools (survey doesn't append tool schemas)
     assert provider.offered_tool_names[1] == ["find_tools"]

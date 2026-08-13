@@ -350,30 +350,33 @@ docker run -d --name agentic-test-pg -e POSTGRES_PASSWORD=postgres \
 
 export AGENTIC_TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/agentic_test"
 
-.venv/bin/python -m pytest -q                 # proxy suite  → 475 passed
-.venv/bin/python -m pytest -q host-mcp/tests  # host-MCP suite → 51 passed
+.venv/bin/pytest -q                 # proxy suite  → 475 passed
+.venv/bin/pytest -q host-mcp/tests  # host-MCP suite → 51 passed
 ```
 
-Two traps:
-
-- **Use `python -m pytest`, not bare `pytest`.** `[tool.pytest.ini_options] pythonpath`
-  lists `src` and `host-mcp/src` but not `.`, so three modules that import
-  `tests.conftest` fail to collect under the bare entry point. The module form puts the
-  CWD on `sys.path`.
-- **Without `AGENTIC_TEST_DATABASE_URL`, 187 of 475 tests skip** — 39% of the suite
-  passing vacuously. A bare run reports `288 passed` and looks green.
+> **Without `AGENTIC_TEST_DATABASE_URL`, 187 of 475 tests skip** — 39% of the suite
+> passing vacuously. A bare run reports `288 passed` and looks green, which is why the
+> throwaway Postgres above isn't optional. CI passes `-rs` so skips are visible in the
+> log; do the same locally if a run looks suspiciously fast.
 
 ### Lint
 
 ```bash
-uvx ruff@0.6.9 check src/ tests/       # → 8 findings
+.venv/bin/ruff check src/ tests/
+.venv/bin/ruff check host-mcp/src host-mcp/tests
 ```
 
-`[tool.ruff]` sets only `line-length` and `target-version` — no explicit rule
-selection — and the dev extra says `ruff>=0.4` with no upper bound. Ruff's default rule
-set has grown substantially since, so an unpinned modern ruff reports **642** findings
-against the same unchanged code (477 of them `UP045`, `Optional[X]` → `X | None`).
-Pin the version until `pyproject.toml` pins the rule set.
+The rule set is pinned in `[tool.ruff.lint]`, so any ruff ≥ 0.6 gives the same verdict
+as CI. (It wasn't always: with the rule set left implicit, a current ruff reported ~642
+findings against unchanged code where an older one reported 8 — the version a
+contributor happened to have decided the outcome.)
+
+### CI
+
+[`test.yml`](../.github/workflows/test.yml) runs both suites on Python 3.12 against a
+real pgvector service, plus ruff and a sanity job that parses `config.example.yaml` and
+all three compose files. It runs on every PR — unlike `build.yml` / `deploy.yml`, which
+are dispatch-only because the release model is coordinated rather than GitOps.
 
 ---
 
@@ -388,7 +391,7 @@ Pin the version until `pyproject.toml` pins the rule set.
 | HTTP 400 on the balanced/deep tier | `temperature`/`top_p`/`top_k` set on Opus 4.7+ | Remove it from the tier |
 | Every Fable 5 request 400s | org is on zero data retention | Fable 5 needs 30-day retention |
 | `aws: NoRegion` / `NoCredentials` | `--profile` omitted; no `[default]` exists | `export AWS_PROFILE=ls-devy` |
-| `pytest` → `No module named 'tests'` | bare entry point; CWD not on `sys.path` | `python -m pytest` |
+| `pytest` → `No module named 'tests'` | older checkout whose `pythonpath` omitted `"."` | Pull latest, or use `python -m pytest` |
 | Login silently breaks after enabling SSO | ran `docker compose up` without the auth overlay | Use `./devy.sh up` — it adds the overlay |
 
 ---

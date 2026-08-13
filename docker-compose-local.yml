@@ -1,8 +1,12 @@
 # LLM-PROXY service.
 #
-#   docker compose up -d --build      # build + start
-#   docker compose down               # stop
-#   docker compose logs -f            # follow logs
+# NOTE: there is no plain `docker-compose.yml`, so a bare `docker compose …` fails.
+# Use ./devy.sh (it assembles the -f files and mode env), or pass -f explicitly.
+#
+#   ./devy.sh --no-auth up            # build + start in password mode, then migrate
+#   ./devy.sh down                    # stop
+#   ./devy.sh logs -f                 # follow logs
+#   docker compose -f docker-compose-local.yml up -d --build    # explicit -f form
 #
 # Config and secrets are read from a mounted config directory (defaults to your
 # ~/.config/agentic-devops). Put config.yaml and .env there — the same files the
@@ -69,7 +73,7 @@ services:
   #
   # BIND AN EXISTING / MANAGED DB INSTEAD: set DATABASE_URL to your endpoint, run
   # `agentic-devops db migrate` once against it, and start only the other services
-  # (e.g. `docker compose up -d proxy host-mcp chat-ui`). This bundled service is
+  # (e.g. `./devy.sh --no-auth up proxy host-mcp chat-ui`). This bundled service is
   # the zero-setup default; a managed DB is the clean production upgrade.
   postgres:
     image: pgvector/pgvector:pg16
@@ -187,7 +191,7 @@ services:
   # Phase 5 RCA showcase (opt-in): a "faulty" worker that exhausts its DB pool
   # and OOM crash-loops, so Devy can investigate a real running container live
   # (host MCP docker_ps/logs/inspect/stats) and cross-reference the platform
-  # runbook. Start it with:  docker compose --profile demo up -d demo-faulty
+  # runbook. Start it with:  ./devy.sh --no-auth --profile demo up -d demo-faulty
   demo-faulty:
     image: busybox:1.36
     container_name: agentic-devops-demo-faulty

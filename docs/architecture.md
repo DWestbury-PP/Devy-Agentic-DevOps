@@ -69,7 +69,7 @@ src/agentic_devops/
 │   ├── history.py      ConversationMemoryStore (conversation recall)
 │   ├── retrieval.py    the search_knowledge tool
 │   └── factory.py      build store + embedder from config
-├── db/             Postgres connection pool + bootstrap schema.sql
+├── db/             Postgres connection pool + migrations/ (001_baseline.sql = the schema)
 └── cli/main.py     `agentic-devops serve | ingest | db init | admin set-password | secrets set|list`
 ```
 
@@ -147,9 +147,11 @@ One **Postgres + pgvector** instance backs everything that survives a restart:
 - `attachments` — image blob refs + one-time vision digests of past-turn images.
 
 The DSN (`database.url` / `$DATABASE_URL`) is the single deployment knob — the
-bundled compose container or a managed instance (RDS/Aurora). The idempotent
-bootstrap (`db/schema.sql`) is applied by compose init, by `agentic-devops db
-init`, and best-effort on proxy startup. See [Deployment](deployment.md).
+bundled compose container or a managed instance (RDS/Aurora). A fresh volume is
+bootstrapped from `db/migrations/001_baseline.sql` (mounted into the Postgres image's
+init dir); schema *evolution* is owned by the versioned ledger that
+`agentic-devops db migrate` applies. See [DB migrations](db-migrations.md) and
+[Deployment](deployment.md).
 
 ## Surfaces
 

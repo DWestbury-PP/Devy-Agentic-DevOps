@@ -32,21 +32,35 @@ tests/  host-mcp/tests/   the two test suites
 
 ## Dev setup
 
-The proxy is **Python 3.10+** (the dev venv uses 3.14). Always install via
-`python -m pip`.
+The proxy is **Python 3.10+**; use **3.12** to match the `Dockerfile`. macOS system
+Python is 3.9 — below the floor — so work in a venv rather than reordering `PATH`
+(Homebrew's `python3` symlink follows the newest formula and shifts under you).
 
 ```bash
-python -m pip install -e ".[dev]"
+uv venv --python 3.12 && uv pip install -e ".[dev]"   # or: python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
-# Postgres + pgvector is REQUIRED (sessions, knowledge, memory). For tests,
-# start a throwaway (the DB-backed suites skip with a hint if none is reachable):
+# Postgres + pgvector is REQUIRED (sessions, knowledge, memory). For tests, start a
+# throwaway — NOTE this is separate from the compose Postgres, which publishes no
+# host port. Without it ~187 of 475 tests SKIP and a bare run still looks green:
 docker run -d --name agentic-test-pg -e POSTGRES_PASSWORD=postgres \
     -e POSTGRES_DB=agentic_test -p 5433:5432 pgvector/pgvector:pg16
+export AGENTIC_TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/agentic_test"
 
-python -m pytest -q                 # proxy suite (point AGENTIC_TEST_DATABASE_URL if not :5433)
-python -m pytest -q host-mcp/tests  # host-MCP suite
-ruff check src/ tests/              # lint
+python -m pytest -q                 # proxy suite → 475 passed
+python -m pytest -q host-mcp/tests  # host-MCP suite → 51 passed
+uvx ruff@0.6.9 check src/ tests/    # lint (pin the version — see below)
 ```
+
+Two gotchas worth knowing before you burn time on them:
+
+- **`python -m pytest`, not bare `pytest`.** `[tool.pytest.ini_options] pythonpath`
+  lists `src` and `host-mcp/src` but not `.`, so the three modules importing
+  `tests.conftest` fail to collect under the bare entry point. The module form puts
+  the CWD on `sys.path`.
+- **Pin ruff.** `[tool.ruff]` sets only `line-length` + `target-version` — no explicit
+  rule selection — and the dev extra says `ruff>=0.4` with no upper bound. Ruff's
+  default rule set has grown a lot since, so an unpinned modern ruff reports ~642
+  findings against unchanged code (mostly `UP045`) versus 8 on 0.4–0.6.
 
 The Go `ask` TUI (Go 1.26+):
 

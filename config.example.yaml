@@ -87,6 +87,11 @@ secrets:
 # RBAC-2: each role caps the tool safety tier the agent may call —
 #   viewer → read-only · operator → +diagnostic (host checks) · admin → +elevated (writes).
 
+# ⚠️ DO NOT set `temperature` (or `top_p` / `top_k`) on Claude Opus 4.7+, Opus 4.8,
+# Opus 5, Sonnet 5, or Fable 5 — those models REMOVED the sampling parameters and
+# return HTTP 400 if any are sent. The proxy only forwards `temperature` when a tier
+# sets it, so leaving it unset is what keeps these tiers working; steer with prompting
+# instead. Older models (e.g. Sonnet 4.5, Haiku 4.5) still accept it.
 tiers:
   fast:
     model: ollama/llama3.1          # a local model via Ollama — cheap, private, quick
@@ -95,15 +100,14 @@ tiers:
     max_tokens: 2048
 
   balanced:
-    model: anthropic/claude-3-5-haiku-latest
+    model: anthropic/claude-haiku-4-5
     label: Balanced
     max_tokens: 4096
 
   deep:
-    model: anthropic/claude-3-5-sonnet-latest
+    model: anthropic/claude-sonnet-5
     label: Deep
     max_tokens: 8192
-    # temperature: 0.2
     # context_window: 200000   # total input budget; conversation compaction
     #                          # triggers at compaction_ratio of this (see below).
     # Backup models tried, in order, when the primary fails in a way worth
@@ -123,7 +127,7 @@ tiers:
 # Example of mixing providers across tiers (uncomment / adapt):
 #   fast:     { model: openai/gpt-4o-mini,  label: Fast }
 #   balanced: { model: gemini/gemini-1.5-pro, label: Balanced }
-#   deep:     { model: anthropic/claude-3-5-sonnet-latest, label: Deep }
+#   deep:     { model: anthropic/claude-opus-4-8, label: Deep }
 
 # --- External MCP servers to mount (optional) ---
 # The proxy connects to each at startup and registers its tools into the

@@ -87,6 +87,11 @@ Devy is a platform; these are its plug points. Each is documented in
 The whole stack runs in Docker. You need a model provider key (or a local
 Ollama). From a clean clone:
 
+> First time on this machine? **[Bootstrapping from a cold clone](docs/bootstrap.md)**
+> is the step-by-step version — it covers the admin credentials, the expected
+> first-boot MCP warning, and the LocalStack persistence trap that the four lines
+> below skip over.
+
 ```bash
 # 1. Configure model tiers — the operator decides which models back
 #    fast / balanced / deep (any provider via LiteLLM, or local via Ollama).
@@ -105,8 +110,9 @@ echo "HOST_MCP_TOKEN=$(openssl rand -hex 24)" >> .env
 ./devy.sh --no-auth up
 #    Later, turn on Google SSO (adds the oauth2-proxy edge) with plain `./devy.sh up`
 #    — see docs/deployment.md for the SSO setup + order of operations.
-#    (Raw `docker compose up -d --build` still works; the wrapper just adds the -f
-#     files, mode env, and conveniences like `./devy.sh doctor` / `rebuild` / `psql`.)
+#    (There is no plain `docker-compose.yml`, so a bare `docker compose …` fails —
+#     use the wrapper, or pass `-f docker-compose-local.yml` yourself. The wrapper
+#     adds the -f files, mode env, and `./devy.sh doctor` / `rebuild` / `psql`.)
 #   The bundled Postgres (pgvector) self-bootstraps its schema on first start.
 #   Managed DB instead? Set DATABASE_URL, run `agentic-devops db init` once,
 #   and start only proxy/host-mcp/chat-ui. See docs/deployment.md.
@@ -207,7 +213,7 @@ every knob is in the **[Configuration reference](docs/configuration.md)**.
 
 ```bash
 agentic-devops ingest corpora/platform              # the matching runbook
-docker compose --profile demo up -d demo-faulty     # a container that crash-loops
+./devy.sh --no-auth --profile demo up -d demo-faulty   # a container that crash-loops
 ```
 
 Then ask Devy: *"The `agentic-devops-demo-faulty` container keeps cycling —
@@ -215,7 +221,7 @@ investigate it and tell me the likely root cause, with evidence and a fix."* It
 pulls live container logs/status (host MCP), cross-references the runbook and past
 postmortems (knowledge base), builds a `correlate_timeline` chronology, and
 produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaustion
-*root cause*. Stop it with `docker compose --profile demo down`.
+*root cause*. Stop it with `./devy.sh --no-auth --profile demo down`.
 
 ## Documentation
 

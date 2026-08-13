@@ -1,10 +1,11 @@
-# Google SSO edge (Auth arc, Phase B) — an OPT-IN overlay over docker-compose.yml.
+# Google SSO edge (Auth arc, Phase B) — an OPT-IN overlay over docker-compose-local.yml.
 #
 # The base stack is deliberately auth-free (password-mode bootstrap; see
 # docs/deployment.md). Layer this file ON TOP to put the whole app behind Google
 # login via oauth2-proxy:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d --build
+#   ./devy.sh up      # preferred — assembles both -f files for you
+#   docker compose -f docker-compose-local.yml -f docker-compose.auth.yml up -d --build
 #
 # It (1) adds `oauth2-proxy` as the sole :8080 entry point, (2) un-publishes the
 # chat-ui and proxy host ports so the edge is the ONLY way in (no auth bypass), and

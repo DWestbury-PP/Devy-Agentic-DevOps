@@ -24,6 +24,23 @@ for the credential reference see [Security](security.md#identity).
 
 ---
 
+## The setup journey
+
+Setup runs in three stages, and the order is forced: **you can't configure the vault with
+credentials that live in the vault**, so the first boot is always password mode.
+
+| Stage | What you get | Where |
+|---|---|---|
+| **1 · Password mode** | a working stack + a reachable admin console | §1–5 below |
+| **2 · Configure** | provider keys, host-MCP token, `rbac.email_roles` | §6 below, from the admin console |
+| **3 · Google SSO** | Google login at the edge (`auth.mode: jwt`) | §7 → [Deployment](deployment.md#google-sso-via-the-oauth2-proxy-edge) |
+
+Each stage needs the one before it. Stage 3 in particular needs stage 2's
+`rbac.email_roles` — skip it and Google login *succeeds* but you land with no roles.
+Password mode never goes away: it stays your break-glass way back in.
+
+---
+
 ## What you need first
 
 | | Why |
@@ -274,6 +291,27 @@ native `web_search` tool. Both are live as soon as you save them.
 
 ---
 
+## 7. Turn on Google SSO
+
+Additive, and the end of the setup journey — do it once stages 1–2 are solid.
+
+**Preconditions:** the admin console works in password mode, provider keys are set, and
+`rbac.email_roles` maps your email to `admin`. Skip that last one and Google login succeeds
+but you arrive with no roles.
+
+The walkthrough — Google Cloud Console client, the three `.env` vars, `auth.mode: jwt`, and
+the live-verified gotchas (`localhost` vs `127.0.0.1`, the dual-form `iss`) — lives in
+**[Deployment → Google SSO](deployment.md#google-sso-via-the-oauth2-proxy-edge)**. It is
+deliberately not repeated here: one home, one copy.
+
+Then bring the stack up **with the overlay** — `./devy.sh up`, i.e. *without* `--no-auth`.
+Note that `--no-auth` only drops the SSO edge; `auth.mode` in `config.yaml` is independent
+and authoritative, so flipping it to `jwt` is what actually turns SSO on.
+
+Keep password mode as break-glass: revert `auth.mode: password` if SSO ever breaks.
+
+---
+
 ## The `ls-devy` AWS profile (optional)
 
 For *inspecting* the dev vault and blob store. Not required, and **not** for writing
@@ -393,13 +431,14 @@ are dispatch-only because the release model is coordinated rather than GitOps.
 | `aws: NoRegion` / `NoCredentials` | `--profile` omitted; no `[default]` exists | `export AWS_PROFILE=ls-devy` |
 | `pytest` → `No module named 'tests'` | older checkout whose `pythonpath` omitted `"."` | Pull latest, or use `python -m pytest` |
 | Login silently breaks after enabling SSO | ran `docker compose up` without the auth overlay | Use `./devy.sh up` — it adds the overlay |
+| Fresh `up`, but the UI/API behaves like an older build | `build:` + `image:` means compose **reuses** the existing image and never rebuilds on source change | `./devy.sh --no-auth rebuild proxy chat-ui host-mcp`; compare `docker image inspect <img> --format '{{.Created}}'` against `git log -1` |
+| `--no-auth`, but the password login is refused with `400` | `--no-auth` drops the SSO **edge** only; `auth.mode` in `config.yaml` is independent and authoritative | Set `auth.mode: password` in `config.yaml`, then restart the proxy |
+| A `devy.sh` subcommand ran in the wrong auth mode | flags must **precede** the subcommand — `./devy.sh restart proxy` defaults to `auth=sso` and can leave the old container running | `./devy.sh --no-auth restart proxy`; check the `▸ devy [auth=…]` banner it prints |
 
 ---
 
 ## Next steps
 
-- **Turn on Google SSO** — additive; keep password mode as break-glass.
-  [Deployment → Google SSO](deployment.md#google-sso-via-the-oauth2-proxy-edge)
 - **Ingest your runbooks** so `search_knowledge` has something to cite.
   [Knowledge](knowledge.md)
 - **Deploy the host MCP on a real host** for true host-level inspection.

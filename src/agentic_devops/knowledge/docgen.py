@@ -303,7 +303,7 @@ def architecture_prompt(
     budget = _TOTAL_FILE_CHARS
     for path, content in signal_files.items():
         if budget <= 0:
-            parts.append(f"\n(+ more files omitted for length)")
+            parts.append("\n(+ more files omitted for length)")
             break
         snippet = content[:_PER_FILE_CHARS]
         if len(content) > _PER_FILE_CHARS:

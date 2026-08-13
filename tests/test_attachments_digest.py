@@ -65,7 +65,8 @@ def test_digest_generated_once_then_cached(pool):
 
 def test_digest_disabled_skips_generation(pool):
     ref = "b" * 64  # fresh — not digested elsewhere
-    s = _settings(); s.attachments.digest_enabled = False
+    s = _settings()
+    s.attachments.digest_enabled = False
     prov = CountingProvider()
     svc = DigestService(AttachmentStore(pool), FakeBlobs(), prov, s)
     assert svc.ensure(ref) is None and prov.calls == 0

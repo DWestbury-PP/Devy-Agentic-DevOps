@@ -86,7 +86,8 @@ def test_job_lifecycle(jobs):
     assert jobs.next_queued().id == j.id
     jobs.set_status(j.id, "running")
     assert jobs.next_queued() is None  # no longer queued
-    jobs.bump(j.id); jobs.bump(j.id)
+    jobs.bump(j.id)
+    jobs.bump(j.id)
     assert jobs.get(j.id).done == 2
     jobs.set_status(j.id, "done")
     assert jobs.get(j.id).status == "done"

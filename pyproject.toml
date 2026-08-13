@@ -40,7 +40,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",            # required by FastAPI's TestClient
-    "ruff>=0.4",
+    "ruff>=0.6",              # rule set is pinned in [tool.ruff.lint]; any >=0.6 agrees
 ]
 langsmith = ["langsmith>=0.1"]
 
@@ -57,8 +57,24 @@ asyncio_mode = "auto"
 # install being honored (the repo path contains a space, which can trip the
 # editable .pth finder). host-mcp/src is included so `pytest host-mcp/tests` works
 # from the repo root.
-pythonpath = ["src", "host-mcp/src"]
+# "." lets the suites import `tests.conftest` under the bare `pytest` entry point.
+# Without it only `python -m pytest` works (that form implicitly puts CWD on sys.path),
+# and three modules fail to COLLECT rather than fail a test — an easy hour to lose.
+pythonpath = [".", "src", "host-mcp/src"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+# Pin the rule set EXPLICITLY. Ruff's implicit defaults have grown substantially over
+# time, so relying on them means the lint contract silently changes with whatever ruff
+# version a contributor happens to have — an unpinned modern ruff reports ~642 findings
+# against this same unchanged code (mostly UP045) versus the 8 these rules catch.
+# Selecting here makes the result identical on any ruff version. Widen deliberately.
+[tool.ruff.lint]
+select = [
+    "E4",   # pycodestyle — imports
+    "E7",   # pycodestyle — statement/comparison style
+    "E9",   # pycodestyle — runtime/syntax errors
+    "F",    # pyflakes — undefined names, unused imports/locals
+]

@@ -8,13 +8,16 @@ embeddings endpoint).
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from agentic_devops.config import DatabaseConfig, KnowledgeConfig, Settings
 from agentic_devops.db import get_pool
 from agentic_devops.knowledge.embeddings import Embedder
 from agentic_devops.knowledge.enrich import Enricher, make_context_fn
 from agentic_devops.knowledge.store import PgVectorStore
+
+if TYPE_CHECKING:  # the real import is deferred into build_fact_store (import cycle)
+    from agentic_devops.knowledge.facts import FactStore
 
 
 def build_store(database: DatabaseConfig) -> PgVectorStore:

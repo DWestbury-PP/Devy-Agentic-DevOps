@@ -171,18 +171,19 @@ zero identity setup so the operator can get in and configure everything. Google 
 an **additive upgrade** you flip on when ready. You can't use SSO to configure SSO, so
 **never delete password mode** — it stays your break-glass way back in.
 
-**Order of operations for a new deployment:**
+**Order of operations for a new deployment** — the same three stages as
+[Bootstrapping → the setup journey](bootstrap.md#the-setup-journey):
 
-1. **Deploy** the base stack (`./devy.sh --no-auth up`). `auth.mode: password`.
-2. **Set the admin password:** `agentic-devops admin set-password` **prints** a bcrypt
+1. **Stage 1 · Deploy** the base stack (`./devy.sh --no-auth up`). `auth.mode: password`.
+2. **Stage 1 · Set the admin password:** `agentic-devops admin set-password` **prints** a bcrypt
    hash and a signing secret; store both in the vault with `agentic-devops secrets set`
    (`devy/admin/password-hash`, `devy/admin/secret`), then restart the proxy. The admin
    console is now reachable in password mode. Step-by-step:
    [Bootstrapping from a cold clone](bootstrap.md#4-admin-credentials).
-3. **Configure** from the admin console: provider keys / host MCP (Secrets tab), your
+3. **Stage 2 · Configure** from the admin console: provider keys / host MCP (Secrets tab), your
    `rbac.email_roles` (who becomes admin/operator/viewer under SSO), and the Google OAuth
    client (below).
-4. **Turn on SSO:** set `auth.mode: jwt` in `config.yaml` and bring the stack up with the
+4. **Stage 3 · Turn on SSO:** set `auth.mode: jwt` in `config.yaml` and bring the stack up with the
    auth overlay. Everyone now logs in with Google; your email maps to `admin`.
 5. **Break-glass:** if SSO ever breaks, revert `auth.mode: password` to get back in.
 
@@ -214,7 +215,7 @@ Google's JWKS (`auth.mode: jwt`).
    ${OAUTH2_PROXY_CLIENT_ID}` + `rbac.email_roles` (see `config.example.yaml`).
 4. **Bring it up with the overlay:**
    ```bash
-   docker compose -f docker-compose-local.yml -f docker-compose.auth.yml up -d --build
+   ./devy.sh up            # no --no-auth — devy.sh adds docker-compose.auth.yml
    ```
    The edge takes `:8080`; the chat-ui and proxy host ports are closed so the edge is the
    only way in. Open `http://localhost:8080` → Google login. The web shows your signed-in

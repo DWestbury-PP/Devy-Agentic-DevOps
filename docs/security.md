@@ -294,14 +294,24 @@ fails *silently*):
 | AWS (e.g. `devy-platform`) | real Secrets Manager | `aws … --profile <your-aws-sso-profile>` |
 | Local dev box | LocalStack SM | `--profile ls-devy` (its `~/.aws/config` embeds `endpoint_url=…:4566`), or `agentic-devops secrets set` |
 
-**Step 1 — generate the pair** (your own terminal; values stay on your machine). The
-console script breaks on a repo path with spaces, so use the module form:
+**Step 1 — generate the pair** (your own terminal; values stay on your machine). This
+step is pure local computation — bcrypt + a random token. It writes nothing and talks
+to no backend, so it is identical for AWS and LocalStack.
+
+*From a running stack* — no local Python needed, and the form to use on a cold clone:
+
+```bash
+docker exec -it agentic-devops-proxy agentic-devops admin set-password
+#   → devy/admin/password-hash = $2b$12$……   (the HASH — 60 chars, starts $2b$)
+#   → devy/admin/secret        = <64 hex>     (the SECRET)
+```
+
+*From a native dev venv* — the console script breaks on a repo path with spaces, so
+use the module form:
 
 ```bash
 cd /path/to/Devy-Agentic-DevOps
 PYTHONPATH=src .venv/bin/python -m agentic_devops.cli.main admin set-password
-#   → devy/admin/password-hash = $2b$12$……   (the HASH — 60 chars, starts $2b$)
-#   → devy/admin/secret        = <64 hex>     (the SECRET)
 ```
 
 **Step 2 — store both.** One tool (`aws`), one knob (`--profile`). Single-quote the
@@ -337,11 +347,17 @@ it fails silently (a malformed hash rejects every login). Read each back and che
 
 ```bash
 for n in devy/admin/password-hash devy/admin/secret; do
-  v=$(aws --profile <profile> secretsmanager get-secret-value --secret-id "$n" --query SecretString --output text)
+  v=$(aws --profile <profile> secretsmanager get-secret-value --secret-id "$n" --query SecretString --output text 2>/dev/null)
+  if [ -z "$v" ]; then echo "$n : NOT SET"; continue; fi
   echo "$n : $(echo "$v" | grep -qE '^\$2[aby]\$[0-9]{2}\$' && echo bcrypt-hash \
         || (echo "$v" | grep -qE '^[0-9a-f]{64}$' && echo 64-hex || echo other))"
 done
 ```
+
+> On a local box you need an AWS CLI profile pointing at LocalStack. There is usually
+> no `[default]` profile on a fresh machine, so omitting `--profile` fails with
+> `NoRegion` / `NoCredentials` rather than anything vault-specific — see
+> [Bootstrapping → The `ls-devy` AWS profile](bootstrap.md#the-ls-devy-aws-profile-optional).
 
 `devy/admin/password-hash` **must** report `bcrypt-hash`; if it says `64-hex`, you
 pasted the secret into the hash slot — re-store it with `put-secret-value`. Both values

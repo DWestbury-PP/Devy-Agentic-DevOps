@@ -106,7 +106,7 @@ one coherent, tested Devy stack. It is the coordination artifact *and* the recor
 
 | Layer | Source | Owns |
 |---|---|---|
-| **Topology** | Devy repo `docker-compose.yml` (+ `./devy.sh`) | services, wiring, ports, volumes, healthchecks |
+| **Topology** | Devy repo `docker-compose-aws.yml` (self-contained; the local counterpart is `docker-compose-local.yml` + `./devy.sh`, not used here) | services, wiring, ports, volumes, healthchecks |
 | **Versions** | the manifest (external) | `component → image tag` |
 | **Config** | per-env overlay + Secrets Manager | endpoints, `DEVY_MODE`, secret IDs |
 

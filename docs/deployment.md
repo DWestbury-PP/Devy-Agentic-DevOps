@@ -6,24 +6,48 @@ production hardening.
 
 ## The compose stack
 
-[`docker-compose-local.yml`](../docker-compose-local.yml) defines four services (the
+[`docker-compose-local.yml`](../docker-compose-local.yml) defines six services (the
 self-contained AWS deploy variant is [`docker-compose-aws.yml`](../docker-compose-aws.yml)):
 
 | Service | Role | Exposed |
 |---|---|---|
 | `postgres` | Postgres + pgvector (sessions, knowledge, memory) | compose network only |
 | `proxy` | the LLM-PROXY | `127.0.0.1:8765` (host loopback) |
+| `localstack` | **dev secrets vault + blob store** (Secrets Manager + S3) | `127.0.0.1:4566` (host loopback) |
 | `host-mcp` | safe-allowlist host + Docker diagnostics | compose network only (`:8780`) |
+| `grafana-mcp` | mounted read-only Grafana MCP (opt-in; needs `GRAFANA_URL`) | compose network only (`:8000`) |
 | `chat-ui` | nginx serving the web chat + reverse-proxying the API | `127.0.0.1:8080` |
 
 Plus a `demo-faulty` service behind the `demo` profile (the crash-loop RCA demo).
 
+**The AWS variant is a different service set — not this file with an overlay.**
+[`docker-compose-aws.yml`](../docker-compose-aws.yml) is self-contained and shipped to
+the host by the CD pipeline (aws-ansible `devy` role). What changes:
+
+| | Local | AWS |
+|---|---|---|
+| `host-mcp` | container (demo only) | **native systemd unit** per host, so `host_*` checks see the real host — deployed by [`host-mcp-deploy.yml`](../.github/workflows/host-mcp-deploy.yml); reached at `host.docker.internal:8781` |
+| `localstack` | the dev vault + blob store | **absent** — `DEVY_MODE=prod`, real Secrets Manager + S3 via the instance IAM role |
+| `demo-faulty` | `demo` profile | absent |
+| images | `build:` from the repo | pinned ECR tags (`DEVY_{PROXY,CHAT_UI}_IMAGE`), built by [`build.yml`](../.github/workflows/build.yml) |
+| Postgres init | `001_baseline.sql` bind-mount | no mount — `db migrate` brings a fresh DB to head |
+| driven by | `./devy.sh` | [`deploy.yml`](../.github/workflows/deploy.yml) → Ansible over SSM |
+
+`./devy.sh` is **local only** and must never be pointed at a deploy host. See
+[Deploy design](deploy-design.md) for the CI→CD seam.
+
+> **There is no `docker-compose.yml` in this repo** — the compose files are
+> `docker-compose-local.yml`, `docker-compose-aws.yml`, and the `docker-compose.auth.yml`
+> overlay. A bare `docker compose …` therefore fails with *"no configuration file
+> provided: not found"*. Use `./devy.sh` (below), or pass `-f docker-compose-local.yml`
+> explicitly.
+
 ```bash
-docker compose up -d --build        # build + start (postgres self-bootstraps its schema)
-docker compose logs -f              # follow logs
-docker compose down                 # stop (keeps the DB volume)
-docker compose down -v              # stop AND drop the DB volume (destroys data)
-docker compose up -d --build chat-ui  # rebuild just the web surface after edits
+./devy.sh --no-auth up              # build + start in password mode, then migrate the DB
+./devy.sh logs -f                   # follow logs
+./devy.sh down                      # stop (keeps the DB volume)
+./devy.sh down -v                   # stop AND drop the DB volume (guarded — confirms first)
+./devy.sh rebuild chat-ui           # rebuild just the web surface after edits
 ```
 
 ### `./devy.sh` — the canonical wrapper (use this)
@@ -58,14 +82,19 @@ Config and secrets are read from a mounted directory (default
 `config.yaml` + `.env` a native install uses. Compose reads a `.env` next to
 `docker-compose-local.yml` for `HOST_MCP_TOKEN`, `POSTGRES_PASSWORD`, and `DATABASE_URL`.
 
-> **Enabling the admin control plane** (host registry + document import) needs
-> two bootstrap secrets in the *mounted* `~/.config/agentic-devops/.env`:
-> `DEVY_ADMIN_PASSWORD_HASH` + `DEVY_ADMIN_SECRET` (both required, else
-> `/v1/admin/*` → `503`). They gate the admin plane itself, so they're bootstrap
-> (environment), not vault-managed. Generate them with
-> `agentic-devops admin set-password`. Connector/provider tokens are then managed
-> *in* the vault via the admin Secrets tab. See
-> [Security → Secrets model](security.md#secrets-model).
+> **Enabling the admin control plane** (host registry + document import) needs two
+> credentials — `devy/admin/password-hash` + `devy/admin/secret`, both required, else
+> `/v1/admin/*` → `503`. Since #117 they are **vault-mastered** like every other
+> secret: generate the pair with `agentic-devops admin set-password` (it *prints* them;
+> it does not write any file), then store both with `agentic-devops secrets set`. They
+> hydrate into `DEVY_ADMIN_PASSWORD_HASH` / `DEVY_ADMIN_SECRET` at boot.
+>
+> A copy in the mounted `~/.config/agentic-devops/.env` still works as a fallback, but
+> the vault wins when both are set (the proxy logs a warning). Connector/provider
+> tokens are managed *in* the vault via the admin Secrets tab. See
+> [Security → Setting the admin credentials](security.md#setting-the-admin-credentials-runbook)
+> for the full runbook, or [Bootstrapping from a cold clone](bootstrap.md) for the
+> container-only path that needs no local Python.
 
 ```bash
 # one-time: a shared token for the host MCP
@@ -79,11 +108,23 @@ the network. Put a reverse proxy / VPN / SSO in front for shared access.
 
 The DSN (`database.url` / `$DATABASE_URL`) is the single switch.
 
-**Bundled (zero setup):** the compose `postgres` service uses the `pgvector`
-image and runs `db/schema.sql` on first init (the `vector` extension + tables).
-Data persists in the `agentic-pgdata` volume.
+**Bundled (zero setup):** the compose `postgres` service uses the `pgvector` image.
+Schema *evolution* is owned by `agentic-devops db migrate` in both worlds (see
+[DB migrations](db-migrations.md)); only the **first-init** path differs:
+
+| | Fresh-volume bootstrap |
+|---|---|
+| **Local** (`docker-compose-local.yml`) | [`001_baseline.sql`](../src/agentic_devops/db/migrations/001_baseline.sql) is bind-mounted into the image's `docker-entrypoint-initdb.d`, so a brand-new volume self-bootstraps; `./devy.sh up` then runs `db migrate` |
+| **AWS** (`docker-compose-aws.yml`) | **no init mount** — a deploy host has no source checkout, so a fresh DB is brought to head entirely by the gated `db migrate` pipeline step |
+
+Data persists in the `agentic-pgdata` volume either way.
 
 **Managed (RDS / Aurora / Cloud SQL / …):**
+
+Below is the **local** form. On AWS this is the normal case and the CD pipeline already
+does it — `DATABASE_URL` comes from the rendered `.env` the `devy` role ships, and
+`db migrate` runs as a gated deploy step. Don't run `./devy.sh` against a deploy host;
+it is local-dev only.
 
 ```bash
 # 1. point the proxy (and CLI) at your instance
@@ -91,7 +132,7 @@ export DATABASE_URL=postgresql://USER:PASS@your-db.example.com:5432/agentic
 # 2. provision it once (needs a role allowed to CREATE EXTENSION vector)
 agentic-devops db init
 # 3. start only the app services (skip the bundled DB)
-docker compose up -d --build proxy host-mcp chat-ui
+./devy.sh --no-auth up proxy host-mcp chat-ui localstack
 ```
 
 `db init` is idempotent. The proxy also applies the schema best-effort on startup,
@@ -132,10 +173,12 @@ an **additive upgrade** you flip on when ready. You can't use SSO to configure S
 
 **Order of operations for a new deployment:**
 
-1. **Deploy** the base stack (`docker compose up -d`). `auth.mode: password`.
-2. **Set the admin password:** `agentic-devops admin set-password` (writes
-   `DEVY_ADMIN_PASSWORD_HASH`/`DEVY_ADMIN_SECRET` to `.env`). The admin console is now
-   reachable in password mode.
+1. **Deploy** the base stack (`./devy.sh --no-auth up`). `auth.mode: password`.
+2. **Set the admin password:** `agentic-devops admin set-password` **prints** a bcrypt
+   hash and a signing secret; store both in the vault with `agentic-devops secrets set`
+   (`devy/admin/password-hash`, `devy/admin/secret`), then restart the proxy. The admin
+   console is now reachable in password mode. Step-by-step:
+   [Bootstrapping from a cold clone](bootstrap.md#4-admin-credentials).
 3. **Configure** from the admin console: provider keys / host MCP (Secrets tab), your
    `rbac.email_roles` (who becomes admin/operator/viewer under SSO), and the Google OAuth
    client (below).

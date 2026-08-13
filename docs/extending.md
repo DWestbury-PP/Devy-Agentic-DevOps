@@ -158,7 +158,10 @@ alerting, Sift/incidents) — the textbook "mount, don't build" case. The bundle
 compose stack ships it as the **`grafana-mcp`** sidecar:
 
 1. **Point it at your tenant.** Set `GRAFANA_URL=https://<stack>.grafana.net` in the
-   repo-root `.env` (not a secret) and start it: `docker compose up -d grafana-mcp`.
+   repo-root `.env` (not a secret) and start it: `./devy.sh --no-auth up grafana-mcp`
+   locally. The sidecar ships in **both** compose files — on AWS it comes up with the
+   rest of the stack from `docker-compose-aws.yml` and `GRAFANA_URL` arrives in the
+   `.env` the CD pipeline renders, so there's nothing extra to start.
    It runs `-t streamable-http` with `-disable-write` (read-only at the source) and
    holds **no token** — it's in *header-auth* mode.
 2. **Vault the service-account token.** On the admin **Secrets tab**, set

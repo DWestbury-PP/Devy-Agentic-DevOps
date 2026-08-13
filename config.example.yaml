@@ -221,6 +221,13 @@ tiers:
 # --- LangSmith tracing (opt-in; set `tracing: langsmith` above) ---
 # A waterfall of each turn → its LLM calls → its tool calls. The API key is a
 # SECRET — set it on the admin Secrets tab (devy/provider/langsmith), NOT here.
+#
+# ⚠️ THE KEY ALONE DOES NOTHING. Unlike the other provider keys — which the admin API
+# re-hydrates into the running process, taking effect immediately — LangSmith needs
+# BOTH `tracing: langsmith` above AND a proxy restart: the tracer is built once at
+# startup (get_tracer() in create_app), so a key added later can't retrofit it. With
+# `tracing` left at the default `jsonl`, LangSmith is never attempted and nothing is
+# logged. On a real fallback the proxy warns at startup; silence means it engaged.
 # `capture` decides what leaves the process for LangSmith's cloud; left unset it
 # follows DEVY_MODE (dev → full, prod → metadata). endpoint/project also honor the
 # LANGSMITH_ENDPOINT / LANGSMITH_PROJECT env vars when unset.

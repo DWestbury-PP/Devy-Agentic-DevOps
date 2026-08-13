@@ -242,13 +242,35 @@ Everything else is vault-mastered and set through the UI — nothing more goes i
 | **MCP** | Per-server bearer tokens (host MCP, Grafana) |
 | **Repos** | GitHub PATs, per account |
 
-Add your chat provider key on the **Secrets** tab and Devy answers immediately —
-provider keys re-hydrate without a restart. `Test` validates a key without revealing
-it.
+Add your chat provider key on the **Secrets** tab and Devy answers immediately — the
+admin API re-hydrates the matching env var into the running process, so **no restart**.
+`Test` validates a key without revealing it.
 
 Optional but worth it: **OpenAI** also powers embeddings (Anthropic has no embeddings
 endpoint), which the knowledge base and `recall_history` need; **Tavily** enables the
-native `web_search` tool.
+native `web_search` tool. Both are live as soon as you save them.
+
+### LangSmith is the exception — a key alone does nothing
+
+> ⚠️ LangSmith sits on the Secrets tab next to the keys above, but it is **not**
+> dynamic, and setting the key on its own has **no effect at all**. Two more things are
+> required:
+>
+> 1. **Opt in** — `tracing: langsmith` in `config.yaml` (the default is `jsonl`, so
+>    LangSmith is never attempted and nothing is logged).
+> 2. **Restart the proxy** — the tracer is constructed once at startup
+>    (`get_tracer(settings)` in `create_app`), unlike provider keys which are read
+>    per-call. `./devy.sh --no-auth restart proxy`.
+>
+> If it falls back, the proxy says so at startup — *"tracing=langsmith but
+> LANGSMITH_API_KEY is unset … Falling back to jsonl"*. **Silence means it worked.**
+>
+> To confirm: send one message, then `docker exec agentic-devops-proxy ls /config/traces`.
+> A new `trace-*.jsonl` means it fell back to local files; no new file means the turn
+> went to LangSmith.
+>
+> Note `capture` — left unset it resolves to `full` in dev and `metadata` in prod, so
+> local traces carry full prompt/response bodies.
 
 ---
 

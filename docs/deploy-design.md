@@ -283,10 +283,9 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 
 - **Manifest format & storage:** a compose `.env` of `IMAGE` vars vs a YAML file; git-tracked +
   attached as a GitHub Release asset for official releases.
-- **Webhook security model** (L2): scoped token vs GitHub App vs a small authenticated relay.
-  Options + trade-offs written up in [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger);
-  the ratified choice lands here as **ADR D-017**. *(Leaning: relay backed by a
-  fine-grained PAT, upgradeable to a GitHub App — credential centralized behind the proxy.)*
+- ~~**Webhook security model** (L2): scoped token vs GitHub App vs a small authenticated relay.~~
+  **DECIDED (2026-08-13) → the authenticated relay; see ADR D-017.** Trade-offs:
+  [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger).
 - **Config-versioning approach:** the per-env config file ships (§13); only the *versioned
   config-retrieval service* remains parked — its own session.
 - **Coverage audit:** the reconcile-against-tags shape is documented (§12); implement at fleet scale,
@@ -332,6 +331,17 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
   (SSM transfer bucket, OIDC provider) stay as `aws-terraform` resources, referenced not copied. Reuse
   across apps, if ever needed, is a **template** (cookiecutter), never a runtime-shared deploy framework —
   deploy logic is where apps differ most; a central LCD would be a leaky abstraction.
+- **D-017** (2026-08-13) **Webhook-trigger auth = authenticated relay via the proxy** (the L2 fork in §16).
+  A surface **never holds a GitHub credential**: it authenticates against Devy's existing **RBAC/SSO**
+  plane, and the **proxy** fires the `repository_dispatch` with **one vault-held credential**
+  (`devy/github/dispatch`). Backed by a **fine-grained PAT now, upgradeable to a GitHub App** with **zero
+  surface change** — the credential is centralized behind the proxy, so the PAT→App swap is an internal
+  detail. The relay **is `request_deploy` generalized**: Devy proposes → a human approves (RBAC `elevated`)
+  → the proxy fires; Devy has **no directly-firing tool** (never-self-approve stays structural, reusing the
+  guarded-actions framework). Direct-to-GitHub (a per-surface **PAT** or **App**, models A/B) is **rejected
+  as the surface-facing model** — per-surface secret handling, personal-identity binding, no central
+  rotation/audit — though a GitHub App remains the likely future *last hop inside* the relay. Full
+  trade-offs: [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger).
 
 ## 18. Deploy execution — the detailed CD mechanics (worked out 2026-07-26)
 

@@ -2,10 +2,10 @@
 
 > **Status: SCAFFOLD (2026-08-13).** The *contracts* a surface binds to are stable and
 > filled in below (the release-ledger read API and the `repository_dispatch` event
-> types + payloads). The *how-to-build-a-surface* sections are deliberately skeletal —
-> they firm up as the first real surfaces (web console, Slack, `request_deploy`) get
-> built. **The one blocking decision is [§3 Authentication](#3-authentication--who-may-fire-a-trigger)**
-> — until it's settled, treat the trigger examples as illustrative, not prescriptive.
+> types + payloads). The **auth model is decided** — [§3](#3-authentication--who-may-fire-a-trigger),
+> ADR D-017: the authenticated relay. The *how-to-build-a-surface* sections are
+> deliberately skeletal — they firm up as the first real surfaces (web console, Slack,
+> `request_deploy`) get built.
 
 This is the **surface developer's** guide: how to build an L3 face (a web console, a
 Slack command, Devy itself) on top of the CI/CD foundation. For the *operator's* map of
@@ -92,27 +92,30 @@ curl -sf -X POST \
 
 ## 3. Authentication — who may fire a trigger
 
-**⛔ DECISION PENDING — this is the one real fork.** The read side needs no new
-credential (RBAC-admin on the proxy). The **trigger** side needs *something* that may
-call GitHub's `dispatches` endpoint, and *who holds it* is the design choice below.
-Until it's settled, the trigger examples above are illustrative.
+**✅ DECIDED (2026-08-13) — the authenticated relay (model C); [ADR D-017](deploy-design.md#17-decisions-to-record-as-adrs-seed-for-docsdecisionsmd).**
+A surface **never holds a GitHub credential.** It authenticates against **Devy's
+existing RBAC/SSO plane** (the same auth every other Devy capability uses), and the
+**proxy** fires the `repository_dispatch` with **one vault-held credential**
+(`devy/github/dispatch`) — a **fine-grained PAT initially, upgradeable to a GitHub App**
+with **zero surface change** (the credential is centralized behind the proxy, so the swap
+is an internal detail).
 
-The three candidates (full trade-offs in the decision write-up — see
-[deploy-design.md §16](deploy-design.md#16-open-questions--assumptions-to-revisit-at-build-time)):
+So the raw `dispatches` call in §2 is the **proxy's internal last hop**, not something a
+surface makes — a surface calls the **proxy relay** (§4), and the proxy makes that call.
 
-| Model | Who holds the GitHub credential | Surface-facing auth | Verdict |
+The candidates considered (retained for context):
+
+| Model | Who holds the GitHub credential | Surface-facing auth | Outcome |
 |---|---|---|---|
-| **A — scoped fine-grained PAT** | each surface (or one shared token) | the PAT itself | simplest; token is broader than "just trigger" and personal-identity-bound |
-| **B — GitHub App** | the App (short-lived installation tokens) | mint per call | least-privilege + rotating; heaviest setup |
-| **C — authenticated relay (via the proxy)** | **the proxy only** (one vault-held credential) | **Devy's existing RBAC/SSO plane** | surfaces never touch GitHub creds; composes with A *or* B for the last hop |
+| A — scoped fine-grained PAT | each surface (or one shared token) | the PAT itself | rejected as surface-facing: broader-than-"trigger" scope, personal-identity-bound, per-surface secret handling |
+| B — GitHub App | the App (short-lived install tokens) | mint per call | rejected as surface-facing (heaviest setup) — but the likely future **last hop inside** the relay |
+| **C — authenticated relay (proxy)** ✅ | **the proxy only** (one vault credential) | **Devy's RBAC/SSO plane** | **chosen** — surfaces get zero GitHub scope; wraps A *or* B for the last hop |
 
-> **Recommendation carried into the decision (not yet ratified):** **C (relay), backed
-> by a fine-grained PAT initially, upgradeable to a GitHub App later.** Because the
-> credential lives behind the proxy, swapping PAT→App is invisible to every surface.
-> The relay *is* the `request_deploy` path generalized — see §4.
-
-Record the ratified choice as **ADR D-017** in `deploy-design.md §17` and replace this
-section's "pending" framing with the settled model.
+**Why C:** surfaces get zero GitHub scope; one credential to rotate, in the vault; the
+PAT→App swap is invisible to surfaces; every trigger flows through a **Devy principal**
+(traced/logged) before GitHub sees it; and the relay *is* `request_deploy` (§4) on the
+existing guarded-actions framework. The one trade-off — the proxy must be up to fire — is
+a non-issue for Devy-centric surfaces, which already talk to the proxy.
 
 ---
 

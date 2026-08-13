@@ -21,7 +21,7 @@
 #   ./devy.sh config|images|build|down|prune|<any docker compose subcommand> …
 #
 # Flags (LOCAL dev only — the AWS deploy is the CD pipeline's job, driven by the
-# self-contained docker-compose-aws.yml via the aws-ansible `devy` role, NOT this wrapper):
+# self-contained docker-compose-aws.yml via Devy's `deploy/` role, NOT this wrapper):
 #   default         docker-compose-local.yml + SSO overlay; LocalStack for secrets/S3
 #   --no-auth       local base only, no SSO edge (password-mode bootstrap / break-glass)
 #   --no-migrate    skip the automatic `db migrate` after `up`

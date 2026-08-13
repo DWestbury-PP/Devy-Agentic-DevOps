@@ -1,6 +1,5 @@
 # Dynamic inventory — discover the Devy hosts LIVE by tag (no static host list to drift).
-# Hosts are provisioned by the aws-terraform repo and carry the tags this filters/groups on.
-# Docs: design.md §3.
+# Hosts are provisioned by your IaC layer and carry the tags this filters/groups on.
 plugin: amazon.aws.aws_ec2
 
 regions:
@@ -23,7 +22,7 @@ keyed_groups:
     prefix: env
 
 # Every host is reached over SSM (no SSH). The transfer bucket is the aws_ssm plugin's
-# file-staging area (design.md §6) — provisioned in aws-terraform (ADR-020).
+# file-staging area — provisioned by your IaC layer.
 compose:
   ansible_connection: "'community.aws.aws_ssm'"
   ansible_aws_ssm_region: "'us-east-1'"

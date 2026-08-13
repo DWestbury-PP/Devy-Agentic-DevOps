@@ -1,7 +1,7 @@
 ---
 # Devy CD — deploy the platform stack to the platform host over SSM (docs/deploy-design.md §18).
 # Lives IN the Devy repo (deploy/): Devy owns its whole delivery lifecycle — CI (build) + CD
-# (this). The ops repo (aws-ansible) is fleet-baseline only; app releases never live there.
+# (this). The ops config-management layer is fleet-baseline only; app releases never live there.
 #
 # A RELEASE ACTION (ship images + migrate + recreate the app tier + smoke) — deliberately its own
 # play, not a config-convergence run. Orchestrated by the deploy GitHub Actions workflow, which

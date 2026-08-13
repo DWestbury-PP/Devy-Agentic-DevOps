@@ -1,9 +1,9 @@
 # Devy CD — deployment design (breadcrumb)
 
-The app-delivery layer that sits on top of the foundation: **`aws-terraform`** provisions hosts,
-**this repo (`aws-ansible`)** configures their base state, and **this design** adds *versioned
-software delivery* — reusing the same GitHub-Actions-over-SSM control plane rather than inventing a
-new one. Demo deployable: the **Devy Agentic DevOps** platform onto the 3-host fleet.
+The app-delivery layer that sits on top of the foundation: an **IaC layer** provisions hosts, a
+**config-management layer** configures their base state, and **this design** adds *versioned
+software delivery* — reusing a GitHub-Actions-over-SSM control plane rather than inventing a
+new one. Demo deployable: the **Devy Agentic DevOps** platform onto its host fleet.
 
 > **Status: Phase-1 built & live-verified (2026-08-09).** The `deploy/` role, the `deploy.yml` CD
 > workflow, the `build.yml` CI, and the AWS prod config (`deploy/config/config.aws.yaml`) all exist
@@ -142,12 +142,12 @@ Two rules keep releases trustworthy:
   beat), a Slack bot — each just a secure sender of that one webhook.
 
 **Repo home (revised — see D-016):** CD lives **in the Devy repo** (`deploy/`), next to CI — Devy
-owns its whole delivery lifecycle. The organizing principle is **ownership × concern**: `aws-ansible`
-is the *ops* fleet-baseline repo (OS/packages, DevOps/SecOps-owned) and must not hold app-release
+owns its whole delivery lifecycle. The organizing principle is **ownership × concern**: the *ops*
+fleet-baseline layer (OS/packages, DevOps/SecOps-owned) must not hold app-release
 logic; app teams already own the code + CI, so CD belongs with them. Devy carries its own small
 Ansible-over-SSM plumbing (`deploy/{ansible.cfg,inventory,requirements.yml,roles/devy}`) and a scoped
-`<project>-gha-devy-deploy-<env>` OIDC role (sibling to the build role). The genuinely shared primitives
-are AWS *resources* (SSM transfer bucket, OIDC provider), provisioned in `aws-terraform` and merely
+deploy OIDC role (sibling to the build role). The genuinely shared primitives
+are AWS *resources* (SSM transfer bucket, OIDC provider), provisioned by the IaC layer and merely
 referenced. If the ~40 lines of plumbing ever get copied across many apps, extract a **template**
 (cookiecutter), not a runtime-shared library — copy-and-own beats a lowest-common-denominator framework.
 
@@ -188,7 +188,7 @@ proves the *whole mesh*, not just liveness.
 
 ## 11. Release reporting — GitHub-native, so it's near-free
 
-The `custom-monitoring-metrics` collector is a **pull-based observer of GitHub**, not a push target.
+An external metrics collector is a **pull-based observer of GitHub**, not a push target.
 Emit GitHub-native signals and reporting largely falls out:
 - A `deploy` workflow run is **already** captured as `github_workflow_runs_total{kind="deploy"}`
   (its `workflow-kinds.yaml` classifies `*deploy*`/`*release*`) → DORA deployment-frequency, **zero
@@ -263,13 +263,13 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 
 ## 14. What's net-new to build (work inventory)
 
-- **`aws-terraform`:** the `ecr` module (×3 repos), an instance-role **ECR-pull permission set**, and
-  the **platform→edge :8780 SG rule**.
-- **Devy repo:** the build workflow (matrix — whole-release *or* single-component), a
+- **IaC layer:** the ECR repos, an instance-role **ECR-pull permission set**, and the
+  **platform→edge SG rule**.
+- **Devy repo (CI):** the build workflow (matrix — whole-release *or* single-component), a
   `docker-compose.deploy.yml` overlay, and entrypoint/tagging conventions.
-- **`aws-ansible` (this repo):** the `devy` deploy role, the `deploy.yml` workflow, a `manifests/`
+- **Devy repo (CD, `deploy/`):** the `devy` deploy role, the `deploy.yml` workflow, a `manifests/`
   area + per-env pointer, and the smoke-test tasks.
-- **`custom-monitoring-metrics` (optional):** a `ReleasesCollector`.
+- **External metrics collector (optional):** a releases collector.
 
 ## 15. Phase plan
 
@@ -309,7 +309,7 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **D-006** **Halt-and-hold + fix-forward**; rollback is deliberate, fast, reliable — **no auto-failback**.
 - **D-007** Deploy record = git-tracked manifest + per-env pointer; GitHub Deployment as reporting
   projection.
-- **D-008** ~~Deploy control plane starts in `aws-ansible`; extraction-ready for a dedicated CD repo.~~
+- **D-008** ~~Deploy control plane starts in the ops config-management repo; extraction-ready for a dedicated CD repo.~~
   **Reversed by D-016.**
 - **D-009** Success ≠ coverage: an independent **post-run coverage audit** reconciles the reconciled
   host set against the **tag-derived expected roster** for the targeted category (any instance state);
@@ -326,9 +326,9 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **D-015** Deployment strategy: **recreate now, blue/green target**; reject GitOps-pull &
   auto-progressive-delivery (philosophy); adopt **image signing** (cosign/SBOM) as future hardening.
 - **D-016** **App CD lives in the app repo, not the ops repo** (reverses D-008). Ownership × concern:
-  `aws-ansible` = fleet-baseline (OS/packages), ops-owned; Devy = code + CI + CD, app-owned. Devy carries
-  its own `deploy/` Ansible-over-SSM plumbing + a scoped `gha-devy-deploy` OIDC role; shared primitives
-  (SSM transfer bucket, OIDC provider) stay as `aws-terraform` resources, referenced not copied. Reuse
+  the ops fleet-baseline layer (OS/packages) is ops-owned; Devy = code + CI + CD, app-owned. Devy carries
+  its own `deploy/` Ansible-over-SSM plumbing + a scoped deploy OIDC role; shared primitives
+  (SSM transfer bucket, OIDC provider) stay as IaC-layer resources, referenced not copied. Reuse
   across apps, if ever needed, is a **template** (cookiecutter), never a runtime-shared deploy framework —
   deploy logic is where apps differ most; a central LCD would be a leaky abstraction.
 - **D-017** (2026-08-13) **Webhook-trigger auth = authenticated relay via the proxy** (the L2 fork in §16).

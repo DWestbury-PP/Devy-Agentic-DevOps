@@ -1,5 +1,5 @@
-# AWS deploy variant — self-contained (NOT an overlay). The CD pipeline (aws-ansible
-# `devy` role) ships THIS single file + a rendered .env to the host and runs it.
+# AWS deploy variant — self-contained (NOT an overlay). The CD pipeline (Devy's `deploy/`
+# role) ships THIS single file + a rendered .env to the host and runs it.
 #
 #   docker compose -f docker-compose-aws.yml up -d proxy chat-ui postgres
 #

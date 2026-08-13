@@ -22,7 +22,7 @@ Plus a `demo-faulty` service behind the `demo` profile (the crash-loop RCA demo)
 
 **The AWS variant is a different service set — not this file with an overlay.**
 [`docker-compose-aws.yml`](../docker-compose-aws.yml) is self-contained and shipped to
-the host by the CD pipeline (aws-ansible `devy` role). What changes:
+the host by the CD pipeline (Devy's `deploy/` role). What changes:
 
 | | Local | AWS |
 |---|---|---|
@@ -74,7 +74,7 @@ included:
 LocalStack for secrets/S3. `--no-auth` runs the local stack without the SSO edge
 (password-mode bootstrap / break-glass); `--no-migrate` skips the post-`up` `db migrate`.
 Pure bash, no dependencies. The **AWS deploy is a separate concern** — the CD pipeline
-(aws-ansible `devy` role) ships the self-contained `docker-compose-aws.yml`; it is not
+(Devy's `deploy/` role) ships the self-contained `docker-compose-aws.yml`; it is not
 driven by this wrapper.
 
 Config and secrets are read from a mounted directory (default

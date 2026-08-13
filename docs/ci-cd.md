@@ -14,6 +14,15 @@ Three companion docs sit around it:
 > ledger to SSM; CD reads that ledger and runs an Ansible play over SSM.** Nothing
 > auto-deploys — every ship is a deliberate, plan-then-apply act.
 
+> **Using this as a reference implementation.** These workflows are a working
+> blueprint, not a shared service. They run only against infrastructure **you**
+> provision and wire: your AWS account, repo-level Actions variables (`BUILD_ROLE_ARN`,
+> `DEPLOY_ROLE_ARN`, …), and an OIDC trust **scoped to your repository**. A clone or
+> fork inherits none of that — no secrets, no variables, and an OIDC subject your roles
+> won't trust — so it cannot trigger these against anyone else's environment. Wire the
+> account-specific values as Actions variables (never in source) and adapt the naming to
+> your own infrastructure.
+
 ---
 
 ## 0. The lifecycle at a glance

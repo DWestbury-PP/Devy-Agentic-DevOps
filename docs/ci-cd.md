@@ -330,7 +330,9 @@ are cheap to add without ever forking the deploy logic (design: `deploy-design.m
 - **L3 — many faces (open canvas).** Any surface that can send an authenticated webhook
   becomes a deploy button: a web console, a Slack `/deploy` command, or **Devy itself**
   (the dogfood beat — Devy proposing and, on human approval, triggering its own deploy).
-  Each is *just a secure sender* of the L2 payload.
+  Each is *just a secure sender* of the L2 payload. **Building one?** See
+  [`ci-cd-surfaces.md`](ci-cd-surfaces.md) — the surface-developer's guide (read + trigger
+  contracts, the auth model, the `request_deploy` reference path).
 
 ### Firing the webhook (L2)
 

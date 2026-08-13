@@ -284,6 +284,9 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **Manifest format & storage:** a compose `.env` of `IMAGE` vars vs a YAML file; git-tracked +
   attached as a GitHub Release asset for official releases.
 - **Webhook security model** (L2): scoped token vs GitHub App vs a small authenticated relay.
+  Options + trade-offs written up in [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger);
+  the ratified choice lands here as **ADR D-017**. *(Leaning: relay backed by a
+  fine-grained PAT, upgradeable to a GitHub App — credential centralized behind the proxy.)*
 - **Config-versioning approach:** the per-env config file ships (§13); only the *versioned
   config-retrieval service* remains parked — its own session.
 - **Coverage audit:** the reconcile-against-tags shape is documented (§12); implement at fleet scale,

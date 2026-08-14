@@ -67,6 +67,16 @@
   </aside>
   <div id="drawer-scrim" class="drawer-scrim" hidden></div>
 
+  <!-- Identity banner. Deliberately OUTSIDE the header and independent of the account
+       chip: it must render when verification has failed, which is exactly when the chip
+       (and its sign-out link) is hidden. Without it, an expired session looks like a
+       signed-out app and offers no way back. Hidden in password mode. -->
+  <div id="identity-banner" class="identity-banner" role="status" hidden>
+    <span class="identity-banner-dot" aria-hidden="true"></span>
+    <span id="identity-banner-text" class="identity-banner-text"></span>
+    <a class="identity-banner-action" href="/oauth2/sign_out">Sign in again</a>
+  </div>
+
   <main id="screen" class="screen" aria-live="polite"></main>
 
   <form id="composer" class="composer" autocomplete="off">

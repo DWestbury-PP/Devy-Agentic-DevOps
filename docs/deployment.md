@@ -235,6 +235,15 @@ Google's JWKS (`auth.mode: jwt`).
   so `docker logs <proxy>` will show the reason.
 - **Image attachments need a larger body limit** — nginx defaults to 1 MB, so a
   screenshot 413s. The bundled `web/nginx.conf` sets `client_max_body_size 25m`.
+- **The id_token expires long before the edge session does.** Google id_tokens last
+  ~1h; oauth2-proxy's cookie defaults to **168h**. Without
+  `OAUTH2_PROXY_COOKIE_REFRESH` the edge keeps admitting you while forwarding a token
+  Devy can no longer verify — you stay "logged in" but become **anonymous** to Devy:
+  history unscoped, roles fall back to `default_role`, the admin link disappears. It
+  looks exactly like password mode. The overlay now sets `COOKIE_REFRESH: "55m"`;
+  `/v1/whoami` reports `identity_error: "expired"`, the web UI shows a banner with a
+  working sign-in link, and `./devy.sh doctor` calls it out. Recover by signing out
+  and back in (`/oauth2/sign_out` works even when the account chip is hidden).
 
 For **production**, pin the oauth2-proxy image version, serve over **HTTPS** (Google
 requires https redirects off-localhost; set `OAUTH2_PROXY_COOKIE_SECURE=true`), and add

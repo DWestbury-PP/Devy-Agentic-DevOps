@@ -74,6 +74,7 @@ from agentic_devops.proxy.schemas import (
 from agentic_devops.proxy.auth import (
     Principal,
     build_authenticator,
+    classify_identity_error,
     max_tier_for_roles,
     tier_allows,
 )
@@ -695,19 +696,35 @@ def create_app(
 
     def _identity(request: Request, fallback: Optional[str]) -> Optional[str]:
         """The caller's identity for history + audit (RBAC-3). In jwt mode the
-        VERIFIED email is authoritative and X-User-Id is NOT trusted (it's spoofable);
-        with no valid token the caller is anonymous (None). In password/dev mode, the
-        honor-system fallback (X-User-Id) — preserving current behaviour until SSO."""
+        VERIFIED email is authoritative and X-User-Id is NOT trusted (it's spoofable).
+        In password/dev mode, the honor-system fallback (X-User-Id).
+
+        A token that is PRESENT but fails to verify raises **401** rather than
+        degrading to anonymous. Behind the SSO edge a bearer is always forwarded, so
+        "present but unverifiable" means the session expired — not a legitimate guest.
+        Silently continuing writes the caller's turns to history under the anonymous
+        actor and drops their roles to ``default_role``, which reads to the operator
+        as a working login. Failing closed makes the client re-authenticate instead.
+        A MISSING token still degrades to anonymous: that is a misconfigured edge
+        (logged), and it is also the shape of a legitimate unauthenticated request."""
         if authenticator.mode == "jwt" and authenticator.enabled:
             token = authenticator.extract_token(request.headers.get(authenticator.header))
             if token:
                 try:
                     return authenticator.principal(token).actor
-                except Exception as exc:  # noqa: BLE001 — invalid/expired token → anonymous
-                    # A silent verify failure would look like "auth works but history
-                    # isn't scoped" — surface it so it's diagnosable.
-                    logger.warning("assistant-plane JWT identity failed to verify: %s", exc)
-                    return None
+                except Exception as exc:  # noqa: BLE001 — classified below, then re-raised as 401
+                    reason = classify_identity_error(exc)
+                    logger.warning(
+                        "assistant-plane JWT identity failed to verify (%s): %s", reason, exc
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "identity_unverified",
+                            "reason": reason,
+                            "message": "Your session is no longer valid — sign in again.",
+                        },
+                    ) from exc
             else:
                 logger.warning(
                     "jwt mode but no bearer token on %s — is the edge forwarding it?",
@@ -781,14 +798,24 @@ def create_app(
         conditional Admin nav). In password/dev mode there's no per-request identity,
         so we echo the honor-system name and report ``authenticated: false`` — the UI
         keeps its localStorage-name behaviour. ``is_admin`` reflects verified roles in
-        jwt mode; in dev mode it's ``null`` (unknown — the admin console gates itself)."""
+        jwt mode; in dev mode it's ``null`` (unknown — the admin console gates itself).
+
+        ``identity_error`` distinguishes the three states the old shape collapsed into
+        one: ``None`` (fine), a reason code (a token arrived but did not verify — most
+        often ``"expired"``), or ``"missing_token"`` (jwt mode, but the edge forwarded
+        no bearer). Unlike the assistant plane this endpoint never 401s — it is how the
+        UI *discovers* it is broken, so it must stay reachable while broken."""
         if authenticator.mode == "jwt" and authenticator.enabled:
             token = authenticator.extract_token(request.headers.get(authenticator.header))
+            identity_error: Optional[str] = "missing_token"
             if token:
                 try:
                     p = authenticator.principal(token)
-                except Exception as exc:  # noqa: BLE001 — invalid/expired → anonymous
-                    logger.warning("whoami JWT identity failed to verify: %s", exc)
+                except Exception as exc:  # noqa: BLE001 — reported, not raised (see docstring)
+                    identity_error = classify_identity_error(exc)
+                    logger.warning(
+                        "whoami JWT identity failed to verify (%s): %s", identity_error, exc
+                    )
                 else:
                     claims = p.claims or {}
                     return {
@@ -796,12 +823,15 @@ def create_app(
                         "name": claims.get("name") or claims.get("given_name"),
                         "picture": claims.get("picture"),
                         "roles": sorted(p.roles), "is_admin": "admin" in p.roles,
+                        "identity_error": None,
                     }
             return {"authenticated": False, "mode": "jwt", "id": None, "email": None,
-                    "name": None, "picture": None, "roles": [], "is_admin": False}
+                    "name": None, "picture": None, "roles": [], "is_admin": False,
+                    "identity_error": identity_error}
         # password / dev — honor-system identity, no verified roles
         return {"authenticated": False, "mode": authenticator.mode, "id": x_user_id,
-                "email": None, "name": x_user_id, "picture": None, "roles": [], "is_admin": None}
+                "email": None, "name": x_user_id, "picture": None, "roles": [],
+                "is_admin": None, "identity_error": None}
 
     @app.post("/v1/admin/login", response_model=AdminToken)
     def admin_login(body: AdminLogin) -> AdminToken:

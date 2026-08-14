@@ -304,3 +304,81 @@ def test_harness_gates_tool_by_tier():
     # operator+ (diagnostic) → executes
     _turn("diagnostic")
     assert executed == ["run"]
+
+
+# -- expired / unverifiable identity is LOUD, not silent ---------------------
+# Regression cover for a live failure: Google id_tokens last ~1h but the edge's
+# session cookie defaults to 168h, so the edge keeps admitting a user while
+# forwarding a token Devy can no longer verify. The old code degraded that to
+# "anonymous", which is indistinguishable from a healthy signed-out visit — the
+# user's turns were then written to history under the anonymous actor and their
+# roles silently fell back to default_role.
+def _expired(priv, email="a@x.com"):
+    import time
+    return {"Authorization": "Bearer " + _sign(priv, {
+        "email": email, "groups": ["devy-admins"], "iss": "idp", "aud": "devy",
+        "iat": int(time.time()) - 7200, "exp": int(time.time()) - 3600})}
+
+
+def test_classify_identity_error_maps_pyjwt_exceptions():
+    from agentic_devops.proxy.auth import classify_identity_error as c
+
+    assert c(pyjwt.ExpiredSignatureError("x")) == "expired"
+    assert c(pyjwt.InvalidIssuerError("x")) == "invalid_issuer"
+    assert c(pyjwt.InvalidAudienceError("x")) == "invalid_audience"
+    assert c(pyjwt.InvalidSignatureError("x")) == "invalid_signature"
+    assert c(pyjwt.DecodeError("x")) == "invalid"          # any other PyJWT error
+    assert c(RuntimeError("not a jwt problem")) == "error"  # non-PyJWT → distinct code
+
+
+def test_whoami_reports_expired_rather_than_plain_anonymous(jwt_stack):
+    client, priv = jwt_stack
+    j = client.get("/v1/whoami", headers=_expired(priv)).json()
+    # Still 200 and unauthenticated — whoami is how the UI DISCOVERS it is broken,
+    # so it must stay reachable while broken.
+    assert j["authenticated"] is False
+    assert j["identity_error"] == "expired"
+
+
+def test_whoami_distinguishes_missing_token_from_bad_token(jwt_stack):
+    client, priv = jwt_stack
+    # jwt mode, no bearer at all → the edge isn't forwarding one
+    assert client.get("/v1/whoami").json()["identity_error"] == "missing_token"
+    # a token that arrived but failed verification is a DIFFERENT condition
+    assert client.get("/v1/whoami", headers=_expired(priv)).json()["identity_error"] == "expired"
+
+
+def test_whoami_clean_when_identity_verifies(jwt_stack):
+    client, priv = jwt_stack
+    j = client.get("/v1/whoami", headers=_bearer(priv, ["devy-admins"], "a@x.com")).json()
+    assert j["authenticated"] is True and j["identity_error"] is None
+
+
+def test_whoami_password_mode_has_no_identity_error(tmp_path, pool, pg_url):
+    app = create_app(
+        settings=Settings(database=DatabaseConfig(url=pg_url), trace_dir=tmp_path / "t"),
+        provider=object(), router=ToolsRouter(),
+    )
+    j = TestClient(app).get("/v1/whoami", headers={"X-User-Id": "dev"}).json()
+    # password mode has no token to verify — absence of SSO is not an error
+    assert j["identity_error"] is None
+
+
+def test_assistant_plane_401s_on_expired_token_instead_of_writing_as_anonymous(jwt_stack):
+    client, priv = jwt_stack
+    r = client.get("/v1/sessions", headers=_expired(priv))
+    assert r.status_code == 401
+    detail = r.json()["detail"]
+    assert detail["error"] == "identity_unverified" and detail["reason"] == "expired"
+
+
+def test_assistant_plane_does_not_401_when_no_token_present(jwt_stack):
+    # A MISSING bearer is a misconfigured edge (or a legitimately unauthenticated
+    # request) — NOT an unverifiable credential, so it must not raise the 401.
+    # It falls through to anonymous; this endpoint then rejects for its own,
+    # pre-existing reason (it needs a user to scope history by). Asserting the 400
+    # rather than a bare "not 401" keeps the two failure modes distinguishable.
+    client, _ = jwt_stack
+    r = client.get("/v1/sessions")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "user_id is required to list sessions"

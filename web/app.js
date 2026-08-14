@@ -882,6 +882,8 @@ const userPop = document.getElementById("user-pop");
 const userPopEmail = document.getElementById("user-pop-email");
 const userPopRoles = document.getElementById("user-pop-roles");
 const adminLink = document.getElementById("admin-link");
+const identityBanner = document.getElementById("identity-banner");
+const identityBannerText = document.getElementById("identity-banner-text");
 
 async function detectAuthMode() {
   // /v1/whoami reports the deployment's auth model (+ the verified principal under
@@ -910,7 +912,34 @@ async function detectAuthMode() {
     if (adminLink) {
       adminLink.hidden = !(authMode !== "jwt" || j.is_admin === true);
     }
+    applyIdentityError(j && j.identity_error);
   } catch (_) { /* proxy unreachable → honor-system identity, header defaults stand */ }
+}
+
+// An expired id_token behind a still-valid edge session is INVISIBLE without this:
+// the edge keeps letting you in, so the app looks signed-out rather than broken, and
+// the sign-out link lives inside the account chip — which is hidden precisely because
+// verification failed. That leaves no route back in short of knowing /oauth2/sign_out
+// by heart. The banner is therefore the only recovery affordance in this state, and
+// it must not depend on being authenticated.
+function applyIdentityError(reason) {
+  if (!identityBanner) return;
+  if (!reason || authMode !== "jwt") { identityBanner.hidden = true; return; }
+  identityBannerText.textContent = reason === "missing_token"
+    ? "Signed in at the edge, but no credential reached Devy — the proxy may be misconfigured."
+    : reason === "expired"
+      ? "Your session expired. You're browsing anonymously until you sign in again."
+      : "Your sign-in could not be verified. You're browsing anonymously until you sign in again.";
+  identityBanner.dataset.reason = reason;
+  identityBanner.hidden = false;
+}
+
+// Poll while the tab is visible: the token dies mid-session (Google id_tokens last
+// ~1h), so a load-time-only check would report healthy right up until a reload.
+function watchIdentity() {
+  const CHECK_MS = 60_000;
+  setInterval(() => { if (!document.hidden) detectAuthMode(); }, CHECK_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) detectAuthMode(); });
 }
 
 function applySignedIn(who) {
@@ -961,5 +990,6 @@ async function boot() {
   await loadTiers();
   greet();
   input.focus();
+  watchIdentity();
 }
 boot();

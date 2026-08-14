@@ -88,9 +88,9 @@ For a by-hand deploy, `export DEVY_SSM_TRANSFER_BUCKET=<bucket>` before running 
 ## 4. Registry & image tagging
 
 - **Per-component ECRs:** `devy-proxy`, `devy-chat-ui`. **Immutable** tags. (The host MCP is
-  **not** an ECR image anymore — it deploys as a native systemd unit via `host-mcp-deploy.yml`;
-  the stale `devy-host-mcp` repo should be retired in Terraform so registry-driven `all` builds
-  stop matching it.)
+  **not** an ECR image anymore — it deploys as a native systemd unit via `host-mcp-deploy.yml`.
+  Since `all` is registry-driven, don't provision a `devy-host-mcp` repo: the registry *is* the
+  component list, so an unused repo means every `all` build ships an image nothing deploys.)
 - **Tag scheme (all four coordinates):** `<component>:<release-or-branch>-<shortsha>-<utc-timestamp>`
   — e.g. `devy-proxy:v0.9.1-9f8e7d6-20260726T1500Z`. Human-legible in the ECR console, globally unique.
 - **Keyless pull** via the instance-role permission-set menu (extends the `alloy-secrets` pattern

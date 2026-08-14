@@ -271,6 +271,37 @@ class Authenticator:
         )
 
 
+def classify_identity_error(exc: BaseException) -> str:
+    """Map a token-verification failure to a stable, caller-facing reason code.
+
+    Why this exists: a *present but unverifiable* token and *no token at all* are
+    different conditions, and collapsing both to "anonymous" hides a real failure.
+    An expired id_token behind a still-valid edge session looks exactly like a
+    healthy unauthenticated visit — the operator sees a working login, while
+    history is silently written under the anonymous actor and roles fall back to
+    ``default_role``. These codes let ``/v1/whoami`` say which it is, so the UI can
+    prompt for re-auth and ``doctor`` can report it.
+
+    Codes are deliberately specific (not just expired/invalid) so they can be
+    alerted on individually; callers that only need coarse handling can test for
+    ``"expired"`` and treat everything else as invalid."""
+    try:
+        import jwt
+    except Exception:  # noqa: BLE001 — PyJWT absent: fall back to the generic code
+        return "invalid"
+    if isinstance(exc, jwt.ExpiredSignatureError):
+        return "expired"
+    if isinstance(exc, jwt.InvalidIssuerError):
+        return "invalid_issuer"
+    if isinstance(exc, jwt.InvalidAudienceError):
+        return "invalid_audience"
+    if isinstance(exc, jwt.InvalidSignatureError):
+        return "invalid_signature"
+    if isinstance(exc, jwt.PyJWTError):
+        return "invalid"
+    return "error"
+
+
 def build_authenticator(settings: Any) -> Authenticator:
     """Assemble the authenticator from env (password secrets) + config (jwt/rbac)."""
     admin = admin_auth_from_env()

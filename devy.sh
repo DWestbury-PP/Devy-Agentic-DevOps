@@ -56,6 +56,30 @@ preflight() {
   fi
 }
 
+# Auth-plane health. `authenticated:false` alone is normal (password mode, or nobody
+# signed in), so it is NOT reported as a fault; a non-null identity_error is, because
+# it means a credential arrived and could not be verified — the state that otherwise
+# looks exactly like a healthy signed-out app. Best-effort: never fails `doctor`.
+auth_check() {
+  local body
+  body="$(curl -fsS --max-time 3 http://localhost:8080/v1/whoami 2>/dev/null)" || {
+    echo "auth: could not reach /v1/whoami on :8080 (stack down, or the edge is not up)"; return 0; }
+  local mode auth err
+  mode="$(printf '%s' "$body"  | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  auth="$(printf '%s' "$body"  | sed -n 's/.*"authenticated"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p')"
+  err="$(printf '%s'  "$body"  | sed -n 's/.*"identity_error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  echo "auth: mode=${mode:-?} authenticated=${auth:-?}${err:+ identity_error=$err}"
+  case "$err" in
+    expired) echo "⚠  a credential reached Devy but had EXPIRED — users are silently anonymous.
+   Check OAUTH2_PROXY_COOKIE_REFRESH is set (55m), then sign out and back in." >&2 ;;
+    missing_token) echo "⚠  jwt mode but the edge forwarded no bearer — check
+   OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER and nginx's Authorization pass-through." >&2 ;;
+    invalid_issuer) echo "⚠  issuer rejected — auth.issuer must list BOTH Google forms." >&2 ;;
+    invalid_audience) echo "⚠  audience rejected — auth.audience must equal OAUTH2_PROXY_CLIENT_ID." >&2 ;;
+    ?*) echo "⚠  identity failed to verify ($err)." >&2 ;;
+  esac
+}
+
 confirm() { read -rp "$1 Type 'yes' to proceed: " c; [[ "$c" == yes ]] || { echo "aborted" >&2; exit 1; }; }
 
 # Bring the DB to head via the app-owned migration runner (docs/db-migrations.md).
@@ -100,7 +124,7 @@ case "$cmd" in
   logs)
     banner; dc logs -f "$@" ;;
   doctor|status)
-    banner; dc ps; echo; preflight ;;
+    banner; dc ps; echo; preflight; auth_check ;;
   mode)
     banner ;;
   help|-h|--help)

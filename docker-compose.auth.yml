@@ -47,6 +47,13 @@ services:
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       # localhost is plain http in dev → non-secure cookie. PROD (https) sets this true.
       OAUTH2_PROXY_COOKIE_SECURE: "false"
+      # Refresh the id_token BEFORE it expires. Without this the session cookie
+      # (default 168h) far outlives Google's ~1h id_token: the edge keeps admitting
+      # you while forwarding a token Devy can no longer verify, so you silently
+      # become anonymous — history stops being scoped to your email and roles fall
+      # back to default_role. `access_type=offline` is already requested, so the
+      # refresh token needed for this is available.
+      OAUTH2_PROXY_COOKIE_REFRESH: "55m"
     depends_on:
       - chat-ui
     restart: unless-stopped

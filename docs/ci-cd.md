@@ -128,7 +128,7 @@ for free). Three shapes:
   "built_at":  "2026-07-26T15:00:00Z",     // ISO-8601 UTC
   "label":     "main-9f8e7d6-2026-07-26-1500Z",  // human-facing
   "run_url":   "https://github.com/.../actions/runs/123",
-  "actor":     "DWestbury-PP",
+  "actor":     "<github-login>",          // who fired the build
   "status":    "complete",                 // "complete" | "partial"  (see below)
   "components": {
     "proxy":   { "image": "<acct>.dkr.ecr...devy-proxy:main-9f8e7d6-20260726T1500Z",
@@ -349,7 +349,7 @@ are cheap to add without ever forking the deploy logic (design: `deploy-design.m
 curl -sf -X POST \
   -H "Authorization: Bearer $GH_TOKEN" \
   -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/DWestbury-PP/Devy-Agentic-DevOps/dispatches \
+  https://api.github.com/repos/<owner>/<repo>/dispatches \
   -d '{
         "event_type": "devy-deploy",
         "client_payload": {

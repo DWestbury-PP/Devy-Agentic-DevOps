@@ -18,7 +18,7 @@
 # Inputs (env):
 #   HOST_MCP_TOKEN     (required) bearer token the proxy will send
 #   HOST_MCP_SOURCE    pip source. Default: the public repo @ the given ref, e.g.
-#                      "git+https://github.com/DWestbury-PP/Devy-Agentic-DevOps@<sha>#subdirectory=host-mcp"
+#                      "git+https://github.com/Retrospective-LLC/Devy-Agentic-DevOps@<sha>#subdirectory=host-mcp"
 #                      May also be a local path to a host-mcp/ checkout.
 #   HOST_MCP_REF       git ref/sha to pin when HOST_MCP_SOURCE is unset (default: main)
 #   HOST_MCP_PORT      listen port (default 8781)
@@ -32,7 +32,7 @@ VENV="$APP_DIR/venv"
 ENV_DIR="/etc/agentic-devops"
 ENV_FILE="$ENV_DIR/host-mcp.env"
 UNIT="/etc/systemd/system/agentic-devops-host-mcp.service"
-REPO_URL="https://github.com/DWestbury-PP/Devy-Agentic-DevOps"
+REPO_URL="https://github.com/Retrospective-LLC/Devy-Agentic-DevOps"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 : "${HOST_MCP_TOKEN:?set HOST_MCP_TOKEN (the bearer token the proxy sends)}"

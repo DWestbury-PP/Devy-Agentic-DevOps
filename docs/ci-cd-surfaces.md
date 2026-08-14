@@ -63,7 +63,7 @@ the dispatch inputs **exactly**, so a webhook and a button are the *same call*.
 | Workflow | Event type | `client_payload` (all fields optional) | Defaults |
 |---|---|---|---|
 | `build.yml` | **`devy-build`** | `{ref, components, components_advanced, push}` | ref = default-branch HEAD · components = all · push = true |
-| `deploy.yml` | **`devy-deploy`** | `{source, branch, commit, targets, mode}` | source per form · targets = role_platform · mode = plan |
+| `deploy.yml` | **`devy-deploy`** | `{source, branch, commit, targets, mode}` **+ `{requested_by, request_id}`** | source per form · targets = role_platform · mode = plan |
 | `host-mcp-deploy.yml` | **`devy-host-mcp-deploy`** | `{hosts, ref, profile, allow_mutations, mode}` | hosts = role_platform · ref = main · mode = plan |
 
 The raw call (see `ci-cd.md §6` for a full example):
@@ -75,6 +75,19 @@ curl -sf -X POST \
   https://api.github.com/repos/<owner>/<repo>/dispatches \
   -d '{"event_type":"devy-deploy","client_payload":{"source":"assembled-latest","mode":"plan"}}'
 ```
+
+**Attribution fields (`deploy.yml` today; the others follow the same shape when they need it).**
+A relay fires with one shared credential, so the provider's actor field can only ever show the
+relay — **the requester has to travel in the payload or it is lost** (§3). Two optional fields
+carry it; both absent means unchanged behaviour:
+
+- **`requested_by`** — the principal the relay authenticated. It appears in the **run title** and
+  the job summary, so a human is named on the run itself. A manual `workflow_dispatch` falls back
+  to `github.actor`, so every run names someone either way.
+- **`request_id`** — the caller's correlation handle, echoed into the run title. This is not a
+  nicety: **`POST /repos/{owner}/{repo}/dispatches` returns `204` with no body**, so a surface
+  cannot learn the run id from the call it just made. Matching on the run title is how it finds
+  its own run.
 
 **Two safety invariants every trigger surface must honor:**
 - **`mode: plan` first.** Deploys are plan/apply — a surface should default to `plan`

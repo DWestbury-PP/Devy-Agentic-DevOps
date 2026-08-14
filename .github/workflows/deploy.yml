@@ -1,5 +1,15 @@
 name: Deploy (Devy → AWS over SSM)
 
+# The run title carries WHO asked and WHICH request it answers. A relay fires with one
+# shared credential, so GitHub's actor field can only ever show the relay — the requester
+# has to travel in the payload or it is lost. `request_id` is also the only correlation
+# handle a caller gets: POST /dispatches returns 204 with no body, so a surface cannot
+# learn the run id any other way; it finds its run by matching this title.
+run-name: >-
+  Deploy ${{ github.event.client_payload.mode || inputs.mode || 'plan' }} ·
+  ${{ github.event.client_payload.requested_by || github.actor }}${{
+  github.event.client_payload.request_id && format(' · {0}', github.event.client_payload.request_id) || '' }}
+
 # The CD front door. Resolves a release from the SSM build ledger CI wrote, then runs the
 # deploy/ Ansible play over SSM (docs/deploy-design.md §18). Devy owns its whole delivery
 # lifecycle — this lives next to the build workflow, in the app repo (D-016).
@@ -47,7 +57,12 @@ on:
           - plan
           - apply
   repository_dispatch:
-    types: [devy-deploy] # client_payload mirrors the dispatch inputs (source/branch/commit/targets/mode)
+    types: [devy-deploy]
+    # client_payload mirrors the dispatch inputs (source/branch/commit/targets/mode), plus two
+    # OPTIONAL attribution fields a relay should send (both absent = unchanged behaviour):
+    #   requested_by — the principal the relay authenticated (e.g. an email). Surfaces in the
+    #                  run title + summary, so the human is named even though the credential is shared.
+    #   request_id   — the caller's correlation handle, echoed back for the same reason.
 
 permissions:
   id-token: write # OIDC -> assume the deploy role
@@ -76,6 +91,8 @@ jobs:
       source: ${{ steps.norm.outputs.source }}
       targets: ${{ steps.norm.outputs.targets }}
       mode: ${{ steps.norm.outputs.mode }}
+      requested_by: ${{ steps.norm.outputs.requested_by }}
+      request_id: ${{ steps.norm.outputs.request_id }}
       extra_vars: ${{ steps.resolve.outputs.extra_vars }}
       label: ${{ steps.resolve.outputs.label }}
     steps:
@@ -88,6 +105,10 @@ jobs:
           COMMIT: ${{ inputs.commit || github.event.client_payload.commit || '' }}
           TARGETS: ${{ inputs.targets || github.event.client_payload.targets || 'role_platform' }}
           MODE: ${{ inputs.mode || github.event.client_payload.mode || 'plan' }}
+          # Attribution (repository_dispatch only). Falls back to the GitHub actor for a manual
+          # run, so every run names a human either way.
+          REQUESTED_BY: ${{ github.event.client_payload.requested_by || github.actor }}
+          REQUEST_ID: ${{ github.event.client_payload.request_id || '' }}
         run: |
           set -euo pipefail
           {
@@ -96,8 +117,10 @@ jobs:
             echo "commit=${COMMIT}"
             echo "targets=${TARGETS}"
             echo "mode=${MODE}"
+            echo "requested_by=${REQUESTED_BY}"
+            echo "request_id=${REQUEST_ID}"
           } >> "$GITHUB_OUTPUT"
-          echo "Deploy intent: source=${SOURCE} branch=${BRANCH} commit=${COMMIT:-—} targets=${TARGETS} mode=${MODE}"
+          echo "Deploy intent: source=${SOURCE} branch=${BRANCH} commit=${COMMIT:-—} targets=${TARGETS} mode=${MODE} requested_by=${REQUESTED_BY} request_id=${REQUEST_ID:-—}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -207,6 +230,7 @@ jobs:
             echo "### ${{ needs.resolve.outputs.mode == 'plan' && '🔎 Deploy plan' || '🚀 Deploy' }} — \`${{ needs.resolve.outputs.label }}\`"
             echo ""
             echo "- **Source:** \`${{ needs.resolve.outputs.source }}\` · **Targets:** \`${{ needs.resolve.outputs.targets }}\` · **Mode:** \`${{ needs.resolve.outputs.mode }}\` · **Result:** \`${{ steps.run.outcome }}\`"
+            echo "- **Requested by:** \`${{ needs.resolve.outputs.requested_by }}\`${{ needs.resolve.outputs.request_id && format(' · **Request:** `{0}`', needs.resolve.outputs.request_id) || '' }}"
             echo ""
             echo "<details><summary>Ansible output</summary>"
             echo ""; echo '```'

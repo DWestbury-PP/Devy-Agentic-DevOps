@@ -284,7 +284,8 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **Manifest format & storage:** a compose `.env` of `IMAGE` vars vs a YAML file; git-tracked +
   attached as a GitHub Release asset for official releases.
 - ~~**Webhook security model** (L2): scoped token vs GitHub App vs a small authenticated relay.~~
-  **DECIDED (2026-08-13) → the authenticated relay; see ADR D-017.** Trade-offs:
+  **DECIDED (2026-08-13) → the authenticated relay; AMENDED (2026-08-14) → it runs as a small
+  standalone service, not inside the assistant's proxy. See ADR D-017.** Trade-offs:
   [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger).
 - **Config-versioning approach:** the per-env config file ships (§13); only the *versioned
   config-retrieval service* remains parked — its own session.
@@ -331,16 +332,23 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
   (SSM transfer bucket, OIDC provider) stay as IaC-layer resources, referenced not copied. Reuse
   across apps, if ever needed, is a **template** (cookiecutter), never a runtime-shared deploy framework —
   deploy logic is where apps differ most; a central LCD would be a leaky abstraction.
-- **D-017** (2026-08-13) **Webhook-trigger auth = authenticated relay via the proxy** (the L2 fork in §16).
-  A surface **never holds a GitHub credential**: it authenticates against Devy's existing **RBAC/SSO**
-  plane, and the **proxy** fires the `repository_dispatch` with **one vault-held credential**
-  (`devy/github/dispatch`). Backed by a **fine-grained PAT now, upgradeable to a GitHub App** with **zero
-  surface change** — the credential is centralized behind the proxy, so the PAT→App swap is an internal
-  detail. The relay **is `request_deploy` generalized**: Devy proposes → a human approves (RBAC `elevated`)
-  → the proxy fires; Devy has **no directly-firing tool** (never-self-approve stays structural, reusing the
-  guarded-actions framework). Direct-to-GitHub (a per-surface **PAT** or **App**, models A/B) is **rejected
-  as the surface-facing model** — per-surface secret handling, personal-identity binding, no central
-  rotation/audit — though a GitHub App remains the likely future *last hop inside* the relay. Full
+- **D-017** (2026-08-13, **amended 2026-08-14**) **Webhook-trigger auth = authenticated relay**
+  (the L2 fork in §16). A surface **never holds a GitHub credential**: it authenticates against the
+  existing **RBAC/SSO** plane, and **the relay** fires the `repository_dispatch` with **one credential
+  of its own** — a **GitHub App** (per-repo `actions: write`, its own audit identity); a fine-grained
+  PAT is acceptable only as a stopgap, since it binds the release path to one person's account.
+  Direct-to-GitHub (a per-surface **PAT** or **App**, models A/B) is **rejected as the surface-facing
+  model** — per-surface secret handling, personal-identity binding, no central rotation/audit.
+  **The amendment: the relay is a small standalone service, NOT the assistant's proxy.** The original
+  weighed availability only ("the proxy must be up to fire"); the decisive objections are elsewhere.
+  *Blast radius* — the proxy's GitHub access is read-only by construction, and a dispatch credential
+  would be the first it holds that **changes production**, inside the one process that runs
+  model-directed code; propose-only and never-self-approve constrain the **agent**, not the
+  **process**. *Attribution* — one shared credential makes every GitHub run the same actor, so the
+  relay must authenticate callers and carry the resolved principal into the `client_payload` for the
+  run summary to echo. Availability is the lesser concern and must be **preserved deliberately**:
+  `workflow_dispatch` stays live as break-glass, and a surface may hold no capability GitHub's own UI
+  lacks. Devy is then simply **a client** of the relay (it holds no firing credential at all). Full
   trade-offs: [`ci-cd-surfaces.md §3`](ci-cd-surfaces.md#3-authentication--who-may-fire-a-trigger).
 
 ## 18. Deploy execution — the detailed CD mechanics (worked out 2026-07-26)

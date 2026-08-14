@@ -341,7 +341,7 @@ are cheap to add without ever forking the deploy logic (design: `deploy-design.m
   (the dogfood beat — Devy proposing and, on human approval, triggering its own deploy).
   Each is *just a secure sender* of the L2 payload. **Building one?** See
   [`ci-cd-surfaces.md`](ci-cd-surfaces.md) — the surface-developer's guide (read + trigger
-  contracts, the auth model, the `request_deploy` reference path).
+  contracts, the auth model, and where the relay runs).
 
 ### Firing the webhook (L2)
 
@@ -375,8 +375,8 @@ out so nobody mistakes intent for reality:
 | **Release browse layer** | ✅ **done** — `releases` CLI + `/v1/admin/releases` API + `list_releases` tool (§2) | consume it from a web/Slack surface |
 | **SSM-read IAM grant** | ✅ **done** — the proxy instance role reads `/devy/builds/*`; the API + `list_releases` tool are live on `devy-platform` | — |
 | **Build has no webhook** | ✅ **done** — `build.yml` accepts `repository_dispatch: devy-build` (`{ref, components, components_advanced, push}`), symmetric with the deploy workflows | — |
-| **Webhook auth model** ⬅ *next* | a token with `repo` scope | decide the durable model — a scoped fine-grained token, a GitHub App, or a small authenticated relay (`deploy-design.md` §16) |
-| **Trigger from Devy** | Devy can *read* the ledger (`list_releases`) | a propose-only `request_deploy` under guarded actions (human-approved) — the Devy-deploys-Devy beat |
+| **Webhook auth model** | a token with `repo` scope | ✅ **decided** — a small authenticated relay, standalone (not in the proxy), holding a GitHub App (D-017, amended) |
+| **Trigger from Devy** | Devy can *read* the ledger (`list_releases`) | Devy proposes and hands off; it holds no firing credential (`ci-cd-surfaces.md` §4) |
 | **`deploy.yml` targets** | `role_platform` only | wire `role_edge` / `all` (Phase-2) |
 | **Slack notifications** | dormant step in `build.yml` | set `SLACK_WEBHOOK_URL` to light up build notices |
 | **Coverage audit** | fine at 3 hosts | reconcile-against-tags at fleet scale (`deploy-design.md` §12) |

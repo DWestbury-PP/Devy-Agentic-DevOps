@@ -81,6 +81,7 @@ once for your account; a fork sets its own:
 | `BLOBS_BUCKET` | `deploy.yml` → `.env` → config's `${DEVY_BLOBS_BUCKET}` | S3 bucket for image attachments |
 | `GRAFANA_URL` | `deploy.yml` → `.env` → grafana-mcp sidecar + `deployment_context` | Grafana Cloud tenant URL |
 | `AWS_REGION` | both (optional) | defaults to `us-east-1` if unset |
+| `DEPLOY_ENVIRONMENT` | `deploy.yml` (optional) | GitHub Environment an apply is recorded against; defaults to `dev`. Match the play's `devy_env_name` |
 
 None are secrets (ARNs/account IDs/bucket names aren't credentials) — repo **variables**, not secrets.
 For a by-hand deploy, `export DEVY_SSM_TRANSFER_BUCKET=<bucket>` before running the play.
@@ -185,6 +186,16 @@ proves the *whole mesh*, not just liveness.
   pointer** (auditable, reviewable, diffable, and itself the rollback target) — "what MUST be known
   is known." A **GitHub Deployment** is created as the *reporting projection* (§11): git is the
   truth, the Deployment is the readout.
+- **Implemented in `deploy.yml`** — an `apply` opens a Deployment against `DEPLOY_ENVIRONMENT`
+  before the play and closes it `success`/`failure` afterwards. Three properties are deliberate:
+  - **`apply` only.** A plan is a dry run; recording one would fill an environment's history
+    with deploys that never happened.
+  - **Opened before the play, and a failure to open fails the job.** Nothing has shipped yet,
+    so refusing to proceed without a record costs nothing. Closing it is the opposite — a
+    bookkeeping call that cannot land must never turn a shipped release into a red run.
+  - **The `payload` carries `requested_by` / `request_id`.** This is the only durable home for
+    attribution: a run title and job summary age out with Actions log retention, and the
+    per-env pointer records what and when but not who.
 
 ## 11. Release reporting — GitHub-native, so it's near-free
 

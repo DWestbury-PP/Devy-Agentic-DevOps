@@ -28,7 +28,9 @@ on:
         # below needs a line added — or use the advanced override for any combination.
         # NOTE: host-mcp is NOT built here anymore — on AWS it deploys as a native systemd
         # unit (host-mcp-deploy.yml), not an ECR image; its Dockerfile stays for the LOCAL
-        # demo only. Retire the devy-host-mcp ECR repo in Terraform so "all" stops matching it.
+        # demo only. That cuts both ways with the registry-driven "all": do NOT create a
+        # devy-host-mcp ECR repo (and delete it if you have one), or every "all" build keeps
+        # producing an image that nothing ever deploys.
         type: choice
         default: all
         options:

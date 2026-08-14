@@ -67,6 +67,7 @@ on:
 permissions:
   id-token: write # OIDC -> assume the deploy role
   contents: read
+  deployments: write # record the deploy as a GitHub Deployment (see the deploy job)
 
 env:
   # Account-specific values come from repo-level Actions variables so the public
@@ -75,7 +76,10 @@ env:
   #   AWS_REGION           (optional; defaults to us-east-1)
   #   DEPLOY_ROLE_ARN      arn:aws:iam::<account>:role/<your-gha-deploy-role>
   #   SSM_TRANSFER_BUCKET  the aws_ssm file-staging bucket (consumed by the inventory)
+  #   DEPLOY_ENVIRONMENT   (optional; defaults to dev) the GitHub Environment an apply
+  #                        is recorded against — must match the play's devy_env_name
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  DEPLOY_ENVIRONMENT: ${{ vars.DEPLOY_ENVIRONMENT || 'dev' }}
   DEPLOY_ROLE_ARN: ${{ vars.DEPLOY_ROLE_ARN }}
   SSM_PREFIX: /devy/builds
 
@@ -95,6 +99,7 @@ jobs:
       request_id: ${{ steps.norm.outputs.request_id }}
       extra_vars: ${{ steps.resolve.outputs.extra_vars }}
       label: ${{ steps.resolve.outputs.label }}
+      deploy_ref: ${{ steps.resolve.outputs.deploy_ref }}
     steps:
       - name: Normalize inputs (dispatch OR repository_dispatch)
         id: norm
@@ -164,8 +169,14 @@ jobs:
             label="$(echo "$manifest" | jq -r '.label // .sha')"
           fi
 
+          # The commit a Deployment record points at. `assembled-latest` may span commits
+          # by design, so there is no single truthful sha — fall back to the workflow's own
+          # and let the label carry what was actually assembled.
+          if [ "$SOURCE" = "assembled-latest" ]; then deploy_ref="$GITHUB_SHA"; else deploy_ref="$sha"; fi
+
           echo "extra_vars=${extra}" >> "$GITHUB_OUTPUT"
           echo "label=${label}" >> "$GITHUB_OUTPUT"
+          echo "deploy_ref=${deploy_ref}" >> "$GITHUB_OUTPUT"
           echo "Resolved → ${label}"
           echo "  extra-vars: ${extra}"
 
@@ -199,6 +210,46 @@ jobs:
           python -m pip install --upgrade ansible boto3 botocore
           ansible-galaxy collection install -r requirements.yml -p collections
 
+      # ── The CD record. GitHub Deployments are the durable, GitHub-native answer to
+      # "what shipped here, when, and who asked" — unlike a run summary, they do not age
+      # out with Actions log retention. Created for `apply` only: a plan is a dry run and
+      # would otherwise fill the environment's history with deploys that never happened.
+      #
+      # Created BEFORE the play, and a failure here fails the job: nothing has shipped yet,
+      # so refusing to proceed without a record is free. (The closing status is the
+      # opposite — see below.)
+      - name: Open a GitHub Deployment
+        id: deployment
+        if: ${{ needs.resolve.outputs.mode == 'apply' }}
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.resolve.outputs.deploy_ref }}
+          LABEL: ${{ needs.resolve.outputs.label }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          TARGETS: ${{ needs.resolve.outputs.targets }}
+          REQUESTED_BY: ${{ needs.resolve.outputs.requested_by }}
+          REQUEST_ID: ${{ needs.resolve.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          # required_contexts=[] and auto_merge=false are both load-bearing: the defaults
+          # make GitHub wait on commit statuses and try a branch merge, either of which
+          # returns something other than a created deployment.
+          body="$(jq -n \
+            --arg ref "$REF" --arg env "$DEPLOY_ENVIRONMENT" --arg label "$LABEL" \
+            --arg source "$SOURCE" --arg targets "$TARGETS" \
+            --arg requested_by "$REQUESTED_BY" --arg request_id "$REQUEST_ID" \
+            '{ref:$ref, environment:$env, description:$label,
+              auto_merge:false, required_contexts:[],
+              payload:{label:$label, source:$source, targets:$targets,
+                       requested_by:$requested_by, request_id:$request_id}}')"
+          id="$(printf '%s' "$body" | gh api "repos/${GITHUB_REPOSITORY}/deployments" --input - | jq -r '.id // empty')"
+          [ -n "$id" ] || { echo "::error::Could not create the GitHub Deployment record."; exit 1; }
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+          gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" \
+            -f state=in_progress -f log_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+          echo "Deployment ${id} opened against ${DEPLOY_ENVIRONMENT} @ ${REF}"
+
       - name: "${{ needs.resolve.outputs.mode == 'plan' && 'Plan (--check --diff)' || 'Apply' }}"
         id: run
         env:
@@ -222,6 +273,25 @@ jobs:
           [ "$MODE" = "plan" ] && args+=(--check --diff)
           echo "ansible-playbook ${args[*]}"
           ansible-playbook "${args[@]}" 2>&1 | tee /tmp/deploy.txt
+
+      # Closing the record must NEVER fail the job: the deploy has already happened, and
+      # reporting a shipped release as failed because a bookkeeping call did not land would
+      # be worse than a missing status.
+      - name: Close the GitHub Deployment
+        if: ${{ always() && steps.deployment.outputs.id }}
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+          OUTCOME: ${{ steps.run.outcome }}
+        run: |
+          state=failure
+          [ "$OUTCOME" = "success" ] && state=success
+          gh api "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+            -f state="$state" -f environment="$DEPLOY_ENVIRONMENT" \
+            -f description="ansible ${OUTCOME}" \
+            -f log_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            >/dev/null || echo "::warning::Deployment ${DEPLOYMENT_ID} status could not be set to ${state}."
 
       - name: Job summary
         if: ${{ always() }}

@@ -236,6 +236,14 @@ Whatever the surface, these are structural — a surface may not weaken them:
   **a surface may hold no capability GitHub's own UI lacks**. This is what keeps a convenience
   layer from quietly becoming a dependency an organization cannot ship without — it erodes
   silently otherwise, so prove the fallback rather than assuming it.
+- **Every relay-supplied field is optional, with a correct fallback.** A workflow here must
+  work, and read sensibly, for someone running it by hand with no relay at all — that is why
+  `requested_by` falls back to `github.actor` rather than to an empty string or a placeholder.
+  The failure this prevents: a workflow that is inert, broken, or merely confusing without a
+  component the reader does not have and cannot obtain. A field that degrades to a *correct*
+  value is a seam; one that degrades to nothing useful is a dead end. The same test applies to
+  documentation — describe the *pattern* so a reader can build their own, never a particular
+  deployment's instance of it.
 
 ---
 

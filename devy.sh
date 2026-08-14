@@ -56,28 +56,43 @@ preflight() {
   fi
 }
 
-# Auth-plane health. `authenticated:false` alone is normal (password mode, or nobody
-# signed in), so it is NOT reported as a fault; a non-null identity_error is, because
-# it means a credential arrived and could not be verified — the state that otherwise
-# looks exactly like a healthy signed-out app. Best-effort: never fails `doctor`.
+# Auth-plane health (config-level, by design). A CLI invocation has no browser
+# session, so it deliberately does NOT read a user's `identity_error`: from here
+# that is always "missing_token", which would be a permanent false alarm. What IS
+# checkable from the command line is the configuration that allowed the silent-
+# anonymous failure in the first place — whether the edge refreshes the id_token
+# before it expires. Best-effort: never fails `doctor`.
 auth_check() {
-  local body
-  body="$(curl -fsS --max-time 3 http://localhost:8080/v1/whoami 2>/dev/null)" || {
-    echo "auth: could not reach /v1/whoami on :8080 (stack down, or the edge is not up)"; return 0; }
-  local mode auth err
-  mode="$(printf '%s' "$body"  | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-  auth="$(printf '%s' "$body"  | sed -n 's/.*"authenticated"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p')"
-  err="$(printf '%s'  "$body"  | sed -n 's/.*"identity_error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-  echo "auth: mode=${mode:-?} authenticated=${auth:-?}${err:+ identity_error=$err}"
-  case "$err" in
-    expired) echo "⚠  a credential reached Devy but had EXPIRED — users are silently anonymous.
-   Check OAUTH2_PROXY_COOKIE_REFRESH is set (55m), then sign out and back in." >&2 ;;
-    missing_token) echo "⚠  jwt mode but the edge forwarded no bearer — check
-   OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER and nginx's Authorization pass-through." >&2 ;;
-    invalid_issuer) echo "⚠  issuer rejected — auth.issuer must list BOTH Google forms." >&2 ;;
-    invalid_audience) echo "⚠  audience rejected — auth.audience must equal OAUTH2_PROXY_CLIENT_ID." >&2 ;;
-    ?*) echo "⚠  identity failed to verify ($err)." >&2 ;;
-  esac
+  local mode
+  mode="$(dc exec -T proxy python -c \
+    'import urllib.request,json;print(json.load(urllib.request.urlopen("http://localhost:8765/v1/whoami"))["mode"])' \
+    2>/dev/null | tr -d "\r")"
+  if [[ -z "$mode" ]]; then
+    echo "auth: proxy not reachable — is the stack up?"; return 0
+  fi
+  echo "auth: mode=$mode"
+  [[ "$mode" == jwt ]] || return 0
+
+  # jwt mode: the edge must refresh the id_token before Google expires it (~1h).
+  # Read the setting via `docker inspect` rather than `exec` — the oauth2-proxy
+  # image ships no shell, so exec cannot work there.
+  local cid refresh
+  cid="$(dc ps -q oauth2-proxy 2>/dev/null | head -1)"
+  if [[ -z "$cid" ]]; then
+    echo "⚠  jwt mode but the oauth2-proxy edge is not running — nothing is forwarding
+   an id_token, so every caller is anonymous to Devy. Start with './devy.sh up'." >&2
+    return 0
+  fi
+  refresh="$(docker inspect "$cid" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+             | sed -n 's/^OAUTH2_PROXY_COOKIE_REFRESH=//p' | head -1)"
+  if [[ -z "$refresh" ]]; then
+    echo "⚠  OAUTH2_PROXY_COOKIE_REFRESH is unset. The edge session cookie (default 168h)
+   far outlives Google's ~1h id_token, so users silently become anonymous to Devy:
+   history unscoped, roles fall back to default_role, admin link gone — while the
+   edge still shows them signed in. Set it to 55m in docker-compose.auth.yml." >&2
+  else
+    echo "auth: edge refreshes the id_token after $refresh"
+  fi
 }
 
 confirm() { read -rp "$1 Type 'yes' to proceed: " c; [[ "$c" == yes ]] || { echo "aborted" >&2; exit 1; }; }

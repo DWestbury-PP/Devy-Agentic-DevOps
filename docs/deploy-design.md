@@ -346,7 +346,8 @@ changing the deploy flow. Not built for Devy. See the `reference-versioned-confi
 - **D-017** (2026-08-13, **amended 2026-08-14**) **Webhook-trigger auth = authenticated relay**
   (the L2 fork in §16). A surface **never holds a GitHub credential**: it authenticates against the
   existing **RBAC/SSO** plane, and **the relay** fires the `repository_dispatch` with **one credential
-  of its own** — a **GitHub App** (per-repo `actions: write`, its own audit identity); a fine-grained
+  of its own** — a **GitHub App** (per-repo `Contents: write` — GitHub files `repository_dispatch`
+  under Contents, not Actions — plus its own audit identity); a fine-grained
   PAT is acceptable only as a stopgap, since it binds the release path to one person's account.
   Direct-to-GitHub (a per-surface **PAT** or **App**, models A/B) is **rejected as the surface-facing
   model** — per-surface secret handling, personal-identity binding, no central rotation/audit.

@@ -156,9 +156,12 @@ consequences:
   forwarded id_token itself rather than delegating to the assistant's proxy. Independence is
   the point.
 - **A GitHub App, not a PAT, once there is exactly one holder.** With the credential
-  centralized in one service, an App's per-repo `actions: write` scope and its own audit
-  identity cost roughly fifty lines of installation-token minting, and a PAT would otherwise
-  bind the release path to one person's account.
+  centralized in one service, an App's per-repo scopes and its own audit identity cost
+  roughly fifty lines of installation-token minting, and a PAT would otherwise bind the
+  release path to one person's account. The scope `repository_dispatch` needs is
+  **`Contents: write`** — GitHub files it under Contents, not Actions. Worth stating
+  plainly, because it is broader than it sounds: `Contents: write` also permits pushing
+  code. (`Actions: read` is separate, and is what lets the relay find the run it fired.)
 - **It must not be deployable *by* itself.** Whatever pipeline ships the relay has to remain
   reachable without the relay.
 

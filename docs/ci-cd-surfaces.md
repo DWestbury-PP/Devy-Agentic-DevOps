@@ -167,6 +167,104 @@ consequences:
 
 ---
 
+## 3b. Requesting is not authorizing
+
+§3 settles that a surface holds no provider credential. That leaves a second question it
+does **not** answer: once the relay *can* fire, what stops any authenticated caller from
+firing anything?
+
+The tempting answer is to give the relay an approval gate. That is the same mistake §3 just
+backed out of, one layer along — **an approval gate is an authority mechanism**, and putting
+authority in the relay means one component both decides who may change production and holds
+the credential that does it.
+
+So split the two:
+
+| Step | Who | What they contribute |
+|---|---|---|
+| **Request** | any surface | a human, asserted as strongly as that surface can |
+| **Authorize** | the provider | whether that person may actually change this repository |
+| **Execute** | the relay | firing the trigger, once both of the above are settled |
+
+### Surfaces are not equally trustworthy, and that is fine
+
+A surface behind SSO can forward a verified `id_token`. A chat integration can assert only
+"this chat user, whose profile email is X". A ticket automation is weaker still. Requiring one
+bar either excludes the weak surfaces or over-trusts them.
+
+**Record the strength instead.** Carry a `strong`/`weak` claim alongside the asserted
+principal, and put it in front of whoever approves. This grants nothing — it is a label, not a
+permission — but it makes a weak claim *harmless* rather than excluded, because a weak claim
+cannot act alone. The payoff is that the surface contract collapses to almost nothing: a new
+surface authenticates itself and asserts a user. No user auth plane, no elevated role, no
+credential that can change production.
+
+This is also why a plain "pass everything through" relay does not work. A passthrough must
+*trust* its callers, and trust is exactly the property that varies per surface.
+
+### Pin the release when it is requested, not when it runs
+
+"Deploy the latest from a branch" is a legitimate intent and a *moving* one. Resolve it to a
+concrete manifest **at request time**, so that approving and shipping cannot be two different
+things — and so a retry after a failure is provably the same artifact rather than whatever
+landed in the meantime.
+
+> **Resolve against whatever registry records what is actually deployable — not against the
+> version control ref.** These are different sets: a docs-only commit never runs a build, so a
+> branch tip frequently has no artifact. Pinning the ref rather than the built artifact
+> produces an approval that cannot ship, and it fails *after* someone has approved it. Whenever
+> two systems both key on "commit", check they mean the same set.
+
+Then the identity of a request is `(manifest, target)`, and the consequences follow:
+
+- **A different manifest or a different target is a new request** — that is the tracking
+  boundary.
+- **Approval binds the pairing, not the attempt.** A retry of the same artifact to the same
+  place needs no fresh approval: it changes nothing about the security posture, and a process
+  that demands ceremony per retry is one an engineer recovering an outage will route around —
+  fragmenting the audit trail exactly when it matters most.
+- **Success is terminal.** A succeeded request accepts no further attempts.
+- **Every attempt is its own record.** "Who fired the one that actually shipped" is the first
+  question an incident review asks, and a single mutable row cannot answer it.
+
+### Let the provider answer "who may approve"
+
+The approver's authority is a question the **provider** already knows the answer to — ask it
+rather than reimplementing it:
+
+```
+GET /repos/{owner}/{repo}/collaborators/{login}/permission   →   write | admin
+```
+
+For a GitHub App this needs only **`Metadata: read`**, which every App holds mandatorily — so
+delegating the authority question adds *no* scope to the credential that can change
+production. It also gives per-team scoping transitively and for free: teams grant repository
+access, so a platform team with write across an estate can approve anything, while an
+application team with write on its own repositories can approve only those.
+
+> **Do not design around a team-membership call.** A workflow's default token is
+> repository-scoped and has no organization/team read scope, so that route needs a second
+> credential in the release path and buys nothing the permission check does not already give.
+
+Two failure modes worth naming, because both are easy to get backwards:
+
+- **A refused approval must not move the request.** If it did, anyone holding a token could
+  kill somebody else's release just by failing to approve it.
+- **"The provider could not be reached" is not "permission denied."** It is a failure to
+  decide. Report it as such and retry; rendering it as a refusal turns an outage into a
+  confident, wrong answer.
+
+### Where the platform offers this natively, prefer configuration
+
+Deployment environments with required reviewers do all of the above with no code: the relay
+dispatches and the run simply waits at the gate. **Check your plan tier before designing on
+it** — required-reviewer protection rules are not available on private repositories under
+every plan, and discovering that after building for it is expensive. Where they are
+unavailable, the fallback above is worth keeping deliberately thin, because it is a
+stand-in for a platform feature rather than a thing to grow.
+
+---
+
 ## 4. Devy as a client of the relay
 
 Devy is **a surface, not the relay** (§3). Its job is the part it is genuinely good at —
@@ -230,7 +328,9 @@ Whatever the surface, these are structural — a surface may not weaken them:
 - **RBAC tiering.** Triggering a deploy is an **`elevated`** capability (like guarded
   host mutations) — gate the surface's apply path on it.
 - **No self-approval.** For the Devy surface, propose and approve are different
-  principals by construction (guarded actions).
+  principals by construction (guarded actions). Under a request/approve split (§3b) the
+  same rule is structural for *every* surface: the requester may not authorize their own
+  request.
 - **Attributable + logged.** Every trigger flows through an identifiable path (a named
   credential or, under the relay, an authenticated principal) — no anonymous fires. Because
   the relay's own credential is what GitHub sees, the principal must be carried in the

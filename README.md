@@ -232,6 +232,7 @@ produces a ranked RCA — distinguishing the OOM *symptom* from the pool-exhaust
 | **[Configuration](docs/configuration.md)** | Full `config.yaml` + `.env` + environment-variable reference |
 | **[Deployment](docs/deployment.md)** | Compose stack, managed Postgres/RDS, native, secrets, scaling, the auth seam |
 | **[CI/CD](docs/ci-cd.md)** | Build & deploy Devy: the workflows, the SSM release ledger, rollback, webhooks, and the surface funnel |
+| **[CI/CD surfaces](docs/ci-cd-surfaces.md)** | Building your own front door onto the release path — the trigger contracts, the auth model, and the request/approve split |
 | **[Security](docs/security.md)** | The host-MCP boundary, data handling & privacy, prompt-injection posture |
 | **[API reference](docs/api.md)** | HTTP/SSE endpoints (and the live OpenAPI docs) |
 | **[Proxy](docs/proxy.md)** · **[Knowledge](docs/knowledge.md)** · **[Memory](docs/memory.md)** | Subsystem deep-dives |

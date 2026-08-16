@@ -5,8 +5,9 @@ release, and deploy (or roll back) the stack on AWS — plus the exact contracts
 build and deploy steps hand off through, and how the whole thing is built to grow
 new front doors.
 
-Three companion docs sit around it:
+Four companion docs sit around it:
 - **[deploy-design.md](deploy-design.md)** — the *why* (principles, decisions/ADRs). This page is the *how*.
+- **[ci-cd-surfaces.md](ci-cd-surfaces.md)** — building your own front door onto this path (a CLI, a chat command, a console) instead of clicking the Actions tab.
 - **[remote-readiness.md](remote-readiness.md)** — the "local → remotely-managed" productionization checklist.
 - **[host-mcp.md](host-mcp.md)** — the host-MCP sidecar, deployed by its own workflow (covered briefly below).
 
@@ -22,6 +23,22 @@ Three companion docs sit around it:
 > won't trust — so it cannot trigger these against anyone else's environment. Wire the
 > account-specific values as Actions variables (never in source) and adapt the naming to
 > your own infrastructure.
+
+
+### Which of these are you doing?
+
+Three different tasks land on this page, and only one of them wants to read it top to bottom.
+
+| I want to… | Start at | Then |
+|---|---|---|
+| **Ship a release of this app** | [§1 How to build](#1-how-to-build-ci) → [§3 How to deploy](#3-how-to-deploy-cd) | [§2 the ledger](#2-the-handoff--the-ssm-release-ledger-the-seam) when a deploy cannot find a build |
+| **Adopt this pattern for your own project** | the reference-implementation note above, then [§2 the ledger](#2-the-handoff--the-ssm-release-ledger-the-seam) — the CI→CD seam is the part worth copying exactly | [deploy-design.md](deploy-design.md) for the decisions and their trade-offs |
+| **Build a front door onto it** (CLI, chat command, console) | [ci-cd-surfaces.md](ci-cd-surfaces.md) — the trigger contracts, the auth model, and the request/approve split | [§6 one door in, many faces](#6-built-to-scale--one-door-in-many-faces) for how the funnel is meant to grow |
+
+> **The seam is the reusable part.** Workflows, host qualification and orchestration are
+> deliberately per-app and *should* differ between projects. What must not differ is the
+> contract they hand off through — immutable image tags and a recorded release ledger. Copy
+> that exactly; adapt everything around it.
 
 ---
 
